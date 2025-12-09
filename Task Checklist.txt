@@ -34,10 +34,10 @@ Phase 5: Quote Agent [COMPLETED]
  [x] Implement convex/agents/quote.ts
  [x] Create Quote UI (app/projects/[id]/quote/page.tsx)
 
-Phase 6: Trello Sync Engine
- [ ] Implement convex/trelloSync.ts
- [ ] Implement convex/lib/hash.ts
- [ ] Add Trello Sync Button and Settings
+Phase 6: Trello Sync Engine [COMPLETED]
+ [x] Implement convex/trelloSync.ts
+ [x] Implement convex/lib/hash.ts
+ [x] Add Trello Sync Button and Settings
 
 Phase 7: History, Quests, Polish & Deploy
  [ ] Implement History tab

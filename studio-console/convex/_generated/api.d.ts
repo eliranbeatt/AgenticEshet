@@ -14,11 +14,13 @@ import type * as agents_planning from "../agents/planning.js";
 import type * as agents_quote from "../agents/quote.js";
 import type * as ingestion from "../ingestion.js";
 import type * as knowledge from "../knowledge.js";
+import type * as lib_hash from "../lib/hash.js";
 import type * as lib_openai from "../lib/openai.js";
 import type * as lib_zodSchemas from "../lib/zodSchemas.js";
 import type * as projects from "../projects.js";
 import type * as seed from "../seed.js";
 import type * as tasks from "../tasks.js";
+import type * as trelloSync from "../trelloSync.js";
 
 import type {
   ApiFromModules,
@@ -33,11 +35,13 @@ declare const fullApi: ApiFromModules<{
   "agents/quote": typeof agents_quote;
   ingestion: typeof ingestion;
   knowledge: typeof knowledge;
+  "lib/hash": typeof lib_hash;
   "lib/openai": typeof lib_openai;
   "lib/zodSchemas": typeof lib_zodSchemas;
   projects: typeof projects;
   seed: typeof seed;
   tasks: typeof tasks;
+  trelloSync: typeof trelloSync;
 }>;
 
 /**

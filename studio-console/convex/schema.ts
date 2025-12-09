@@ -80,7 +80,8 @@ export default defineSchema({
         createdAt: v.number(),
         createdBy: v.string(), // "agent" | "user"
     }).index("by_project", ["projectId"])
-        .index("by_project_active", ["projectId", "isDraft"]),
+        .index("by_project_active", ["projectId", "isDraft"])
+        .index("by_project_phase", ["projectId", "phase"]),
 
     // 5. KNOWLEDGE DOCS (high-level document)
     knowledgeDocs: defineTable({
@@ -116,6 +117,8 @@ export default defineSchema({
         version: v.number(),
         internalBreakdownJson: v.string(),   // serialized JSON
         clientDocumentText: v.string(),
+        currency: v.string(),
+        totalAmount: v.number(),
         createdAt: v.number(),
         createdBy: v.string(),
     }).index("by_project", ["projectId"]),

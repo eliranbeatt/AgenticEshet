@@ -54,7 +54,7 @@ export default function QuotePage() {
             return parsed.map((item) => ({
                 label: String(item.label),
                 amount: Number(item.amount) || 0,
-                currency: item.currency ? String(item.currency) : "ILS",
+                currency: item.currency ? String(item.currency) : latestQuote.currency || "ILS",
                 notes: item.notes ? String(item.notes) : undefined,
             }));
         } catch {
@@ -62,10 +62,12 @@ export default function QuotePage() {
         }
     }, [latestQuote]);
 
-    const total = useMemo(
-        () => breakdown.reduce((sum, item) => sum + item.amount, 0),
-        [breakdown]
-    );
+    const total = useMemo(() => {
+        if (latestQuote?.totalAmount) {
+            return latestQuote.totalAmount;
+        }
+        return breakdown.reduce((sum, item) => sum + item.amount, 0);
+    }, [latestQuote, breakdown]);
 
     return (
         <div className="flex h-[calc(100vh-12rem)] gap-6">
@@ -104,8 +106,8 @@ export default function QuotePage() {
                                     <span>Version {q.version}</span>
                                     <span className="text-gray-500">{new Date(q.createdAt).toLocaleDateString()}</span>
                                 </div>
-                                <div className="text-xs text-gray-400 mt-1">
-                                    Total estimated: ??? (Need to parse JSON to see total here if desired)
+                                <div className="text-xs text-gray-500 mt-1">
+                                    Total: {q.totalAmount?.toLocaleString() || "N/A"} {q.currency || "ILS"}
                                 </div>
                             </div>
                         ))}
@@ -126,7 +128,7 @@ export default function QuotePage() {
                         <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
                             <h2 className="font-bold text-gray-800">Quote Breakdown (v{latestQuote.version})</h2>
                             <div className="text-xl font-bold text-green-700">
-                                Total: {total.toLocaleString()} ILS
+                                Total: {total.toLocaleString()} {latestQuote.currency || "ILS"}
                             </div>
                         </div>
 
@@ -155,7 +157,7 @@ export default function QuotePage() {
                                         ))}
                                         <tr className="bg-gray-50 font-bold">
                                             <td className="p-2 border" colSpan={2}>Total</td>
-                                            <td className="p-2 border text-right">{total.toLocaleString()} ILS</td>
+                                            <td className="p-2 border text-right">{total.toLocaleString()} {latestQuote.currency || "ILS"}</td>
                                         </tr>
                                     </tbody>
                                 </table>

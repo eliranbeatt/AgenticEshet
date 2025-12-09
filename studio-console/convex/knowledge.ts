@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, mutation, query } from "./_generated/server";
+import { action, mutation, query, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { embedText } from "./lib/openai";
 
@@ -147,4 +147,34 @@ export const getChunks = query({
         }
         return chunks;
     }
+});
+
+export const getContextDocs = internalQuery({
+    args: {
+        projectId: v.id("projects"),
+        limit: v.number(),
+        tagFilter: v.optional(v.array(v.string())),
+    },
+    handler: async (ctx, args) => {
+        const docs = await ctx.db
+            .query("knowledgeDocs")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .order("desc")
+            .take(args.limit * 3);
+
+        const readyDocs = docs.filter((doc) => doc.processingStatus === "ready");
+
+        const filtered = args.tagFilter && args.tagFilter.length > 0
+            ? readyDocs.filter((doc) =>
+                  doc.tags.some((tag) => args.tagFilter?.some((filter) => tag.toLowerCase().includes(filter.toLowerCase())))
+              )
+            : readyDocs;
+
+        return filtered.slice(0, args.limit).map((doc) => ({
+            _id: doc._id,
+            title: doc.title,
+            summary: doc.summary,
+            tags: doc.tags,
+        }));
+    },
 });

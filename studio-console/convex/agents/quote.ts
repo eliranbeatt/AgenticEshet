@@ -22,9 +22,16 @@ export const getContext = internalQuery({
       .withIndex("by_name", (q) => q.eq("name", "quote")) 
       .first();
 
+    const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
+        projectId: args.projectId,
+        limit: 3,
+        tagFilter: ["pricing", "budget", "rates"],
+    });
+
     return {
       project,
       tasks,
+      knowledgeDocs,
       systemPrompt: skill?.content || "You are a Cost Estimator.",
     };
   },
@@ -49,6 +56,8 @@ export const saveQuote = internalMutation({
         version,
         internalBreakdownJson: JSON.stringify(args.quoteData.internalBreakdown),
         clientDocumentText: args.quoteData.clientDocumentText,
+        currency: args.quoteData.currency,
+        totalAmount: args.quoteData.totalAmount,
         createdAt: Date.now(),
         createdBy: "agent",
     });
@@ -73,15 +82,29 @@ export const run = action({
     instructions: v.optional(v.string()), // e.g. "Add travel expenses"
   },
   handler: async (ctx, args) => {
-    const { project, tasks, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
+    const { project, tasks, knowledgeDocs, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
       projectId: args.projectId,
     });
 
+    const taskSummary = tasks
+        .map((task) => `- ${task.title} [${task.category}/${task.priority}]`)
+        .join("\n");
+
+    const knowledgeSummary = knowledgeDocs.length
+        ? knowledgeDocs.map((doc) => `- ${doc.title}: ${doc.summary}`).join("\n")
+        : "No pricing references available.";
+
     const userPrompt = `Project: ${project.name}
 Details: ${JSON.stringify(project.details)}
-Tasks/Scope: ${JSON.stringify(tasks.map(t => ({ title: t.title, category: t.category })))}
+Tasks/Scope:
+${taskSummary}
 
-User Instructions: ${args.instructions || "Generate initial quote based on known scope."}`;
+Pricing Intelligence:
+${knowledgeSummary}
+
+User Instructions: ${args.instructions || "Generate initial quote based on known scope."}
+
+Always include a currency field (ILS by default) and ensure the internal breakdown matches the total amount.`;
 
     const result = await callChatWithSchema(QuoteSchema, {
       systemPrompt,

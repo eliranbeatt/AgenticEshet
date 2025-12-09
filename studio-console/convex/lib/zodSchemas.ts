@@ -7,6 +7,7 @@ export const TaskBreakdownSchema = z.object({
         description: z.string(),
         category: z.enum(["Logistics", "Creative", "Finance", "Admin", "Studio"]),
         priority: z.enum(["High", "Medium", "Low"]),
+        questName: z.string().optional().describe("Optional quest grouping to bucket this task under"),
     })),
 });
 

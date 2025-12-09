@@ -19,13 +19,31 @@ export const getContext = internalQuery({
     // Get existing plans to provide context on previous versions?
     const existingPlans = await ctx.db
         .query("plans")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .withIndex("by_project_phase", (q) =>
+            q.eq("projectId", args.projectId).eq("phase", "planning")
+        )
+        .order("desc")
         .collect();
+
+    const latestClarification = await ctx.db
+        .query("plans")
+        .withIndex("by_project_phase", (q) =>
+            q.eq("projectId", args.projectId).eq("phase", "clarification")
+        )
+        .order("desc")
+        .first();
+
+    const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
+        projectId: args.projectId,
+        limit: 3,
+    });
 
     return {
       project,
       systemPrompt: skill?.content || "You are an expert planner.",
       existingPlans,
+      latestClarification,
+      knowledgeDocs,
     };
   },
 });
@@ -41,7 +59,9 @@ export const saveResult = internalMutation({
     // Determine version
     const existing = await ctx.db
         .query("plans")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .withIndex("by_project_phase", (q) =>
+            q.eq("projectId", args.projectId).eq("phase", "planning")
+        )
         .collect();
     
     const version = existing.length + 1;
@@ -81,15 +101,34 @@ export const run = action({
     userRequest: v.string(), // e.g. "Create initial plan" or "Refine timeline"
   },
   handler: async (ctx, args) => {
-    const { project, systemPrompt, existingPlans } = await ctx.runQuery(internal.agents.planning.getContext, {
+    const { project, systemPrompt, existingPlans, latestClarification, knowledgeDocs } = await ctx.runQuery(internal.agents.planning.getContext, {
       projectId: args.projectId,
     });
 
-    const context = `Project: ${project.name}
-Details: ${JSON.stringify(project.details)}
-Existing Plans Count: ${existingPlans.length}
+    const clarificationSection = latestClarification
+        ? latestClarification.contentMarkdown.slice(0, 1200)
+        : "No clarification summary recorded.";
 
-User Request: ${args.userRequest}`;
+    const knowledgeSection = knowledgeDocs.length
+        ? knowledgeDocs
+              .map((doc) => `- ${doc.title}: ${doc.summary}`)
+              .join("\n")
+        : "No knowledge documents available.";
+
+    const context = [
+        `Project: ${project.name}`,
+        `Client: ${project.clientName}`,
+        `Project Details: ${JSON.stringify(project.details)}`,
+        `Existing Plans Count: ${existingPlans.length}`,
+        "",
+        "Latest Clarification Summary:",
+        clarificationSection,
+        "",
+        "Relevant Knowledge Snippets:",
+        knowledgeSection,
+        "",
+        `User Request: ${args.userRequest}`,
+    ].join("\n");
 
     const result = await callChatWithSchema(PlanSchema, {
       systemPrompt,

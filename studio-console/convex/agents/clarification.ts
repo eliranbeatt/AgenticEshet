@@ -16,9 +16,28 @@ export const getContext = internalQuery({
       .withIndex("by_name", (q) => q.eq("name", "clarification"))
       .first();
 
+    const planningPlans = await ctx.db
+      .query("plans")
+      .withIndex("by_project_phase", (q) =>
+        q.eq("projectId", args.projectId).eq("phase", "planning")
+      )
+      .order("desc")
+      .collect();
+    const activePlan = planningPlans.find((plan) => plan.isActive);
+
+    const recentClarifications = await ctx.db
+      .query("conversations")
+      .withIndex("by_project_phase", (q) =>
+        q.eq("projectId", args.projectId).eq("phase", "clarification")
+      )
+      .order("desc")
+      .take(3);
+
     return {
       project,
       systemPrompt: skill?.content || "You are a helpful project assistant.",
+      activePlan,
+      recentClarifications,
     };
   },
 });
@@ -40,14 +59,42 @@ export const saveResult = internalMutation({
       createdAt: Date.now(),
     });
 
-    // Update project notes or status if needed? 
-    // For now, we mainly want to return the structured response to the UI.
-    // But we might want to store the "brief summary" back into the project details?
     if (args.response.briefSummary) {
         await ctx.db.patch(args.projectId, {
             overviewSummary: args.response.briefSummary,
         });
     }
+
+    const clarifications = await ctx.db
+        .query("plans")
+        .withIndex("by_project_phase", (q) =>
+            q.eq("projectId", args.projectId).eq("phase", "clarification")
+        )
+        .collect();
+
+    const summaryMarkdown = [
+        "## Clarification Summary",
+        args.response.briefSummary,
+        "",
+        "## Open Questions",
+        args.response.openQuestions.length
+            ? args.response.openQuestions.map((q) => `- ${q}`).join("\n")
+            : "- No open questions",
+        "",
+        `Suggested next phase: ${args.response.suggestedNextPhase}`,
+    ].join("\n");
+
+    await ctx.db.insert("plans", {
+        projectId: args.projectId,
+        version: clarifications.length + 1,
+        phase: "clarification",
+        isDraft: true,
+        isActive: false,
+        contentMarkdown: summaryMarkdown,
+        reasoning: args.response.suggestedNextPhase,
+        createdAt: Date.now(),
+        createdBy: "agent",
+    });
   },
 });
 
@@ -59,16 +106,39 @@ export const run = action({
   },
   handler: async (ctx, args) => {
     // 1. Get Context
-    const { project, systemPrompt } = await ctx.runQuery(internal.agents.clarification.getContext, {
+    const { project, systemPrompt, activePlan, recentClarifications } = await ctx.runQuery(internal.agents.clarification.getContext, {
       projectId: args.projectId,
     });
 
-    // 2. Prepare Prompt
-    const userPrompt = `Project: ${project.name}
-Client: ${project.clientName}
-Current Notes: ${project.details.notes || "N/A"}
+    const planSnippet = activePlan
+        ? activePlan.contentMarkdown.slice(0, 1500)
+        : "No approved plan yet.";
 
-Latest User Input: (See chat history)`;
+    const previousClarifications = recentClarifications
+        .map((conversation) => {
+            try {
+                const parsed = JSON.parse(conversation.messagesJson) as { role: string; content: string }[];
+                const assistant = parsed.reverse().find((message) => message.role === "assistant");
+                return `- ${new Date(conversation.createdAt).toLocaleDateString()}: ${assistant?.content ?? "No recorded assistant response."}`;
+            } catch {
+                return `- ${new Date(conversation.createdAt).toLocaleDateString()}: (unable to parse conversation log)`;
+            }
+        })
+        .join("\n");
+
+    const userPrompt = [
+        `Project: ${project.name}`,
+        `Client: ${project.clientName}`,
+        `Current Notes: ${project.details.notes || "N/A"}`,
+        `Existing Summary: ${project.overviewSummary || "No summary captured yet."}`,
+        "",
+        `Active Plan Snapshot:\n${planSnippet}`,
+        "",
+        "Recent Clarification Interactions:",
+        previousClarifications || "- None recorded",
+        "",
+        "Live chat history from the user follows. Provide a structured clarification summary and list of open questions based on everything you know.",
+    ].join("\n");
 
     // 3. Call AI
     const result = await callChatWithSchema(ClarificationSchema, {

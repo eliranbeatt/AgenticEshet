@@ -7,10 +7,21 @@ type ChatMessage = {
     content: string;
 };
 
+type ChatParams = {
+    systemPrompt: string;
+    userPrompt: string;
+    model?: string;
+    additionalMessages?: ChatMessage[];
+    temperature?: number;
+    maxRetries?: number;
+    retryDelayMs?: number;
+};
+
 const apiKey = process.env.OPENAI_API_KEY;
+export const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-4o-2024-08-06";
+export const DEFAULT_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || "text-embedding-3-large";
 
 if (!apiKey) {
-    // We don't throw here to allow build time, but run time will fail
     console.warn("OPENAI_API_KEY is not set in environment variables");
 }
 
@@ -20,16 +31,13 @@ const openai = new OpenAI({
 
 export async function callChatWithSchema<T>(
     schema: z.ZodSchema<T>,
-    params: {
-        systemPrompt: string;
-        userPrompt: string;
-        model?: string;
-        additionalMessages?: { role: "system" | "user" | "assistant"; content: string }[];
-    }
+    params: ChatParams
 ): Promise<T> {
     if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
 
-    const model = params.model || "gpt-4o-2024-08-06"; // structured outputs supported model
+    const model = params.model || DEFAULT_CHAT_MODEL;
+    const maxRetries = params.maxRetries ?? 3;
+    const retryDelayMs = params.retryDelayMs ?? 500;
 
     const messages: ChatMessage[] = [
         { role: "system", content: params.systemPrompt },
@@ -37,32 +45,67 @@ export async function callChatWithSchema<T>(
         { role: "user", content: params.userPrompt },
     ];
 
-    const completion = await openai.beta.chat.completions.parse({
-        model: model,
-        messages: messages,
-        response_format: zodResponseFormat(schema, "output"),
-    });
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            const completion = await openai.beta.chat.completions.parse({
+                model,
+                temperature: params.temperature ?? 0,
+                messages,
+                response_format: zodResponseFormat(schema, "output"),
+            });
 
-    const refusal = completion.choices[0].message.refusal;
-    if (refusal) {
-        throw new Error(`OpenAI refused: ${refusal}`);
+            const refusal = completion.choices[0].message.refusal;
+            if (refusal) {
+                throw new Error(`OpenAI refused request: ${refusal}`);
+            }
+
+            const result = completion.choices[0].message.parsed;
+            if (!result) {
+                throw new Error("OpenAI returned an empty response");
+            }
+
+            return result;
+        } catch (error) {
+            lastError = error;
+            if (attempt === maxRetries - 1) break;
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
+        }
     }
 
-    const result = completion.choices[0].message.parsed;
-    if (!result) {
-        throw new Error("OpenAI failed to parse output");
-    }
-
-    return result;
+    throw new Error(
+        `OpenAI chat completion failed after ${maxRetries} attempts: ${
+            lastError instanceof Error ? lastError.message : "Unknown error"
+        }`
+    );
 }
 
-export async function embedText(text: string): Promise<number[]> {
+export async function embedText(text: string, options?: { model?: string; maxRetries?: number; retryDelayMs?: number }): Promise<number[]> {
     if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
 
-    const response = await openai.embeddings.create({
-        model: "text-embedding-3-large",
-        input: text,
-    });
+    const model = options?.model || DEFAULT_EMBED_MODEL;
+    const maxRetries = options?.maxRetries ?? 3;
+    const retryDelayMs = options?.retryDelayMs ?? 500;
 
-    return response.data[0].embedding;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            const response = await openai.embeddings.create({
+                model,
+                input: text,
+            });
+
+            return response.data[0].embedding;
+        } catch (error) {
+            lastError = error;
+            if (attempt === maxRetries - 1) break;
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
+        }
+    }
+
+    throw new Error(
+        `OpenAI embeddings failed after ${maxRetries} attempts: ${
+            lastError instanceof Error ? lastError.message : "Unknown error"
+        }`
+    );
 }

@@ -82,20 +82,25 @@ export const setPlanActive = mutation({
             throw new Error("Plan does not belong to this project");
         }
 
+        if (plan.phase !== "planning") {
+            throw new Error("Only planning phase documents can be activated");
+        }
+
         const plans = await ctx.db
             .query("plans")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .withIndex("by_project_phase", (q) =>
+                q.eq("projectId", args.projectId).eq("phase", "planning")
+            )
+            .order("desc")
             .collect();
 
-        await Promise.all(
-            plans.map(async (p) => {
-                const isSelected = p._id === args.planId;
-                await ctx.db.patch(p._id, {
-                    isActive: isSelected,
-                    isDraft: isSelected ? false : p.isDraft,
-                });
-            })
-        );
+        for (const p of plans) {
+            const isSelected = p._id === args.planId;
+            await ctx.db.patch(p._id, {
+                isActive: isSelected,
+                isDraft: isSelected ? false : p.isDraft,
+            });
+        }
     },
 });
 
@@ -104,7 +109,9 @@ export const getPlans = query({
     handler: async (ctx, args) => {
         return await ctx.db
             .query("plans")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .withIndex("by_project_phase", (q) =>
+                q.eq("projectId", args.projectId).eq("phase", "planning")
+            )
             .order("desc")
             .collect();
     },
@@ -115,7 +122,9 @@ export const getPlanPhaseMeta = query({
     handler: async (ctx, args) => {
         const plans = await ctx.db
             .query("plans")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .withIndex("by_project_phase", (q) =>
+                q.eq("projectId", args.projectId).eq("phase", "planning")
+            )
             .order("desc")
             .collect();
 

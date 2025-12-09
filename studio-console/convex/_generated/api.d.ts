@@ -10,6 +10,8 @@
 
 import type * as agents_clarification from "../agents/clarification.js";
 import type * as agents_planning from "../agents/planning.js";
+import type * as ingestion from "../ingestion.js";
+import type * as knowledge from "../knowledge.js";
 import type * as lib_openai from "../lib/openai.js";
 import type * as lib_zodSchemas from "../lib/zodSchemas.js";
 import type * as projects from "../projects.js";
@@ -25,6 +27,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   "agents/clarification": typeof agents_clarification;
   "agents/planning": typeof agents_planning;
+  ingestion: typeof ingestion;
+  knowledge: typeof knowledge;
   "lib/openai": typeof lib_openai;
   "lib/zodSchemas": typeof lib_zodSchemas;
   projects: typeof projects;

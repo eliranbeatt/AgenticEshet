@@ -21,10 +21,10 @@ Phase 2: LLM Integration & Strict Mode [COMPLETED]
  [x] Create Clarification UI (app/projects/[id]/clarification/page.tsx)
  [x] Create Planning UI (app/projects/[id]/planning/page.tsx)
 
-Phase 3: RAG Ingestion & Search
- [ ] Implement convex/ingestion.ts
- [ ] Implement convex/knowledge.ts
- [ ] Create Knowledge UI (app/projects/[id]/knowledge/page.tsx)
+Phase 3: RAG Ingestion & Search [COMPLETED]
+ [x] Implement convex/ingestion.ts
+ [x] Implement convex/knowledge.ts
+ [x] Create Knowledge UI (app/projects/[id]/knowledge/page.tsx)
 
 Phase 4: Architect Agent & Canonical Tasks
  [ ] Implement convex/agents/architect.ts

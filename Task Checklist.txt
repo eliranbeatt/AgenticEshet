@@ -30,9 +30,9 @@ Phase 4: Architect Agent & Canonical Tasks [COMPLETED]
  [x] Implement convex/agents/architect.ts
  [x] Implement Canonical Task Board UI (app/projects/[id]/tasks/page.tsx)
 
-Phase 5: Quote Agent
- [ ] Implement convex/agents/quote.ts
- [ ] Create Quote UI (app/projects/[id]/quote/page.tsx)
+Phase 5: Quote Agent [COMPLETED]
+ [x] Implement convex/agents/quote.ts
+ [x] Create Quote UI (app/projects/[id]/quote/page.tsx)
 
 Phase 6: Trello Sync Engine
  [ ] Implement convex/trelloSync.ts

@@ -44,6 +44,22 @@ export const seedSkills = internalMutation({
         You must output JSON matching the TaskBreakdownSchema.`,
         metadata: { phase: "execution" },
       },
+      {
+        name: "quote",
+        type: "agent_system",
+        content: `You are a Professional Cost Estimator for Creative Projects.
+        
+        Based on the provided Project Details and List of Tasks/Requirements:
+        1. Estimate the costs for resources, labor, and materials.
+        2. Respect the Budget Cap if one exists; if the estimation exceeds it, add a note explaining why.
+        3. Generate a formal client-facing document text.
+        
+        - Currency: ILS (unless specified otherwise).
+        - Be realistic but conservative.
+        
+        You must output JSON matching the QuoteSchema.`,
+        metadata: { phase: "quote" },
+      },
     ];
 
     for (const skill of skills) {

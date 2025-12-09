@@ -1,7 +1,9 @@
 import { v } from "convex/values";
-import { action, mutation, query, internalQuery } from "./_generated/server";
+import { action, mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { embedText } from "./lib/openai";
+import { chunkText } from "./lib/textChunker";
+import type { Doc } from "./_generated/dataModel";
 
 // --- Mutations ---
 
@@ -33,6 +35,33 @@ export const createDoc = mutation({
     });
 
     return docId;
+  },
+});
+
+export const createDocRecord = internalMutation({
+  args: {
+    projectId: v.optional(v.id("projects")),
+    title: v.string(),
+    storageId: v.string(),
+    summary: v.string(),
+    tags: v.array(v.string()),
+    status: v.union(
+        v.literal("uploaded"),
+        v.literal("processing"),
+        v.literal("ready"),
+        v.literal("failed")
+    ),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("knowledgeDocs", {
+      projectId: args.projectId,
+      title: args.title,
+      storageId: args.storageId,
+      processingStatus: args.status,
+      summary: args.summary,
+      tags: args.tags,
+      createdAt: Date.now(),
+    });
   },
 });
 
@@ -69,11 +98,9 @@ export const generateEmbeddings = action({
   },
   handler: async (ctx, args) => {
     try {
-        // 1. Chunk text (Naive splitting for now)
-        const chunkSize = 1000;
-        const chunks = [];
-        for (let i = 0; i < args.text.length; i += chunkSize) {
-            chunks.push(args.text.substring(i, i + chunkSize));
+        const chunks = chunkText(args.text);
+        if (chunks.length === 0) {
+            throw new Error("No text available for embedding");
         }
 
         // 2. Embed and prepare batch
@@ -113,18 +140,30 @@ export const search = action({
             filter: (q) => q.eq("projectId", args.projectId),
         });
 
-        // Fetch the texts (Convex vector search returns { _id, _score } usually, need to fetch doc?)
-        // Actually Convex vector search can fetch content if configured or we fetch by ID.
-        // Wait, 'vectorSearch' returns array of { _id, _score }. We need to map to content.
-        
-        // This is a bit tricky in action vs query. 
-        // We can pass the IDs to a query to fetch the content.
-        
-        const chunkIds = results.map(r => r._id);
+        const chunkIds = results.map((r) => r._id);
         if (chunkIds.length === 0) return [];
 
-        const chunks = await ctx.runQuery(internal.knowledge.getChunks, { ids: chunkIds });
-        return chunks.map((c, i) => ({ ...c, score: results[i]._score }));
+        const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: chunkIds });
+        const entryMap = new Map(chunkEntries.map((entry) => [entry.chunk._id, entry]));
+
+        return results
+            .map((result) => {
+                const entry = entryMap.get(result._id);
+                if (!entry) return null;
+                return {
+                    chunkId: entry.chunk._id,
+                    docId: entry.chunk.docId,
+                    text: entry.chunk.text,
+                    score: result._score,
+                    doc: {
+                        _id: entry.doc._id,
+                        title: entry.doc.title,
+                        summary: entry.doc.summary,
+                        tags: entry.doc.tags,
+                    },
+                };
+            })
+            .filter(Boolean);
     }
 });
 
@@ -146,6 +185,21 @@ export const getChunks = query({
             if (chunk) chunks.push(chunk);
         }
         return chunks;
+    }
+});
+
+export const getChunksWithDocs = internalQuery({
+    args: { ids: v.array(v.id("knowledgeChunks")) },
+    handler: async (ctx, args) => {
+        const result: { chunk: Doc<"knowledgeChunks">; doc: Doc<"knowledgeDocs"> }[] = [];
+        for (const id of args.ids) {
+            const chunk = await ctx.db.get(id);
+            if (!chunk) continue;
+            const doc = await ctx.db.get(chunk.docId);
+            if (!doc) continue;
+            result.push({ chunk, doc });
+        }
+        return result;
     }
 });
 

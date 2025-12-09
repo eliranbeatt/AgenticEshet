@@ -18,6 +18,8 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
         { name: "Clarification", href: "clarification" },
         { name: "Planning", href: "planning" },
         { name: "Tasks", href: "tasks" },
+        { name: "Quests", href: "quests" },
+        { name: "Quote", href: "quote" },
         { name: "Trello View", href: "trello-view" },
         { name: "Knowledge", href: "knowledge" },
         { name: "History", href: "history" },

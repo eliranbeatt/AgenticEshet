@@ -39,7 +39,7 @@ Phase 6: Trello Sync Engine [COMPLETED]
  [x] Implement convex/lib/hash.ts
  [x] Add Trello Sync Button and Settings
 
-Phase 7: History, Quests, Polish & Deploy
- [ ] Implement History tab
- [ ] Implement Quests
- [ ] Final Polish & Deploy Prep
+Phase 7: History, Quests, Polish & Deploy [COMPLETED]
+ [x] Implement History tab
+ [x] Implement Quests
+ [x] Final Polish & Deploy Prep

@@ -1,8 +1,13 @@
 import { mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
-export const seedSkills = internalMutation({
+// Public mutation for UI button access
+export const seedSkillsPublic = mutation({
   handler: async (ctx) => {
+    // Re-use logic or call internal? Calling internal is safer if possible, 
+    // but here we just duplicate logic or we can simply export as mutation directly.
+    // For simplicity, let's just copy the logic here or make the original one public.
+    // Making original public:
     const skills = [
       {
         name: "clarification",

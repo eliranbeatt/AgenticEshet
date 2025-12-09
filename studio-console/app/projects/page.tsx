@@ -12,6 +12,19 @@ export default function ProjectsPage() {
     const router = useRouter();
     const [isCreating, setIsCreating] = useState(false);
 
+    // --- Dev Tool: Seeding ---
+    const seedSkills = useMutation(api.seed.seedSkillsPublic);
+    const handleSeed = async () => {
+        if(!confirm("Initialize system skills? (Run once)")) return;
+        try {
+            await seedSkills();
+            alert("System initialized successfully!");
+        } catch(e: any) {
+            alert("Seeding failed: " + e.message);
+        }
+    };
+    // -------------------------
+
     const handleCreate = async () => {
         setIsCreating(true);
         try {
@@ -37,13 +50,21 @@ export default function ProjectsPage() {
         <div className="p-8">
             <div className="flex items-center justify-between mb-8">
                 <h1 className="text-3xl font-bold">Projects</h1>
-                <button
-                    onClick={handleCreate}
-                    disabled={isCreating}
-                    className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-                >
-                    {isCreating ? "Creating..." : "New Project"}
-                </button>
+                <div className="flex gap-2">
+                     <button
+                        onClick={handleSeed}
+                        className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300 text-sm font-medium"
+                    >
+                        Initialize System
+                    </button>
+                    <button
+                        onClick={handleCreate}
+                        disabled={isCreating}
+                        className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+                    >
+                        {isCreating ? "Creating..." : "New Project"}
+                    </button>
+                </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

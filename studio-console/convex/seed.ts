@@ -29,6 +29,21 @@ export const seedSkills = internalMutation({
         You must output JSON matching the PlanSchema.`,
         metadata: { phase: "planning" },
       },
+      {
+        name: "architect",
+        type: "agent_system",
+        content: `You are a Technical Lead and Task Manager.
+        
+        Your input is a high-level project plan.
+        Your goal is to decompose this plan into specific, actionable tasks for the team.
+        
+        - Create 5-15 tasks depending on complexity.
+        - Ensure mix of categories (Logistics, Creative, etc.).
+        - Assign priorities sensibly.
+        
+        You must output JSON matching the TaskBreakdownSchema.`,
+        metadata: { phase: "execution" },
+      },
     ];
 
     for (const skill of skills) {

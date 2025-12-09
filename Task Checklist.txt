@@ -26,9 +26,9 @@ Phase 3: RAG Ingestion & Search [COMPLETED]
  [x] Implement convex/knowledge.ts
  [x] Create Knowledge UI (app/projects/[id]/knowledge/page.tsx)
 
-Phase 4: Architect Agent & Canonical Tasks
- [ ] Implement convex/agents/architect.ts
- [ ] Implement Canonical Task Board UI (app/projects/[id]/tasks/page.tsx)
+Phase 4: Architect Agent & Canonical Tasks [COMPLETED]
+ [x] Implement convex/agents/architect.ts
+ [x] Implement Canonical Task Board UI (app/projects/[id]/tasks/page.tsx)
 
 Phase 5: Quote Agent
  [ ] Implement convex/agents/quote.ts

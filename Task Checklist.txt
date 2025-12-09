@@ -1,0 +1,47 @@
+Task Checklist
+Phase 1: Core Setup & Data Model
+ Initialize Next.js 14+ App Router project npx create-next-app@latest .
+Initialize Convex npx convex init
+ Install dependencies (Convex, Tailwind, Shadcn components)
+ Implement 
+convex/schema.ts
+ Implement 
+convex/projects.ts
+ (CRUD)
+ Implement 
+convex/tasks.ts
+ (CRUD)
+ Create basic Layout (
+app/layout.tsx
+)
+ Create Project List Page (
+app/projects/page.tsx
+)
+Create Project Overview Page (app/projects/[id]/overview/page.tsx)
+Phase 2: LLM Integration & Strict Mode
+ Install openai zod
+ Implement convex/lib/openai.ts
+ Implement convex/lib/zodSchemas.ts
+ Implement convex/agents/clarification.ts
+ Implement convex/agents/planning.ts
+ Seed Skills in DB
+ Create Clarification UI (app/projects/[id]/clarification/page.tsx)
+ Create Planning UI (app/projects/[id]/planning/page.tsx)
+Phase 3: RAG Ingestion & Search
+ Implement convex/ingestion.ts
+ Implement convex/knowledge.ts
+ Create Knowledge UI (app/projects/[id]/knowledge/page.tsx)
+Phase 4: Architect Agent & Canonical Tasks
+ Implement convex/agents/architect.ts
+ Implement Canonical Task Board UI (app/projects/[id]/tasks/page.tsx)
+Phase 5: Quote Agent
+ Implement convex/agents/quote.ts
+ Create Quote UI (app/projects/[id]/quote/page.tsx)
+Phase 6: Trello Sync Engine
+ Implement convex/trelloSync.ts
+ Implement convex/lib/hash.ts
+ Add Trello Sync Button and Settings
+Phase 7: History, Quests, Polish & Deploy
+ Implement History tab
+ Implement Quests
+ Final Polish & Deploy Prep

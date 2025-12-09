@@ -1,0 +1,1266 @@
+
+* Convex backend (DB + vector search + actions)
+* Next.js 14+ (App Router) frontend
+* Strict Zod-based structured outputs for all LLM calls
+* Canonical Tasks table separate from Trello
+* Idempotent Trello Sync Engine with mappings
+* Event-driven RAG ingestion & retrieval
+
+---
+
+# 1. Vision & System Goals
+
+### 1.1 High-level vision
+
+You are building the **Magnetic Studio Console**:
+
+* One **Project Workspace** per client project.
+* Each project has:
+
+  * Clarified brief / notes
+  * Versioned plans (draft vs active)
+  * Canonical internal task list
+  * Quotes (internal cost breakdown + client-facing doc)
+  * Trello sync state (what’s actually on Trello)
+  * Knowledge (files, notes, assets) with RAG
+  * History & milestones (“Quests”)
+
+Trello becomes the **execution surface**, not the source of truth.
+Your Convex DB is the **master state** of work.
+
+---
+
+# 2. Tech Stack & Architecture
+
+### 2.1 Core components
+
+* **Backend “brain”**: Convex
+
+  * Collections (tables) for projects, tasks, plans, knowledge, mappings, etc.
+  * Actions for:
+
+    * LLM calls (agents)
+    * RAG ingestion & search
+    * Trello sync
+  * Native vector search on embeddings.
+
+* **Frontend “console”**: Next.js 14+ (App Router) + React
+
+  * `app/` router with layouts & nested routes
+  * Tabs per project: overview, clarification, planning, tasks, trello-view, knowledge, history
+
+* **Intelligence**: OpenAI API
+
+  * Chat models: e.g. `gpt-4o` / `gpt-4.1`
+  * Embeddings: `text-embedding-3-large` (or similar)
+  * Strict structured output via Zod schemas
+
+* **Integration**: Trello REST API + Webhooks
+
+  * Direct HTTP calls from Convex actions
+  * Webhook handler (could be a small separate service or Convex HTTP endpoint if supported)
+
+### 2.2 Code structure
+
+Repository layout:
+
+```text
+root/
+  app/                    # Next.js App Router pages
+  components/             # Shared React components
+  convex/
+    schema.ts
+    projects.ts
+    tasks.ts
+    plans.ts
+    knowledge.ts
+    ingestion.ts
+    trelloSync.ts
+    agents/
+      clarification.ts
+      planning.ts
+      architect.ts
+      quote.ts
+    lib/
+      openai.ts
+      zodSchemas.ts
+      hash.ts
+  styles/
+  package.json
+  tsconfig.json
+  .env.local
+```
+
+---
+
+# 3. Convex Data Model (Schema)
+
+You already outlined a strong base; we’ll extend it with quotes, conversations, quests, and ingestion.
+
+## 3.1 Base schema (projects, tasks, Trello mappings, plans, knowledge)
+
+`convex/schema.ts`:
+
+```ts
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+export default defineSchema({
+  // 1. PROJECTS: Core entity
+  projects: defineTable({
+    name: v.string(),
+    clientName: v.string(),
+    status: v.union(
+      v.literal("lead"),
+      v.literal("planning"),
+      v.literal("production"),
+      v.literal("archived")
+    ),
+    details: v.object({
+      eventDate: v.optional(v.string()), // ISO
+      budgetCap: v.optional(v.number()),
+      location: v.optional(v.string()),
+      notes: v.optional(v.string()),
+    }),
+    createdAt: v.number(),  // Date.now()
+    createdBy: v.string(),  // userId/email (local for now)
+  }).index("by_status", ["status"]),
+
+  // 2. CANONICAL TASKS: Internal Source of Truth
+  tasks: defineTable({
+    projectId: v.id("projects"),
+    title: v.string(),
+    description: v.optional(v.string()),
+    status: v.union(
+      v.literal("todo"),
+      v.literal("in_progress"),
+      v.literal("done"),
+      v.literal("blocked")
+    ),
+    category: v.union(
+      v.literal("Logistics"),
+      v.literal("Creative"),
+      v.literal("Finance"),
+      v.literal("Admin"),
+      v.literal("Studio")
+    ),
+    priority: v.union(
+      v.literal("High"),
+      v.literal("Medium"),
+      v.literal("Low")
+    ),
+    // Optional relationships
+    questId: v.optional(v.id("quests")),
+    // AI metadata
+    source: v.union(v.literal("user"), v.literal("agent")),
+    confidenceScore: v.optional(v.number()),
+    // Timestamps
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_project", ["projectId"]),
+
+  // 3. TRELLO MAPPINGS: Task <-> Trello Card
+  trelloMappings: defineTable({
+    projectId: v.id("projects"),
+    taskId: v.id("tasks"),
+    trelloCardId: v.string(),  // external ID
+    trelloListId: v.string(),  // external ID
+    lastSyncedAt: v.number(),  // Date.now()
+    contentHash: v.string(),   // hash of task fields at last sync
+  })
+    .index("by_project", ["projectId"])
+    .index("by_trello_card", ["trelloCardId"]),
+
+  // 4. PLANS: Versioned, Draft vs Active
+  plans: defineTable({
+    projectId: v.id("projects"),
+    version: v.number(),
+    phase: v.string(),   // "clarification", "plan", "deep_plan"
+    isDraft: v.boolean(),
+    contentMarkdown: v.string(),
+    reasoning: v.optional(v.string()),
+    createdAt: v.number(),
+    createdBy: v.string(), // "agent" | "user"
+  }).index("by_project", ["projectId"])
+    .index("by_project_active", ["projectId", "isDraft"]),
+
+  // 5. KNOWLEDGE DOCS (high-level document)
+  knowledgeDocs: defineTable({
+    projectId: v.optional(v.id("projects")),  // null/undefined = global
+    title: v.string(),
+    storageId: v.string(),         // Convex file storage ID
+    processingStatus: v.union(
+      v.literal("uploaded"),
+      v.literal("processing"),
+      v.literal("ready"),
+      v.literal("failed")
+    ),
+    summary: v.string(),
+    tags: v.array(v.string()),
+    createdAt: v.number(),
+  }).index("by_project", ["projectId"]),
+
+  // 6. KNOWLEDGE CHUNKS with vectorIndex
+  knowledgeChunks: defineTable({
+    docId: v.id("knowledgeDocs"),
+    projectId: v.optional(v.id("projects")),
+    text: v.string(),
+    embedding: v.array(v.float64()),
+  }).vectorIndex("by_embedding", {
+    vectorField: "embedding",
+    dimensions: 1536,       // matching your embedding model
+    filterFields: ["projectId"],  // scope per project
+  }),
+
+  // 7. QUOTES: internal + client-facing
+  quotes: defineTable({
+    projectId: v.id("projects"),
+    version: v.number(),
+    internalBreakdownJson: v.string(),   // serialized JSON
+    clientDocumentText: v.string(),
+    createdAt: v.number(),
+    createdBy: v.string(),
+  }).index("by_project", ["projectId"]),
+
+  // 8. CONVERSATIONS: for logging agent runs
+  conversations: defineTable({
+    projectId: v.id("projects"),
+    phase: v.string(),   // "clarification", "planning", "quote", etc.
+    agentRole: v.string(),
+    messagesJson: v.string(),  // [{role, content, timestamp}]
+    createdAt: v.number(),
+  }).index("by_project_phase", ["projectId", "phase"]),
+
+  // 9. QUESTS: task group / milestone
+  quests: defineTable({
+    projectId: v.id("projects"),
+    title: v.string(),
+    description: v.optional(v.string()),
+    order: v.number(),      // sort order in UI
+    createdAt: v.number(),
+  }).index("by_project", ["projectId"]),
+
+  // 10. INGESTION JOBS
+  ingestionJobs: defineTable({
+    projectId: v.optional(v.id("projects")),
+    name: v.string(),
+    defaultContext: v.string(),
+    defaultTags: v.array(v.string()),
+    enrichmentProfileId: v.optional(v.id("enrichmentProfiles")),
+    status: v.union(
+      v.literal("created"),
+      v.literal("processing"),
+      v.literal("ready"),
+      v.literal("committed"),
+      v.literal("failed")
+    ),
+    createdAt: v.number(),
+  }).index("by_project", ["projectId"]),
+
+  // 11. INGESTION FILES
+  ingestionFiles: defineTable({
+    ingestionJobId: v.id("ingestionJobs"),
+    projectId: v.optional(v.id("projects")),
+    originalFilename: v.string(),
+    storageId: v.string(),
+    mimeType: v.string(),
+    status: v.union(
+      v.literal("uploaded"),
+      v.literal("parsed"),
+      v.literal("enriched"),
+      v.literal("ready"),
+      v.literal("committed"),
+      v.literal("failed")
+    ),
+    rawText: v.optional(v.string()),
+    enrichedText: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    keyPointsJson: v.optional(v.string()),
+    keywordsJson: v.optional(v.string()),
+    suggestedTagsJson: v.optional(v.string()),
+    userContext: v.optional(v.string()),
+    error: v.optional(v.string()),
+    ragDocId: v.optional(v.id("knowledgeDocs")),
+  }).index("by_job", ["ingestionJobId"])
+    .index("by_project", ["projectId"]),
+
+  // 12. ENRICHMENT PROFILES (configurable enhancer behavior)
+  enrichmentProfiles: defineTable({
+    name: v.string(),
+    description: v.string(),
+    llmModel: v.string(),         // "gpt-4o" etc.
+    useWebSearch: v.boolean(),
+    useCodeInterpreter: v.boolean(),
+    systemPrompt: v.string(),     // enhancer system message
+    schemaJson: v.string(),       // JSON schema for output
+  }),
+
+  // 13. SKILLS (agent prompts)
+  skills: defineTable({
+    name: v.string(),         // "clarification", "planning", ...
+    type: v.string(),         // "agent_system", "enrichment"
+    content: v.string(),      // prompt template
+    metadataJson: v.string(), // e.g. {"phase":"planning"}
+  }).index("by_name", ["name"]),
+
+  // 14. SETTINGS (API keys, per-user, per-workspace)
+  settings: defineTable({
+    // for simplicity: single global row or keyed by "key"
+    key: v.string(),          // "trello_api", etc.
+    valueJson: v.string(),
+  }).index("by_key", ["key"]),
+});
+```
+
+---
+
+# 4. LLM & Agent Architecture (Strict Mode)
+
+All LLM calls follow **Strict Mode**:
+
+* Each agent has a **Zod schema** defining exactly the output.
+* We use OpenAI structured outputs (either JSON mode or tool-calling) to validate against that schema.
+* No regex parsing of partial JSON embedded in text.
+
+## 4.1 Shared OpenAI helper (convex/lib/openai.ts)
+
+Responsibilities:
+
+* `callChatWithSchema<T>(schema: z.ZodSchema<T>, params: { systemPrompt, userPrompt, model, additionalMessages? })`
+
+  * Calls OpenAI (chat/completions or responses API).
+  * Uses the schema to parse/validate structured output.
+  * Throws a Convex error if validation fails.
+
+* `embedText(text: string): Promise<number[]>`
+
+  * Calls OpenAI embedding model.
+
+## 4.2 Zod schemas (convex/lib/zodSchemas.ts)
+
+Define schemas for each agent mode.
+
+### 4.2.1 TaskBreakdownSchema (from your critique)
+
+```ts
+import { z } from "zod";
+
+export const TaskBreakdownSchema = z.object({
+  logic: z.string().describe("Reasoning for why these tasks are needed"),
+  tasks: z.array(z.object({
+    title: z.string(),
+    description: z.string(),
+    category: z.enum(["Logistics", "Creative", "Finance", "Admin", "Studio"]),
+    priority: z.enum(["High", "Medium", "Low"]),
+  })),
+});
+```
+
+### 4.2.2 ClarificationSchema
+
+```ts
+export const ClarificationSchema = z.object({
+  briefSummary: z.string(),
+  openQuestions: z.array(z.string()),
+  suggestedNextPhase: z.enum(["stay_in_clarification", "move_to_planning"]),
+});
+```
+
+### 4.2.3 PlanSchema
+
+```ts
+export const PlanSchema = z.object({
+  reasoning: z.string(),
+  contentMarkdown: z.string(),
+  suggestedPhase: z.enum(["clarification", "planning", "ready_for_task_breakdown"]),
+});
+```
+
+### 4.2.4 QuoteSchema
+
+```ts
+export const QuoteSchema = z.object({
+  internalBreakdown: z.array(z.object({
+    label: z.string(),              // e.g. "Materials", "Studio hours"
+    amount: z.number(),             // numeric total
+    currency: z.string(),           // "ILS", etc.
+    notes: z.string().optional(),
+  })),
+  totalAmount: z.number(),
+  currency: z.string(),
+  clientDocumentText: z.string(),
+});
+```
+
+### 4.2.5 EnhancerSchema (for ingestion)
+
+```ts
+export const EnhancerSchema = z.object({
+  normalizedText: z.string(),
+  summary: z.string(),
+  keyPoints: z.array(z.string()),
+  keywords: z.array(z.string()),
+  suggestedTags: z.array(z.string()),
+});
+```
+
+You can add more fields as you evolve, but this is enough to start.
+
+---
+
+# 5. Agents (Convex Actions)
+
+You implement each agent as a Convex **action**:
+
+* Reads from DB
+* Calls `callChatWithSchema` with appropriate skill prompt
+* Writes structured output to DB
+
+## 5.1 Clarification Agent (`convex/agents/clarification.ts`)
+
+Input: `projectId`, `userMessage`.
+
+Flow:
+
+1. Load project from `projects`.
+2. Load `skills` record for `name="clarification"`.
+3. Build `systemPrompt` from skill content + maybe project context.
+4. Build `userPrompt`:
+
+   * Include latest brief / summary if exists (from last plan or conversation),
+   * Append `userMessage`.
+5. Call `callChatWithSchema(ClarificationSchema, { systemPrompt, userPrompt })`.
+6. Get structured output:
+
+   * `briefSummary`, `openQuestions`, `suggestedNextPhase`.
+7. Save to `conversations`:
+
+   * append message log for this call.
+8. Optionally save/update a plan with phase `"clarification"` (draft).
+9. Return data to frontend.
+
+## 5.2 Planner Agent (`convex/agents/planning.ts`)
+
+Input: `projectId`, optional `userMessage` (“refine the plan”).
+
+Flow:
+
+1. Load project + latest clarification / notes.
+2. Load `skills` record for `name="planning"`.
+3. Build `systemPrompt` with:
+
+   * KB_Conversation_Flow,
+   * KB_Trello_Format_Examples,
+   * KB_Pricing (if relevant),
+   * project details.
+4. Build `userPrompt` with:
+
+   * existing plan (if any),
+   * instructions from user.
+5. Call `callChatWithSchema(PlanSchema, ...)`.
+6. Save a new `plans` record:
+
+   * `phase = "plan"`
+   * `isDraft = true` (until user approves)
+   * `contentMarkdown`, `reasoning`.
+   * `version = lastVersion + 1`
+7. Log conversation.
+8. Return plan to frontend.
+
+## 5.3 Architect Agent (Task Breakdown) (`convex/agents/architect.ts`)
+
+Input: `projectId` (assumes there is an approved plan), maybe `planVersion`.
+
+Flow:
+
+1. Load project + selected plan (approved, not draft).
+2. Load `skills` for `name="task_breakdown"`.
+3. Build `systemPrompt` with:
+
+   * Trello structure & lists rules,
+   * categories mapping.
+4. `userPrompt` includes:
+
+   * full Markdown plan,
+   * any constraints.
+5. Call `callChatWithSchema(TaskBreakdownSchema, ...)`.
+6. For each task in output:
+
+   * Create new `tasks` rows (source = `"agent"`, status = `"todo"`, etc.).
+   * OR if you already have tasks and want update, you can diff later.
+7. Optionally group tasks into `quests` (could be done by another agent or heuristics).
+8. Return tasks and reasoning to frontend.
+
+## 5.4 Quote Agent (`convex/agents/quote.ts`)
+
+Input: `projectId`.
+
+Flow:
+
+1. Load tasks for project.
+2. Load relevant knowledge via RAG (pricing docs).
+3. Load quote skill prompt.
+4. Call `callChatWithSchema(QuoteSchema, ...)`.
+5. Write new `quotes` record:
+
+   * `internalBreakdownJson`,
+   * `clientDocumentText`,
+   * `version++`.
+6. Return quote to frontend.
+
+---
+
+# 6. RAG & Ingestion Pipeline
+
+You want event-driven ingestion: upload → auto parse → enrich → embed.
+
+## 6.1 Ingestion Job Flow
+
+### Step 1 – Create job & upload files
+
+From the **Files / Knowledge tab**:
+
+* User selects:
+
+  * Project (could be global or per project),
+  * Job name,
+  * Default context,
+  * Default tags,
+  * Enrichment profile.
+
+Frontend calls:
+
+* `mutation ingestion.createIngestionJob({ projectId, name, defaultContext, defaultTags, enrichmentProfileId })`
+  → returns `jobId`.
+
+Then for each file:
+
+* Upload via Convex file storage.
+* `mutation ingestion.addFileToJob({ jobId, projectId, originalFilename, storageId, mimeType })`.
+
+### Step 2 – Run enrichment
+
+When user clicks “Run enrichment”:
+
+* Frontend calls `action ingestion.runIngestionJob({ jobId })`.
+
+`runIngestionJob`:
+
+For each file in job:
+
+1. Set file.status = `"processing"`.
+2. Download file from storage.
+3. Extract text:
+
+   * PDFs: pdf parser
+   * DOCX: docx parser
+   * XLSX: parse to text summary (sheet name, key cells)
+   * Images: (optional) call vision model to get caption/text.
+4. Call `callChatWithSchema(EnhancerSchema, { systemPrompt: profile.systemPrompt, userPrompt: rawText + userContext })`.
+5. Save results:
+
+   * `rawText`
+   * `enrichedText` (you can set = `normalizedText`)
+   * `summary`
+   * `keyPointsJson`, `keywordsJson`, `suggestedTagsJson`
+   * `status = "ready"`.
+6. If any error, set status `"failed"` with `error`.
+
+### Step 3 – Commit to knowledge (auto indexing)
+
+After enrichment, user sees a review UI:
+
+* List of files with summary, key points, tags.
+* Optionally edits tags/context.
+* Selects which to commit.
+
+On “Commit to knowledge”:
+
+* Frontend calls `action ingestion.commitIngestionJob({ jobId, fileIds })`.
+
+`commitIngestionJob`:
+
+For each selected file:
+
+1. Create `knowledgeDocs`:
+
+   * `projectId` (if any),
+   * `title` (filename or custom),
+   * `storageId` (original file),
+   * `summary`,
+   * `tags`,
+   * `processingStatus = "ready"`.
+2. Split `enrichedText` into chunks (~500–1000 tokens equivalent).
+3. For each chunk:
+
+   * `embedding = embedText(chunkText)`.
+   * Insert into `knowledgeChunks` with:
+
+     * `docId`, `projectId`, `text`, `embedding`.
+4. Update `ingestionFiles` with `ragDocId` and `status = "committed"`.
+
+Now your RAG base is ready.
+
+## 6.2 RAG Search
+
+Define `action rag.search({ projectId, query, topK, filters })`:
+
+1. `embedding = embedText(query)`.
+2. Use Convex `knowledgeChunks` vectorIndex:
+
+   * query with `by_embedding` and filter `projectId`.
+3. Return top `N` chunks + associated doc metadata.
+
+Agent actions (clarification, planning, quote) can call `rag.search` internally to pull context.
+
+---
+
+# 7. Trello Sync Engine (Idempotent)
+
+You do **not** “upload once”. You **sync** repeatedly, idempotently.
+
+## 7.1 Concept
+
+* `tasks` table = canonical tasks.
+* `trelloMappings` table = mapping + `contentHash` of the last synced state per task.
+* `syncToTrello` action:
+
+  * Creates new cards for tasks without mappings.
+  * Updates cards whose `contentHash` changed.
+  * Archives cards whose tasks were removed or marked “done” (depending on rules).
+* Trello webhooks (optional later) can update `tasks.status` when cards move between lists.
+
+## 7.2 Content hashing
+
+Implement utility `hashTask(task)` in `convex/lib/hash.ts`:
+
+* Build a string from:
+
+  * `title`
+  * `description`
+  * `status`
+  * `category`
+  * `priority`
+* Use a simple hash function (e.g. SHA256 of the string) → `contentHash`.
+
+## 7.3 Trello sync action (`convex/trelloSync.ts`)
+
+Input: `projectId`.
+
+Flow:
+
+1. Load Trello credentials from `settings` (e.g. board id / API keys).
+2. Fetch all tasks for project.
+3. Fetch all `trelloMappings` for project.
+
+For each task:
+
+* Compute `newHash = hashTask(task)`.
+* Find mapping by `taskId`.
+
+**Case A: mapping exists**
+
+* If `newHash === contentHash` → skip (no change).
+* Else:
+
+  * Call Trello API `updateCard` (title, desc, etc.).
+  * Update mapping `contentHash = newHash`, `lastSyncedAt = now`.
+
+**Case B: mapping missing**
+
+* Decide target Trello list based on `category` or `status`.
+* Call Trello API `createCard` (name, desc, listId).
+* Save new `trelloMappings` row:
+
+  * `trelloCardId`, `trelloListId`, `contentHash`.
+
+Also handle **archiving**:
+
+* Build a set of `taskIds` currently in DB.
+* For `trelloMappings` whose `taskId` no longer exists, or tasks marked as “done” (depending on your rule):
+
+  * Archive card via Trello API.
+  * Either delete mapping or keep it with a flag (not required in v1).
+
+You can run `syncToTrello`:
+
+* Manually via button “Sync to Trello” in Tasks tab.
+* Automatically via a Convex cron job (e.g. every 10 minutes).
+
+### 7.4 Trello Webhooks (later)
+
+Later, create a small HTTP endpoint (in Convex or separate) to receive Trello webhooks:
+
+* When card moves lists, map Trello card → task via `trelloMappings` and update `tasks.status`.
+* This keeps Trello & internal status aligned. (You can add status/list mapping rules.)
+
+---
+
+# 8. Frontend (Next.js App Router) – UI & Pages
+
+We’ll organize views around **project workspace**.
+
+## 8.1 Routes
+
+```text
+/app
+  layout.tsx                # Global layout (sidebar nav)
+  page.tsx                  # Redirect to /projects
+  /projects
+    page.tsx                # project list
+    new/page.tsx            # create project
+    [id]/
+      layout.tsx            # project-level layout with tabs
+      overview/page.tsx
+      clarification/page.tsx
+      planning/page.tsx
+      tasks/page.tsx
+      trello-view/page.tsx
+      knowledge/page.tsx
+      history/page.tsx
+  /ingestion
+    page.tsx                # global view of ingestion jobs
+  /admin
+    skills/page.tsx         # manage skill prompts
+    enrichment-profiles/page.tsx
+```
+
+## 8.2 Global layout
+
+* Sidebar:
+
+  * “Projects”
+  * “Ingestion”
+  * “Admin”
+* Top bar:
+
+  * Current user (later),
+  * Optionally “Active project” quick switch.
+
+## 8.3 Project list (`/projects`)
+
+**Features:**
+
+* Table of projects:
+
+  * Name
+  * Client
+  * Status
+  * Event date
+* Filter by status (lead / planning / production / archived).
+* “New Project” button.
+
+**Data:**
+
+* `useQuery(api.projects.listProjects)`.
+
+**Interactions:**
+
+* Clicking a project → `/projects/[id]/overview`.
+* New project form uses `useMutation(api.projects.createProject)`.
+
+## 8.4 Project layout (`/projects/[id]/layout.tsx`)
+
+* Load project via `useQuery(api.projects.getProject, { projectId })`.
+
+* Display header:
+
+  * Project name, client, status
+  * Event date, location, budget cap
+  * Buttons:
+
+    * Edit details (modal)
+    * Change status (lead → planning → production → archived)
+
+* Tabs (links):
+
+  * Overview
+  * Clarification
+  * Planning
+  * Tasks
+  * Trello View
+  * Knowledge
+  * History
+
+## 8.5 Overview tab
+
+Show:
+
+* Project summary:
+
+  * Brief summary (from latest clarification or plan).
+  * Stats:
+
+    * # of tasks by status,
+    * Last Trello sync time,
+    * Last quote total.
+* Quick actions:
+
+  * “Start Clarification”
+  * “Open Planning”
+  * “Open Tasks Board”
+  * “Open Knowledge”
+
+Data:
+
+* `useQuery` for:
+
+  * project,
+  * counts from `tasks`,
+  * latest quote, latest plan, last upload log.
+
+## 8.6 Clarification tab
+
+UI:
+
+* Chat-like interface:
+
+  * Conversation history (from `conversations` with phase `"clarification"`).
+  * Message bubbles grouped by agent/user.
+* Input box:
+
+  * Textarea,
+  * Send button.
+
+Actions:
+
+* On send:
+
+  * `useAction(api.agents.runClarificationAgent, { projectId, userMessage })`.
+* Display:
+
+  * Updated messages,
+  * `briefSummary`,
+  * `openQuestions`.
+
+You can also show:
+
+* “Suggested next phase: …” (from `suggestedNextPhase`).
+
+## 8.7 Planning tab
+
+UI (split):
+
+* Left panel: Markdown editor for **current active or draft plan**.
+* Right panel:
+
+  * Show AI reasoning,
+  * Show previous plan versions.
+
+Data:
+
+* `useQuery(api.plans.getActiveOrLatestPlan, { projectId })`.
+
+Buttons:
+
+* “Ask AI to draft plan”:
+
+  * `useAction(api.agents.runPlanningAgent, { projectId, userMessage: "Create full plan" })`.
+* “Refine with AI”:
+
+  * send current plan + user message.
+* “Save as Draft” (manual edit):
+
+  * `useMutation(api.plans.saveDraft)`.
+* “Approve plan”:
+
+  * marks draft as non-draft `isDraft=false`,
+  * possibly deactivates previous “active” plans.
+
+Only **approved** plans should be used by Architect Agent to create tasks.
+
+## 8.8 Tasks tab (internal canonical board)
+
+UI:
+
+* Kanban board:
+
+  * Columns by status (“To Do”, “In Progress”, “Done”, “Blocked”).
+  * Each card shows:
+
+    * Title,
+    * Category,
+    * Priority,
+    * Quest (if any).
+* Side panel for selected task:
+
+  * Description,
+  * Links to related plan sections,
+  * Buttons: edit, assign quest, change priority.
+
+Data:
+
+* `useQuery(api.tasks.listByProject, { projectId })`.
+* `useQuery(api.quests.listByProject, { projectId })`.
+
+Interactions:
+
+* Drag & drop between columns:
+
+  * `useMutation(api.tasks.updateStatus)` with optimistic UI.
+* Edit in place:
+
+  * Title, category, priority, description.
+* “Generate tasks from approved plan”:
+
+  * `useAction(api.agents.runArchitectAgent, { projectId })`.
+
+Trello sync:
+
+* Button “Sync to Trello”:
+
+  * `useAction(api.trelloSync.syncToTrello, { projectId })`.
+  * Show last sync result summary.
+
+## 8.9 Trello View tab
+
+Options:
+
+* **Read-only mirror**:
+
+  * Embedded Trello board in iframe (if allowed).
+* Or **Snapshot**:
+
+  * Show list of cards from Trello API plus mapping status:
+
+    * (Icon: mapped/unmapped, lastSyncedAt).
+* Use for debugging sync.
+
+Data:
+
+* `useAction(api.trelloSync.fetchTrelloBoardSnapshot, { projectId })` (no DB write).
+
+## 8.10 Knowledge tab (per project)
+
+UI:
+
+* Grid/list of `knowledgeDocs` for this project:
+
+  * Title
+  * Tags
+  * Status badge: uploaded/processing/ready/failed
+* Action: “Upload new files”
+
+  * Multi-file upload
+  * Select enrichment profile + default context/tags.
+* For each doc:
+
+  * Click to open details:
+
+    * Summary,
+    * Key points,
+    * Link to original file download.
+
+Interactions:
+
+* On upload:
+
+  * `useMutation(api.ingestion.createJobAndUploadFiles)`.
+* “Run enrichment”:
+
+  * `useAction(api.ingestion.runIngestionJob, { jobId })`.
+* “Commit to knowledge”:
+
+  * `useAction(api.ingestion.commitIngestionJob, { jobId, fileIds })`.
+
+## 8.11 History tab
+
+Show:
+
+* Plans list:
+
+  * Version, phase, createdBy, createdAt.
+* Quotes list:
+
+  * Version, totalAmount, createdAt.
+* Trello sync logs:
+
+  * When, how many cards, summary.
+
+Each item:
+
+* “View version”:
+
+  * open modal with full content.
+* Optionally: “Restore as current” (for plans).
+
+---
+
+# 9. Implementation Roadmap (Phases & Tasks)
+
+You can adapt “weeks” to your own pace, but this is a logical order.
+
+## Phase 1 – Core Setup & Data Model
+
+**Goals:**
+
+* Next.js + Convex running locally.
+* Schema implemented.
+* Basic project & task CRUD.
+
+**Tasks:**
+
+1. Init Next.js app:
+
+   ```bash
+   npx create-next-app@latest studio-console \
+     --typescript --eslint --app --src-dir --tailwind
+   ```
+
+2. Init Convex:
+
+   ```bash
+   npx convex init
+   ```
+
+3. Implement `convex/schema.ts` with all collections described.
+
+4. `npx convex dev` locally & `npx convex codegen`.
+
+5. Create `convex/projects.ts`:
+
+   * `listProjects` query.
+   * `getProject` query.
+   * `createProject` mutation.
+   * `updateProject` mutation.
+
+6. Create `convex/tasks.ts`:
+
+   * `listByProject` query.
+   * `updateTask` mutation.
+   * `createTask` mutation.
+
+7. Next.js: build `/projects` list page + `/projects/[id]/overview`.
+
+## Phase 2 – LLM Integration & Strict Mode
+
+**Goals:**
+
+* OpenAI helper with Zod structured output.
+* Basic Clarification & Planning agents working (no RAG yet).
+
+**Tasks:**
+
+1. Add OpenAI dependency in backend (Convex actions):
+
+   ```bash
+   npm install openai zod
+   ```
+
+2. Create `convex/lib/openai.ts`:
+
+   * `callChatWithSchema`
+   * `embedText`
+
+3. Create `convex/lib/zodSchemas.ts`:
+
+   * `ClarificationSchema`, `PlanSchema`, `TaskBreakdownSchema`, `QuoteSchema`, `EnhancerSchema`.
+
+4. Create `skills` seed:
+
+   * In a Convex mutation, insert default skill prompts for:
+
+     * `clarification`, `planning`, `task_breakdown`, `quote`, `enhancer_default`.
+
+5. Implement `convex/agents/clarification.ts` as an action:
+
+   * Use `ClarificationSchema`.
+   * Save conversation.
+
+6. Implement `convex/agents/planning.ts` as an action:
+
+   * Use `PlanSchema`.
+   * Save new `plans` row.
+
+7. Frontend: Clarification tab:
+
+   * Chat UI.
+   * Button → `useAction(api.agents.runClarificationAgent)`.
+
+8. Frontend: Planning tab:
+
+   * Show plan editor.
+   * Button “Ask AI to draft plan” → `runPlanningAgent`.
+
+## Phase 3 – RAG Ingestion & Search
+
+**Goals:**
+
+* Ingest files → enrich → index → search.
+
+**Tasks:**
+
+1. Implement `convex/ingestion.ts`:
+
+   * `createIngestionJob` mutation.
+   * `addFileToJob` mutation.
+   * `runIngestionJob` action.
+   * `commitIngestionJob` action.
+
+2. Implement file parsing utilities (reading PDF/docx/xlsx); you can:
+
+   * Use Node libraries inside Convex actions, or
+   * For v1, assume text-based files first (.txt, .md, .json) to simplify.
+
+3. In `runIngestionJob`:
+
+   * For each file:
+
+     * fetch file from storage,
+     * parse to text,
+     * call `callChatWithSchema(EnhancerSchema, ...)`,
+     * store enriched data in `ingestionFiles`.
+
+4. In `commitIngestionJob`:
+
+   * For each file:
+
+     * create `knowledgeDocs`,
+     * chunk `enrichedText`,
+     * `embedText` on chunks,
+     * save `knowledgeChunks`.
+
+5. Implement `convex/knowledge.ts`:
+
+   * `search` action:
+
+     * embed query,
+     * vector search on `knowledgeChunks.by_embedding` with `projectId` filter.
+
+6. Frontend:
+
+   * `/projects/[id]/knowledge`:
+
+     * list docs,
+     * upload UI,
+     * run/commit ingestion.
+
+## Phase 4 – Architect Agent & Canonical Tasks
+
+**Goals:**
+
+* Architect agent converts approved plan into tasks.
+* Tasks tab shows board.
+
+**Tasks:**
+
+1. Implement `convex/agents/architect.ts`:
+
+   * Load active plan.
+   * Call `TaskBreakdownSchema`.
+   * Insert tasks into `tasks` table.
+
+2. In Planning tab:
+
+   * “Approve plan” button:
+
+     * sets `isDraft=false` and maybe `status="planning"` in project.
+   * “Generate tasks” button:
+
+     * calls `runArchitectAgent`.
+
+3. Build Tasks tab UI:
+
+   * `useQuery(api.tasks.listByProject)`.
+   * Kanban layout by `status`.
+
+4. Add ability to:
+
+   * manually create tasks,
+   * drag-and-drop to change status (with mutation).
+
+## Phase 5 – Quote Agent
+
+**Goals:**
+
+* Quote agent uses tasks + RAG to build a quote.
+
+**Tasks:**
+
+1. Implement `convex/agents/quote.ts`:
+
+   * Load tasks,
+   * Optionally call `knowledge.search` for pricing docs,
+   * Use `QuoteSchema` to generate breakdown + client doc,
+   * Save new `quotes` row.
+
+2. Build `/projects/[id]/quote` tab:
+
+   * Show latest quote,
+   * Show internal breakdown,
+   * Button “Recalculate with AI”.
+
+## Phase 6 – Trello Sync Engine
+
+**Goals:**
+
+* Idempotent sync from `tasks` → Trello.
+
+**Tasks:**
+
+1. Implement `convex/lib/hash.ts` with `hashTask(task)`.
+
+2. Implement `convex/trelloSync.ts`:
+
+   * `syncToTrello({ projectId })` action:
+
+     * load tasks,
+     * load mappings,
+     * compute `contentHash` for each task,
+     * create/update/archive via Trello API,
+     * update `trelloMappings`.
+   * `fetchTrelloBoardSnapshot({ projectId })` action.
+
+3. Add Trello settings:
+
+   * Insert `settings` item: `key="trello"` with API credentials and board id.
+
+4. Frontend:
+
+   * Tasks tab: “Sync to Trello” button.
+   * Trello View tab: show snapshot.
+
+5. (Optional) later: Trello webhook integration.
+
+## Phase 7 – History, Quests, Polish & Deploy
+
+**Goals:**
+
+* Usable full system.
+* Deployed to Vercel + Convex cloud.
+
+**Tasks:**
+
+1. History tab:
+
+   * `convex/history.ts` query for plans, quotes, upload logs.
+   * `/projects/[id]/history` UI.
+
+2. Quests:
+
+   * `convex/quests.ts` (create/list).
+   * Assign tasks to quests.
+   * Visual grouping in Tasks tab.
+
+3. Polish:
+
+   * Loading states, error messages.
+   * Small finessing of UI (shadcn Tabs, modals, etc.).
+
+4. Deploy:
+
+   * Convex: create cloud project, deploy schema & functions.
+   * Next.js: push repo to GitHub, connect to Vercel.
+   * Configure env variables for Convex / OpenAI / Trello.
+
+---
+
+This blueprint now:
+
+* Uses **Convex vectorIndex** instead of manual cosine similarity.
+* Stores **canonical tasks** in a real `tasks` table.
+* Separates **Draft vs Active** plans.
+* Enforces **Zod-based structured outputs** for reliability.
+* Uses an **idempotent Trello Sync Engine** with `trelloMappings` and hashes.
+* Provides a **project-centric UX** with tabs for each phase of the studio workflow.
+* Is broken into clear **phases & tasks** that an AI coding agent can follow.

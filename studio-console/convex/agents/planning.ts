@@ -34,6 +34,7 @@ export const getContext = internalQuery({
 export const saveResult = internalMutation({
   args: {
     projectId: v.id("projects"),
+    userRequest: v.string(),
     planData: v.any(), // PlanSchema
   },
   handler: async (ctx, args) => {
@@ -51,10 +52,22 @@ export const saveResult = internalMutation({
       version,
       phase: "planning", // default for this agent
       isDraft: true,
+      isActive: false,
       contentMarkdown: args.planData.contentMarkdown,
       reasoning: args.planData.reasoning,
       createdAt: Date.now(),
       createdBy: "agent",
+    });
+
+    await ctx.db.insert("conversations", {
+      projectId: args.projectId,
+      phase: "planning",
+      agentRole: "planning_agent",
+      messagesJson: JSON.stringify([
+        { role: "user", content: args.userRequest },
+        { role: "assistant", content: args.planData.contentMarkdown },
+      ]),
+      createdAt: Date.now(),
     });
 
     return planId;
@@ -85,6 +98,7 @@ User Request: ${args.userRequest}`;
 
     await ctx.runMutation(internal.agents.planning.saveResult, {
       projectId: args.projectId,
+      userRequest: args.userRequest,
       planData: result,
     });
 

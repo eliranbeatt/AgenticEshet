@@ -44,6 +44,7 @@ export const updateProject = mutation({
         projectId: v.id("projects"),
         name: v.optional(v.string()),
         clientName: v.optional(v.string()),
+        overviewSummary: v.optional(v.string()),
         status: v.optional(
             v.union(
                 v.literal("lead"),
@@ -67,6 +68,37 @@ export const updateProject = mutation({
     },
 });
 
+export const setPlanActive = mutation({
+    args: {
+        projectId: v.id("projects"),
+        planId: v.id("plans"),
+    },
+    handler: async (ctx, args) => {
+        const plan = await ctx.db.get(args.planId);
+        if (!plan) {
+            throw new Error("Plan not found");
+        }
+        if (plan.projectId !== args.projectId) {
+            throw new Error("Plan does not belong to this project");
+        }
+
+        const plans = await ctx.db
+            .query("plans")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        await Promise.all(
+            plans.map(async (p) => {
+                const isSelected = p._id === args.planId;
+                await ctx.db.patch(p._id, {
+                    isActive: isSelected,
+                    isDraft: isSelected ? false : p.isDraft,
+                });
+            })
+        );
+    },
+});
+
 export const getPlans = query({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
@@ -75,5 +107,39 @@ export const getPlans = query({
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
             .order("desc")
             .collect();
+    },
+});
+
+export const getPlanPhaseMeta = query({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const plans = await ctx.db
+            .query("plans")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .order("desc")
+            .collect();
+
+        const activePlan = plans.find((plan) => plan.isActive);
+        const latestPlan = plans[0];
+        const draftCount = plans.filter((plan) => plan.isDraft).length;
+
+        return {
+            activePlan: activePlan
+                ? {
+                      planId: activePlan._id,
+                      version: activePlan.version,
+                      approvedAt: activePlan.createdAt,
+                  }
+                : null,
+            latestPlan: latestPlan
+                ? {
+                      planId: latestPlan._id,
+                      version: latestPlan.version,
+                      isDraft: latestPlan.isDraft,
+                  }
+                : null,
+            totalPlans: plans.length,
+            draftCount,
+        };
     },
 });

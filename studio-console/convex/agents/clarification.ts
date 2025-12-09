@@ -44,8 +44,9 @@ export const saveResult = internalMutation({
     // For now, we mainly want to return the structured response to the UI.
     // But we might want to store the "brief summary" back into the project details?
     if (args.response.briefSummary) {
-        // Optional: auto-update notes if empty? 
-        // Let's leave that to a specific user approval action.
+        await ctx.db.patch(args.projectId, {
+            overviewSummary: args.response.briefSummary,
+        });
     }
   },
 });

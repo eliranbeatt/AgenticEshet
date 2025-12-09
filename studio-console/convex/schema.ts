@@ -18,6 +18,7 @@ export default defineSchema({
             location: v.optional(v.string()),
             notes: v.optional(v.string()),
         }),
+        overviewSummary: v.optional(v.string()),
         createdAt: v.number(),  // Date.now()
         createdBy: v.string(),  // userId/email (local for now)
     }).index("by_status", ["status"]),
@@ -73,6 +74,7 @@ export default defineSchema({
         version: v.number(),
         phase: v.string(),   // "clarification", "plan", "deep_plan"
         isDraft: v.boolean(),
+        isActive: v.boolean(),
         contentMarkdown: v.string(),
         reasoning: v.optional(v.string()),
         createdAt: v.number(),

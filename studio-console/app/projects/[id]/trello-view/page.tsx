@@ -6,6 +6,19 @@ import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
 
+type TrelloList = {
+    id: string;
+    name: string;
+};
+
+type StatusMappings = Record<"todo" | "in_progress" | "done", string>;
+
+const createEmptyMappings = (): StatusMappings => ({
+    todo: "",
+    in_progress: "",
+    done: "",
+});
+
 export default function TrelloViewPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
@@ -21,8 +34,8 @@ export default function TrelloViewPage() {
     const [token, setToken] = useState("");
     const [boardId, setBoardId] = useState("");
     
-    const [lists, setLists] = useState<any[]>([]);
-    const [mappings, setMappings] = useState({ todo: "", in_progress: "", done: "" });
+    const [lists, setLists] = useState<TrelloList[]>([]);
+    const [mappings, setMappings] = useState<StatusMappings>(createEmptyMappings());
     const [isLoadingLists, setIsLoadingLists] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -33,7 +46,7 @@ export default function TrelloViewPage() {
             setApiKey(config.apiKey);
             setToken(config.token);
             setBoardId(config.boardId);
-            setMappings(config.listMap || { todo: "", in_progress: "", done: "" });
+            setMappings(config.listMap || createEmptyMappings());
         }
     }, [config]);
 
@@ -42,9 +55,16 @@ export default function TrelloViewPage() {
         setIsLoadingLists(true);
         try {
             const fetched = await fetchLists({ apiKey, token, boardId });
-            setLists(fetched);
-        } catch (err: any) {
-            alert("Error fetching lists: " + err.message);
+            const normalized: TrelloList[] = Array.isArray(fetched)
+                ? fetched.map((list) => ({
+                      id: String(list.id),
+                      name: String(list.name ?? list.id),
+                  }))
+                : [];
+            setLists(normalized);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            alert("Error fetching lists: " + message);
         } finally {
             setIsLoadingLists(false);
         }
@@ -63,9 +83,10 @@ export default function TrelloViewPage() {
                 }
             });
             alert("Configuration saved!");
-        } catch (err) {
-            console.error(err);
-            alert("Failed to save");
+        } catch (error: unknown) {
+            console.error(error);
+            const message = error instanceof Error ? error.message : "Unknown error";
+            alert(`Failed to save: ${message}`);
         } finally {
             setIsSaving(false);
         }
@@ -80,8 +101,9 @@ export default function TrelloViewPage() {
             if (res.errors.length > 0) {
                 console.error("Sync errors:", res.errors);
             }
-        } catch (err: any) {
-            alert("Sync failed: " + err.message);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            alert("Sync failed: " + message);
         } finally {
             setIsSyncing(false);
         }
@@ -189,7 +211,17 @@ export default function TrelloViewPage() {
     );
 }
 
-function ListSelect({ label, lists, value, onChange }: { label: string, lists: any[], value: string, onChange: (v: string) => void }) {
+function ListSelect({
+    label,
+    lists,
+    value,
+    onChange,
+}: {
+    label: string;
+    lists: TrelloList[];
+    value: string;
+    onChange: (v: string) => void;
+}) {
     return (
         <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-600">{label}</span>

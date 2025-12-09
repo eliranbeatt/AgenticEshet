@@ -1,10 +1,18 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
-import ConvexClientProvider from "./ConvexClientProvider";
+import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import ConvexClientProvider from "./ConvexClientProvider";
+import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"] });
+const geistSans = Geist({
+    subsets: ["latin"],
+    variable: "--font-geist-sans",
+});
+
+const geistMono = Geist_Mono({
+    subsets: ["latin"],
+    variable: "--font-geist-mono",
+});
 
 export const metadata: Metadata = {
     title: "Magnetic Studio Console",
@@ -18,41 +26,38 @@ export default function RootLayout({
 }>) {
     return (
         <html lang="en">
-            <body className={inter.className}>
+            <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
                 <ConvexClientProvider>
-                    <div className="flex h-screen w-full bg-gray-100 text-gray-900">
-                        {/* Sidebar */}
-                        <aside className="w-64 bg-gray-900 text-white flex flex-col">
+                    <div className="flex min-h-screen w-full bg-background text-foreground">
+                        <aside className="w-64 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col">
                             <div className="p-6 text-xl font-bold tracking-tight">
                                 Magnetic Studio
                             </div>
-                            <nav className="flex-1 px-4 space-y-2">
+                            <nav className="flex-1 px-4 space-y-2 text-sm">
                                 <Link
                                     href="/projects"
-                                    className="block px-4 py-2 rounded hover:bg-gray-800 transition"
+                                    className="block rounded px-4 py-2 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                                 >
                                     Projects
                                 </Link>
                                 <Link
                                     href="/ingestion"
-                                    className="block px-4 py-2 rounded hover:bg-gray-800 transition"
+                                    className="block rounded px-4 py-2 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                                 >
                                     Ingestion
                                 </Link>
                                 <Link
                                     href="/admin"
-                                    className="block px-4 py-2 rounded hover:bg-gray-800 transition"
+                                    className="block rounded px-4 py-2 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                                 >
                                     Admin
                                 </Link>
                             </nav>
-                            <div className="p-4 text-xs text-gray-500 border-t border-gray-800">
+                            <div className="border-t border-sidebar-border p-4 text-xs text-muted-foreground">
                                 Agentic Eshet v0.1
                             </div>
                         </aside>
-
-                        {/* Main Content */}
-                        <main className="flex-1 overflow-auto">
+                        <main className="flex-1 overflow-auto bg-muted">
                             {children}
                         </main>
                     </div>

@@ -1,10 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
+
+type QuoteBreakdownItem = {
+    label: string;
+    amount: number;
+    currency: string;
+    notes?: string;
+};
 
 export default function QuotePage() {
     const params = useParams();
@@ -24,16 +31,41 @@ export default function QuotePage() {
         try {
             await runQuoteAgent({ projectId, instructions: instruction });
             setInstruction("");
-        } catch (err) {
-            console.error(err);
-            alert("Failed to generate quote");
+        } catch (error: unknown) {
+            console.error(error);
+            const message = error instanceof Error ? error.message : "Unknown error";
+            alert("Failed to generate quote: " + message);
         } finally {
             setIsGenerating(false);
         }
     };
 
-    const breakdown = latestQuote ? JSON.parse(latestQuote.internalBreakdownJson) : [];
-    const total = breakdown.reduce((sum: number, item: any) => sum + item.amount, 0);
+    const breakdown = useMemo<QuoteBreakdownItem[]>(() => {
+        if (!latestQuote) {
+            return [];
+        }
+
+        try {
+            const parsed = JSON.parse(latestQuote.internalBreakdownJson);
+            if (!Array.isArray(parsed)) {
+                return [];
+            }
+
+            return parsed.map((item) => ({
+                label: String(item.label),
+                amount: Number(item.amount) || 0,
+                currency: item.currency ? String(item.currency) : "ILS",
+                notes: item.notes ? String(item.notes) : undefined,
+            }));
+        } catch {
+            return [];
+        }
+    }, [latestQuote]);
+
+    const total = useMemo(
+        () => breakdown.reduce((sum, item) => sum + item.amount, 0),
+        [breakdown]
+    );
 
     return (
         <div className="flex h-[calc(100vh-12rem)] gap-6">
@@ -112,7 +144,7 @@ export default function QuotePage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {breakdown.map((item: any, i: number) => (
+                                        {breakdown.map((item, i: number) => (
                                             <tr key={i} className="border-b">
                                                 <td className="p-2 border font-medium">{item.label}</td>
                                                 <td className="p-2 border text-gray-500">{item.notes || "-"}</td>

@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { action, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
 import { callChatWithSchema } from "./lib/openai";
 import { EnhancerSchema } from "./lib/zodSchemas";
 
@@ -66,7 +67,7 @@ export const updateFileStatus = mutation({
     error: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const update: any = { status: args.status };
+    const update: Partial<Doc<"ingestionFiles">> = { status: args.status };
     if (args.rawText) update.rawText = args.rawText;
     if (args.enrichedData) {
         update.summary = args.enrichedData.summary;
@@ -120,11 +121,12 @@ export const processFile = action({
                 enrichedData: enriched,
             });
 
-        } catch (err: any) {
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Unknown error";
             await ctx.runMutation(internal.ingestion.updateFileStatus, {
                 fileId: args.fileId,
                 status: "failed",
-                error: err.message || "Unknown error",
+                error: message,
             });
         }
     }

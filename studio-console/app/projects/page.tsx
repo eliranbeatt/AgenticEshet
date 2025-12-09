@@ -15,12 +15,13 @@ export default function ProjectsPage() {
     // --- Dev Tool: Seeding ---
     const seedSkills = useMutation(api.seed.seedSkillsPublic);
     const handleSeed = async () => {
-        if(!confirm("Initialize system skills? (Run once)")) return;
+        if (!confirm("Initialize system skills? (Run once)")) return;
         try {
             await seedSkills();
             alert("System initialized successfully!");
-        } catch(e: any) {
-            alert("Seeding failed: " + e.message);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            alert("Seeding failed: " + message);
         }
     };
     // -------------------------

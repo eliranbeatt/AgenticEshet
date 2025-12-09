@@ -2,6 +2,11 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { zodResponseFormat } from "openai/helpers/zod";
 
+type ChatMessage = {
+    role: "system" | "user" | "assistant";
+    content: string;
+};
+
 const apiKey = process.env.OPENAI_API_KEY;
 
 if (!apiKey) {
@@ -26,7 +31,7 @@ export async function callChatWithSchema<T>(
 
     const model = params.model || "gpt-4o-2024-08-06"; // structured outputs supported model
 
-    const messages: any[] = [
+    const messages: ChatMessage[] = [
         { role: "system", content: params.systemPrompt },
         ...(params.additionalMessages || []),
         { role: "user", content: params.userPrompt },

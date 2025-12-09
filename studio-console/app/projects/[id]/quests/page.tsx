@@ -85,7 +85,7 @@ export default function QuestsPage() {
                             
                             {/* In a full app, we'd list tasks here or drag-and-drop tasks into quests */}
                             <div className="text-xs text-gray-400 bg-gray-50 p-2 rounded text-center border border-dashed">
-                                To assign tasks to this quest, verify "questId" field in Tasks (Implementation pending drag-drop UI)
+                                To assign tasks to this quest, verify &quot;questId&quot; field in Tasks (Implementation pending drag-drop UI)
                             </div>
                         </div>
                     );

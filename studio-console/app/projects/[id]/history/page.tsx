@@ -3,23 +3,36 @@
 import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
-import { useState } from "react";
+import { Doc, Id } from "../../../../../convex/_generated/dataModel";
+import { useMemo, useState } from "react";
+
+type ConversationMessage = {
+    role: string;
+    content: string;
+};
 
 export default function HistoryPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
     const conversations = useQuery(api.conversations.listByProject, { projectId });
     
-    const [selectedConv, setSelectedConv] = useState<string | null>(null);
+    const [selectedConv, setSelectedConv] = useState<Id<"conversations"> | null>(null);
 
     // Group by phase
-    const grouped = conversations?.reduce((acc, curr) => {
-        const phase = curr.phase || "Other";
-        if (!acc[phase]) acc[phase] = [];
-        acc[phase].push(curr);
-        return acc;
-    }, {} as Record<string, typeof conversations>);
+    const grouped = useMemo(() => {
+        if (!conversations) {
+            return undefined;
+        }
+
+        return conversations.reduce<Record<string, Doc<"conversations">[]>>((acc, curr) => {
+            const phase = curr.phase || "other";
+            if (!acc[phase]) {
+                acc[phase] = [];
+            }
+            acc[phase].push(curr);
+            return acc;
+        }, {});
+    }, [conversations]);
 
     return (
         <div className="flex h-[calc(100vh-12rem)] gap-6">
@@ -58,8 +71,8 @@ export default function HistoryPage() {
             {/* Right: Transcript */}
             <div className="flex-1 bg-white p-6 rounded shadow-sm border overflow-y-auto">
                 {selectedConv ? (
-                    <ConversationViewer 
-                        conversation={conversations?.find(c => c._id === selectedConv)} 
+                    <ConversationViewer
+                        conversation={conversations?.find((c) => c._id === selectedConv)}
                     />
                 ) : (
                     <div className="flex items-center justify-center h-full text-gray-400">
@@ -71,9 +84,28 @@ export default function HistoryPage() {
     );
 }
 
-function ConversationViewer({ conversation }: { conversation: any }) {
+function ConversationViewer({
+    conversation,
+}: {
+    conversation?: Doc<"conversations">;
+}) {
     if (!conversation) return null;
-    const messages = JSON.parse(conversation.messagesJson);
+    const parsed = (() => {
+        try {
+            const value = JSON.parse(conversation.messagesJson);
+            if (!Array.isArray(value)) {
+                return [];
+            }
+            return value;
+        } catch {
+            return [];
+        }
+    })();
+
+    const messages: ConversationMessage[] = parsed.map((message) => ({
+        role: typeof message.role === "string" ? message.role : "assistant",
+        content: typeof message.content === "string" ? message.content : "",
+    }));
 
     return (
         <div className="space-y-4">
@@ -83,8 +115,8 @@ function ConversationViewer({ conversation }: { conversation: any }) {
             </div>
             
             <div className="space-y-4">
-                {messages.map((msg: any, i: number) => (
-                    <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                {messages.map((msg, index) => (
+                    <div key={index} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                         <div className={`max-w-[80%] rounded-lg p-4 ${
                             msg.role === "user" ? "bg-blue-600 text-white" :
                             msg.role === "system" ? "bg-red-50 text-red-800 text-xs font-mono" :

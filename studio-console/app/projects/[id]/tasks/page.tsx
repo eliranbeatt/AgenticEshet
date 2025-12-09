@@ -4,7 +4,21 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../../convex/_generated/dataModel";
+
+type UpdateTaskInput = {
+    taskId: Id<"tasks">;
+    title?: string;
+    description?: string;
+    status?: Doc<"tasks">["status"];
+    category?: Doc<"tasks">["category"];
+    priority?: Doc<"tasks">["priority"];
+    questId?: Id<"quests">;
+};
+
+type DeleteTaskInput = {
+    taskId: Id<"tasks">;
+};
 
 export default function TasksPage() {
     const params = useParams();
@@ -108,7 +122,15 @@ export default function TasksPage() {
     );
 }
 
-function TaskCard({ task, onUpdate, onDelete }: { task: any, onUpdate: any, onDelete: any }) {
+function TaskCard({
+    task,
+    onUpdate,
+    onDelete,
+}: {
+    task: Doc<"tasks">;
+    onUpdate: (input: UpdateTaskInput) => Promise<void>;
+    onDelete: (input: DeleteTaskInput) => Promise<void>;
+}) {
     return (
         <div className="bg-white p-3 rounded shadow-sm border hover:shadow-md transition group relative">
             <div className="flex justify-between items-start mb-2">

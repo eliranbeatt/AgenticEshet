@@ -4,7 +4,9 @@ import { useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../../convex/_generated/dataModel";
+
+type KnowledgeSearchResult = Doc<"knowledgeChunks"> & { score: number };
 
 export default function KnowledgePage() {
     const params = useParams();
@@ -26,7 +28,7 @@ export default function KnowledgePage() {
     const [activeTab, setActiveTab] = useState<"docs" | "upload" | "search">("docs");
     const [uploading, setUploading] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState<any[]>([]);
+    const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
     const [isSearching, setIsSearching] = useState(false);
     
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -73,38 +75,46 @@ export default function KnowledgePage() {
             }
             setActiveTab("upload"); // Stay here or go to 'docs'
             alert("Upload and processing complete! Check the Ingestion status.");
-        } catch (err) {
-            console.error(err);
-            alert("Upload failed");
+        } catch (error: unknown) {
+            console.error(error);
+            const message = error instanceof Error ? error.message : "Upload failed";
+            alert(message);
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = "";
         }
     };
 
-    const handleAddToKnowledge = async (file: any) => {
-        if (file.status !== "enriched" || !file.enrichedText && !file.rawText) return;
+    const handleAddToKnowledge = async (file: Doc<"ingestionFiles">) => {
+        const textSource = file.enrichedText ?? file.rawText;
+        if (file.status !== "enriched" || !textSource) {
+            return;
+        }
+
+        let tags: string[] = [];
+        if (file.suggestedTagsJson) {
+            try {
+                const parsed = JSON.parse(file.suggestedTagsJson);
+                tags = Array.isArray(parsed) ? parsed.map((t) => String(t)) : [];
+            } catch {
+                tags = [];
+            }
+        }
         
         try {
-            const enriched = file.enrichedData ? file.enrichedData : {}; // Need to parse if stored as JSON?
-            // Wait, schema says enrichedData is just separate fields.
-            // Actually 'updateFileStatus' takes 'enrichedData' object but schema has individual fields.
-            // Let's assume we grab summary/tags from the file record.
-            
-            // In 'processFile' we saved 'enrichedData' which updated 'summary', 'keyPointsJson' etc.
-            
             await createKnowledgeDoc({
                 projectId,
                 title: file.originalFilename,
                 storageId: file.storageId,
                 summary: file.summary || "No summary",
-                tags: file.suggestedTagsJson ? JSON.parse(file.suggestedTagsJson) : [],
-                text: file.rawText || "",
+                tags,
+                text: textSource,
             });
             alert("Added to Knowledge Base!");
-        } catch (err) {
-            console.error(err);
-            alert("Failed to add to Knowledge Base");
+        } catch (error: unknown) {
+            console.error(error);
+            const message = error instanceof Error ? error.message : "Failed to add to Knowledge Base";
+            alert(message);
         }
     };
 
@@ -113,9 +123,18 @@ export default function KnowledgePage() {
         setIsSearching(true);
         try {
             const results = await searchKnowledge({ projectId, query: searchQuery });
-            setSearchResults(results);
-        } catch (err) {
-            console.error(err);
+            if (Array.isArray(results)) {
+                setSearchResults(
+                    results.map((result) => ({
+                        ...result,
+                        score: typeof result.score === "number" ? result.score : 0,
+                    })) as KnowledgeSearchResult[]
+                );
+            } else {
+                setSearchResults([]);
+            }
+        } catch (error: unknown) {
+            console.error(error);
         } finally {
             setIsSearching(false);
         }
@@ -241,7 +260,13 @@ export default function KnowledgePage() {
     );
 }
 
-function JobItem({ job, onAddToKnowledge }: { job: any, onAddToKnowledge: (f: any) => void }) {
+function JobItem({
+    job,
+    onAddToKnowledge,
+}: {
+    job: Doc<"ingestionJobs">;
+    onAddToKnowledge: (file: Doc<"ingestionFiles">) => void;
+}) {
     // We need to fetch files for this job.
     // In a real app we'd likely have a subscription or specific component.
     // Let's use a sub-component with useQuery.

@@ -50,7 +50,7 @@ export default function PlanningPage() {
                     <div className="flex-1 overflow-y-auto mb-4 bg-gray-50 p-3 rounded border">
                         {/* Simple instruction history or tips could go here */}
                         <p className="text-xs text-gray-500 italic">
-                            Try: "Create a 3-phase plan for a video shoot" or "Add a risk assessment section"
+                            Try: &ldquo;Create a 3-phase plan for a video shoot&rdquo; or &ldquo;Add a risk assessment section&rdquo;
                         </p>
                     </div>
 

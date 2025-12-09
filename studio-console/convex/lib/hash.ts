@@ -1,4 +1,4 @@
-export async function calculateHash(data: any): Promise<string> {
+export async function calculateHash(data: Record<string, unknown>): Promise<string> {
   const str = JSON.stringify(data);
   const msgBuffer = new TextEncoder().encode(str);
   const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);

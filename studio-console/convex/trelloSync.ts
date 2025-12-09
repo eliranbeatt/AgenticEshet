@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { calculateHash } from "./lib/hash";
 
 // --- Data Models for Trello Config (stored in settings) ---
@@ -118,7 +118,7 @@ export const sync = action({
     const mapLookup = new Map(mappings.map(m => [m.taskId, m]));
 
     let syncedCount = 0;
-    let errors = [];
+    const errors: string[] = [];
 
     // 3. Iterate
     for (const task of tasks) {
@@ -159,8 +159,9 @@ export const sync = action({
                         contentHash: currentHash,
                     });
                     syncedCount++;
-                } catch (e: any) {
-                    errors.push(`Failed to update ${task.title}: ${e.message}`);
+                } catch (error: unknown) {
+                    const message = error instanceof Error ? error.message : "Unknown error";
+                    errors.push(`Failed to update ${task.title}: ${message}`);
                 }
             }
         } else {
@@ -184,8 +185,9 @@ export const sync = action({
                     contentHash: currentHash,
                 });
                 syncedCount++;
-            } catch (e: any) {
-                errors.push(`Failed to create ${task.title}: ${e.message}`);
+            } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : "Unknown error";
+                errors.push(`Failed to create ${task.title}: ${message}`);
             }
         }
     }

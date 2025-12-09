@@ -66,3 +66,14 @@ export const updateProject = mutation({
         await ctx.db.patch(projectId, patches);
     },
 });
+
+export const getPlans = query({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        return await ctx.db
+            .query("plans")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .order("desc")
+            .collect();
+    },
+});

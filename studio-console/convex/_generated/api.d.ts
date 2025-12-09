@@ -8,9 +8,12 @@
  * @module
  */
 
+import type * as agents_clarification from "../agents/clarification.js";
+import type * as agents_planning from "../agents/planning.js";
 import type * as lib_openai from "../lib/openai.js";
 import type * as lib_zodSchemas from "../lib/zodSchemas.js";
 import type * as projects from "../projects.js";
+import type * as seed from "../seed.js";
 import type * as tasks from "../tasks.js";
 
 import type {
@@ -20,9 +23,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "agents/clarification": typeof agents_clarification;
+  "agents/planning": typeof agents_planning;
   "lib/openai": typeof lib_openai;
   "lib/zodSchemas": typeof lib_zodSchemas;
   projects: typeof projects;
+  seed: typeof seed;
   tasks: typeof tasks;
 }>;
 

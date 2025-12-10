@@ -11,11 +11,22 @@ type TrelloList = {
     name: string;
 };
 
-type StatusMappings = Record<"todo" | "in_progress" | "done", string>;
+type StatusMappings = Record<"todo" | "in_progress" | "blocked" | "done", string>;
+
+type SnapshotList = {
+    id: string;
+    name: string;
+    cards: {
+        id: string;
+        name: string;
+        shortUrl?: string;
+    }[];
+};
 
 const createEmptyMappings = (): StatusMappings => ({
     todo: "",
     in_progress: "",
+    blocked: "",
     done: "",
 });
 
@@ -25,9 +36,11 @@ export default function TrelloViewPage() {
     
     // API
     const config = useQuery(api.trelloSync.getConfig, { projectId });
+    const syncState = useQuery(api.trelloSync.getSyncState, { projectId });
     const saveConfig = useMutation(api.trelloSync.saveConfig);
     const fetchLists = useAction(api.trelloSync.fetchLists);
     const syncToTrello = useAction(api.trelloSync.sync);
+    const snapshotBoard = useAction(api.trelloSync.snapshotBoard);
 
     // State
     const [apiKey, setApiKey] = useState("");
@@ -39,6 +52,9 @@ export default function TrelloViewPage() {
     const [isLoadingLists, setIsLoadingLists] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [snapshot, setSnapshot] = useState<SnapshotList[]>([]);
+    const [snapshotRetries, setSnapshotRetries] = useState<string[]>([]);
+    const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
 
     // Load initial config
     useEffect(() => {
@@ -46,7 +62,12 @@ export default function TrelloViewPage() {
             setApiKey(config.apiKey);
             setToken(config.token);
             setBoardId(config.boardId);
-            setMappings(config.listMap || createEmptyMappings());
+            setMappings({
+                todo: config.listMap?.todo ?? "",
+                in_progress: config.listMap?.in_progress ?? "",
+                blocked: config.listMap?.blocked ?? "",
+                done: config.listMap?.done ?? "",
+            });
         }
     }, [config]);
 
@@ -97,9 +118,13 @@ export default function TrelloViewPage() {
         setIsSyncing(true);
         try {
             const res = await syncToTrello({ projectId });
-            alert(`Sync complete! Synced: ${res.syncedCount}, Errors: ${res.errors.length}`);
+            const retryNote = res.retries?.length ? ` (with ${res.retries.length} retry${res.retries.length === 1 ? "" : "s"})` : "";
+            alert(`Sync complete! Synced: ${res.syncedCount}, Archived: ${res.archivedCount}${retryNote}, Errors: ${res.errors.length}`);
             if (res.errors.length > 0) {
                 console.error("Sync errors:", res.errors);
+            }
+            if (res.retries?.length) {
+                console.warn("Trello retry log:", res.retries);
             }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Unknown error";
@@ -109,8 +134,53 @@ export default function TrelloViewPage() {
         }
     };
 
+    const handleSnapshot = async () => {
+        if (!config) return alert("Please save configuration first.");
+        setIsSnapshotLoading(true);
+        try {
+            const result = await snapshotBoard({ projectId });
+            setSnapshot(result.lists || []);
+            setSnapshotRetries(result.retries || []);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            alert("Failed to load snapshot: " + message);
+        } finally {
+            setIsSnapshotLoading(false);
+        }
+    };
+
     return (
-        <div className="max-w-3xl mx-auto p-4 space-y-8">
+        <div className="max-w-5xl mx-auto p-4 space-y-8">
+            <div className="grid gap-4 lg:grid-cols-3">
+                <div className="bg-white p-4 rounded shadow border lg:col-span-2">
+                    <h2 className="text-lg font-bold mb-2">Sync Status</h2>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                        <StatusStat label="Last Sync" value={syncState?.lastSyncedAt ? new Date(syncState.lastSyncedAt).toLocaleString() : "Never"} />
+                        <StatusStat label="Mapped Tasks" value={`${syncState?.mappedTaskCount ?? 0}/${syncState?.totalTasks ?? 0}`} />
+                        <StatusStat label="Unmapped Tasks" value={syncState?.unmappedTasks ?? 0} />
+                        <StatusStat label="Board Snapshot" value={snapshot.length > 0 ? `${snapshot.reduce((sum, list) => sum + list.cards.length, 0)} cards loaded` : "Tap Refresh"} />
+                    </div>
+                </div>
+                <div className="bg-white p-4 rounded shadow border flex flex-col gap-3">
+                    <div>
+                        <h3 className="text-sm font-semibold text-gray-600">Snapshot</h3>
+                        <p className="text-xs text-gray-500">Pull the latest board state directly from Trello.</p>
+                    </div>
+                    <button
+                        onClick={handleSnapshot}
+                        disabled={isSnapshotLoading || !config}
+                        className="bg-slate-900 text-white px-4 py-2 rounded font-medium disabled:opacity-40"
+                    >
+                        {isSnapshotLoading ? "Fetching..." : "Refresh Snapshot"}
+                    </button>
+                    {snapshotRetries.length > 0 && (
+                        <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded p-2">
+                            Retried {snapshotRetries.length} API calls. See console for full log.
+                        </p>
+                    )}
+                </div>
+            </div>
+
             <div className="bg-white p-6 rounded shadow border">
                 <h2 className="text-xl font-bold mb-4">Trello Configuration</h2>
                 
@@ -172,6 +242,12 @@ export default function TrelloViewPage() {
                                     onChange={(v) => setMappings(m => ({ ...m, in_progress: v }))} 
                                 />
                                 <ListSelect 
+                                    label="Blocked" 
+                                    lists={lists} 
+                                    value={mappings.blocked} 
+                                    onChange={(v) => setMappings(m => ({ ...m, blocked: v }))} 
+                                />
+                                <ListSelect 
                                     label="Done" 
                                     lists={lists} 
                                     value={mappings.done} 
@@ -207,6 +283,46 @@ export default function TrelloViewPage() {
                 
                 {!config && <p className="text-red-500 text-sm mt-2">Configuration required first.</p>}
             </div>
+
+            {snapshot.length > 0 && (
+                <div className="bg-white p-6 rounded shadow border">
+                    <h2 className="text-xl font-bold mb-4">Live Board Snapshot</h2>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        {snapshot.map((list) => (
+                            <div key={list.id} className="border rounded p-4">
+                                <div className="flex justify-between items-center mb-3">
+                                    <h3 className="font-semibold text-gray-800">{list.name}</h3>
+                                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                                        {list.cards.length} cards
+                                    </span>
+                                </div>
+                                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                                    {list.cards.map((card) => (
+                                        <div key={card.id} className="text-sm border rounded px-3 py-2 hover:bg-gray-50">
+                                            <p className="font-medium text-gray-800">{card.name}</p>
+                                            {card.shortUrl && (
+                                                <a
+                                                    href={card.shortUrl}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="text-xs text-blue-600 hover:underline"
+                                                >
+                                                    Open Card
+                                                </a>
+                                            )}
+                                        </div>
+                                    ))}
+                                    {list.cards.length === 0 && (
+                                        <p className="text-xs text-gray-400 border border-dashed rounded px-3 py-2 text-center">
+                                            No open cards in this list
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -235,6 +351,15 @@ function ListSelect({
                     <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
             </select>
+        </div>
+    );
+}
+
+function StatusStat({ label, value }: { label: string; value: string | number }) {
+    return (
+        <div className="bg-gray-50 border rounded p-3">
+            <p className="text-xs uppercase text-gray-500">{label}</p>
+            <p className="font-semibold text-gray-900">{value}</p>
         </div>
     );
 }

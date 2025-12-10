@@ -7,8 +7,9 @@ export const list = query({
         return await ctx.db
             .query("quests")
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .order("asc")
             .collect();
-    }
+    },
 });
 
 export const create = mutation({
@@ -26,7 +27,7 @@ export const create = mutation({
             order: args.order,
             createdAt: Date.now(),
         });
-    }
+    },
 });
 
 export const deleteQuest = mutation({
@@ -43,7 +44,46 @@ export const deleteQuest = mutation({
         }
 
         await ctx.db.delete(args.questId);
-    }
+    },
+});
+
+export const updateQuest = mutation({
+    args: {
+        questId: v.id("quests"),
+        title: v.optional(v.string()),
+        description: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const { questId, ...patches } = args;
+        await ctx.db.patch(questId, patches);
+    },
+});
+
+export const reorderQuests = mutation({
+    args: {
+        projectId: v.id("projects"),
+        questIds: v.array(v.id("quests")),
+    },
+    handler: async (ctx, args) => {
+        const quests = await ctx.db
+            .query("quests")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        const questLookup = new Map(quests.map((quest) => [quest._id, quest]));
+        let orderCounter = 1;
+
+        for (const questId of args.questIds) {
+            if (!questLookup.has(questId)) continue;
+            await ctx.db.patch(questId, { order: orderCounter++ });
+            questLookup.delete(questId);
+        }
+
+        const remaining = Array.from(questLookup.values()).sort((a, b) => a.order - b.order);
+        for (const quest of remaining) {
+            await ctx.db.patch(quest._id, { order: orderCounter++ });
+        }
+    },
 });
 
 export const getStats = query({

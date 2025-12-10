@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 
 export default function QuestsPage() {
     const params = useParams();
@@ -14,6 +14,8 @@ export default function QuestsPage() {
     const stats = useQuery(api.quests.getStats, { projectId });
     const createQuest = useMutation(api.quests.create);
     const deleteQuest = useMutation(api.quests.deleteQuest);
+    const updateQuest = useMutation(api.quests.updateQuest);
+    const reorderQuests = useMutation(api.quests.reorderQuests);
     
     const [newTitle, setNewTitle] = useState("");
 
@@ -29,8 +31,33 @@ export default function QuestsPage() {
         setNewTitle("");
     };
 
+    const handleSaveQuest = async (questId: Id<"quests">, title: string, description: string) => {
+        await updateQuest({
+            questId,
+            title: title.trim(),
+            description: description.trim() ? description.trim() : undefined,
+        });
+    };
+
+    const handleReorder = async (questId: Id<"quests">, direction: "up" | "down") => {
+        if (!quests) return;
+        const currentIndex = quests.findIndex((quest) => quest._id === questId);
+        if (currentIndex === -1) return;
+        const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+        if (nextIndex < 0 || nextIndex >= quests.length) return;
+
+        const updatedOrder = [...quests];
+        const [moved] = updatedOrder.splice(currentIndex, 1);
+        updatedOrder.splice(nextIndex, 0, moved);
+
+        await reorderQuests({
+            projectId,
+            questIds: updatedOrder.map((quest) => quest._id),
+        });
+    };
+
     return (
-        <div className="max-w-4xl mx-auto p-4">
+        <div className="max-w-5xl mx-auto p-4 space-y-8">
             <div className="flex justify-between items-center mb-8">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-800">Quests & Milestones</h1>
@@ -52,42 +79,21 @@ export default function QuestsPage() {
             </div>
 
             <div className="grid gap-6">
-                {quests?.map((quest) => {
-                    const stat = stats?.find(s => s.questId === quest._id);
+                {quests?.map((quest, index) => {
+                    const stat = stats?.find((s) => s.questId === quest._id);
                     return (
-                        <div key={quest._id} className="bg-white p-6 rounded-lg shadow-sm border hover:shadow-md transition">
-                            <div className="flex justify-between items-start mb-4">
-                                <div>
-                                    <h3 className="text-lg font-bold text-gray-800">{quest.title}</h3>
-                                    {quest.description && <p className="text-gray-500 text-sm">{quest.description}</p>}
-                                </div>
-                                <button 
-                                    onClick={() => { if(confirm("Delete quest?")) deleteQuest({ questId: quest._id }) }}
-                                    className="text-gray-300 hover:text-red-500"
-                                >
-                                    &times;
-                                </button>
-                            </div>
-
-                            {/* Progress Bar */}
-                            <div className="mb-4">
-                                <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                    <span>Progress</span>
-                                    <span>{stat?.percent || 0}% ({stat?.done || 0}/{stat?.total || 0})</span>
-                                </div>
-                                <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
-                                    <div 
-                                        className="bg-purple-600 h-2.5 rounded-full transition-all duration-500" 
-                                        style={{ width: `${stat?.percent || 0}%` }}
-                                    ></div>
-                                </div>
-                            </div>
-                            
-                            {/* In a full app, we'd list tasks here or drag-and-drop tasks into quests */}
-                            <div className="text-xs text-gray-400 bg-gray-50 p-2 rounded text-center border border-dashed">
-                                To assign tasks to this quest, verify &quot;questId&quot; field in Tasks (Implementation pending drag-drop UI)
-                            </div>
-                        </div>
+                        <QuestCard
+                            key={quest._id}
+                            quest={quest}
+                            stat={stat}
+                            canMoveUp={index > 0}
+                            canMoveDown={!!quests && index < quests.length - 1}
+                            onDelete={() => {
+                                if (confirm("Delete quest?")) deleteQuest({ questId: quest._id });
+                            }}
+                            onSave={handleSaveQuest}
+                            onReorder={handleReorder}
+                        />
                     );
                 })}
 
@@ -96,6 +102,116 @@ export default function QuestsPage() {
                         No quests defined. Create one to organize your workflow!
                     </div>
                 )}
+            </div>
+        </div>
+    );
+}
+
+function QuestCard({
+    quest,
+    stat,
+    onDelete,
+    onSave,
+    onReorder,
+    canMoveUp,
+    canMoveDown,
+}: {
+    quest: Doc<"quests">;
+    stat: { percent: number; done: number; total: number } | undefined;
+    onDelete: () => void;
+    onSave: (questId: Id<"quests">, title: string, description: string) => Promise<void>;
+    onReorder: (questId: Id<"quests">, direction: "up" | "down") => Promise<void>;
+    canMoveUp: boolean;
+    canMoveDown: boolean;
+}) {
+    const [title, setTitle] = useState(quest.title);
+    const [description, setDescription] = useState(quest.description || "");
+    const [isSaving, setIsSaving] = useState(false);
+    useEffect(() => {
+        setTitle(quest.title);
+        setDescription(quest.description || "");
+    }, [quest._id, quest.title, quest.description]);
+    const dirty = title !== quest.title || (quest.description || "") !== description;
+
+    const handleSave = async () => {
+        if (!dirty) return;
+        setIsSaving(true);
+        try {
+            await onSave(quest._id, title, description);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    return (
+        <div className="bg-white p-6 rounded-lg shadow-sm border hover:shadow-md transition space-y-4">
+            <div className="flex justify-between gap-3 flex-wrap">
+                <div className="flex-1 min-w-[200px] space-y-2">
+                    <input
+                        type="text"
+                        className="w-full border rounded px-3 py-2 font-semibold text-gray-800 focus:ring-2 focus:ring-purple-500"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                    />
+                    <textarea
+                        className="w-full border rounded px-3 py-2 text-sm text-gray-700 focus:ring-2 focus:ring-purple-500"
+                        rows={3}
+                        placeholder="Describe the milestone..."
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                    />
+                </div>
+                <div className="flex flex-col gap-2 text-sm text-gray-500">
+                    <button
+                        type="button"
+                        onClick={() => onReorder(quest._id, "up")}
+                        disabled={!canMoveUp}
+                        className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-50"
+                    >
+                        ↑ Move Up
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onReorder(quest._id, "down")}
+                        disabled={!canMoveDown}
+                        className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-50"
+                    >
+                        ↓ Move Down
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onDelete}
+                        className="px-3 py-1 border rounded text-red-600 hover:bg-red-50"
+                    >
+                        Delete
+                    </button>
+                </div>
+            </div>
+
+            <div>
+                <div className="flex justify-between text-xs text-gray-500 mb-1">
+                    <span>Progress</span>
+                    <span>
+                        {stat?.percent ?? 0}% ({stat?.done ?? 0}/{stat?.total ?? 0})
+                    </span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                    <div
+                        className="bg-purple-600 h-2.5 rounded-full transition-all duration-500"
+                        style={{ width: `${stat?.percent ?? 0}%` }}
+                    ></div>
+                </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+                <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={!dirty || isSaving}
+                    className="px-4 py-2 bg-purple-600 text-white rounded font-medium disabled:opacity-40"
+                >
+                    {isSaving ? "Saving..." : dirty ? "Save Changes" : "Saved"}
+                </button>
             </div>
         </div>
     );

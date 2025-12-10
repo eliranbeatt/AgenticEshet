@@ -3,6 +3,59 @@ import { action, mutation, query, internalMutation, internalQuery } from "./_gen
 import { api, internal } from "./_generated/api";
 import { calculateHash } from "./lib/hash";
 
+const STATUS_KEYS = ["todo", "in_progress", "blocked", "done"] as const;
+type StatusKey = (typeof STATUS_KEYS)[number];
+
+type TrelloConfig = {
+    apiKey: string;
+    token: string;
+    boardId: string;
+    listMap: Record<StatusKey, string>;
+};
+
+type TrelloAuth = Pick<TrelloConfig, "apiKey" | "token">;
+
+type TrelloRequestOptions = {
+    method: "GET" | "POST" | "PUT" | "DELETE";
+    path: string;
+    params?: Record<string, string | undefined>;
+    auth: TrelloAuth;
+    expectJson?: boolean;
+    label: string;
+    retryLog: string[];
+};
+
+async function trelloRequest<T>(options: TrelloRequestOptions): Promise<T | undefined> {
+    const url = new URL(`https://api.trello.com${options.path}`);
+    const searchParams = new URLSearchParams({
+        key: options.auth.apiKey,
+        token: options.auth.token,
+    });
+
+    for (const [key, value] of Object.entries(options.params ?? {})) {
+        if (value === undefined) continue;
+        searchParams.set(key, value);
+    }
+    url.search = searchParams.toString();
+
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const res = await fetch(url.toString(), { method: options.method });
+        if (res.ok) {
+            if (options.expectJson) {
+                return (await res.json()) as T;
+            }
+            return undefined;
+        }
+        const message = await res.text();
+        options.retryLog.push(`Attempt ${attempt} failed for ${options.label}: ${message}`);
+        if (attempt === maxAttempts) {
+            throw new Error(message);
+        }
+    }
+    return undefined;
+}
+
 // --- Data Models for Trello Config (stored in settings) ---
 // We'll store a JSON object in the 'settings' table under key "trello_config_{projectId}"
 // or global "trello_auth" + project specific "trello_board"
@@ -14,29 +67,30 @@ import { calculateHash } from "./lib/hash";
 // --- Mutations ---
 
 export const saveConfig = mutation({
-  args: {
-    projectId: v.id("projects"),
-    config: v.object({
-        apiKey: v.string(),
-        token: v.string(),
-        boardId: v.string(),
-        listMap: v.object({
-            todo: v.string(),
-            in_progress: v.string(),
-            done: v.string(),
-        })
-    }),
-  },
-  handler: async (ctx, args) => {
-    const key = `project_trello_${args.projectId}`;
-    const existing = await ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", key)).first();
-    
-    if (existing) {
-        await ctx.db.patch(existing._id, { valueJson: JSON.stringify(args.config) });
-    } else {
-        await ctx.db.insert("settings", { key, valueJson: JSON.stringify(args.config) });
-    }
-  },
+    args: {
+        projectId: v.id("projects"),
+        config: v.object({
+            apiKey: v.string(),
+            token: v.string(),
+            boardId: v.string(),
+            listMap: v.object({
+                todo: v.string(),
+                in_progress: v.string(),
+                blocked: v.string(),
+                done: v.string(),
+            }),
+        }),
+    },
+    handler: async (ctx, args) => {
+        const key = `project_trello_${args.projectId}`;
+        const existing = await ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", key)).first();
+
+        if (existing) {
+            await ctx.db.patch(existing._id, { valueJson: JSON.stringify(args.config) });
+        } else {
+            await ctx.db.insert("settings", { key, valueJson: JSON.stringify(args.config) });
+        }
+    },
 });
 
 export const updateMapping = internalMutation({
@@ -58,7 +112,7 @@ export const updateMapping = internalMutation({
             await ctx.db.patch(existing._id, {
                 lastSyncedAt: Date.now(),
                 contentHash: args.contentHash,
-                trelloListId: args.trelloListId, // In case it moved
+                trelloListId: args.trelloListId,
             });
         } else {
             await ctx.db.insert("trelloMappings", {
@@ -70,7 +124,14 @@ export const updateMapping = internalMutation({
                 contentHash: args.contentHash,
             });
         }
-    }
+    },
+});
+
+export const removeMapping = internalMutation({
+    args: { mappingId: v.id("trelloMappings") },
+    handler: async (ctx, args) => {
+        await ctx.db.delete(args.mappingId);
+    },
 });
 
 // --- Queries ---
@@ -80,77 +141,144 @@ export const getConfig = query({
     handler: async (ctx, args) => {
         const key = `project_trello_${args.projectId}`;
         const setting = await ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", key)).first();
-        return setting ? JSON.parse(setting.valueJson) : null;
-    }
+        return setting ? (JSON.parse(setting.valueJson) as TrelloConfig) : null;
+    },
 });
 
 export const getMappings = internalQuery({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
         return await ctx.db.query("trelloMappings").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect();
-    }
+    },
+});
+
+export const getSyncState = query({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const mappings = await ctx.db.query("trelloMappings").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect();
+        const tasks = await ctx.db.query("tasks").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect();
+        const lastSyncedAt = mappings.reduce((latest, mapping) => Math.max(latest, mapping.lastSyncedAt), 0);
+        const mappedIds = new Set(mappings.map((m) => m.taskId));
+
+        return {
+            lastSyncedAt: lastSyncedAt === 0 ? null : lastSyncedAt,
+            mappedTaskCount: mappings.length,
+            totalTasks: tasks.length,
+            unmappedTasks: tasks.filter((task) => !mappedIds.has(task._id)).length,
+        };
+    },
 });
 
 // --- Actions (The heavy lifting) ---
 
 export const fetchLists = action({
     args: { apiKey: v.string(), token: v.string(), boardId: v.string() },
+    handler: async (_ctx, args) => {
+        const retryLog: string[] = [];
+        const lists = await trelloRequest<unknown[]>({
+            method: "GET",
+            path: `/1/boards/${args.boardId}/lists`,
+            params: {},
+            auth: { apiKey: args.apiKey, token: args.token },
+            expectJson: true,
+            label: "Fetch Trello lists",
+            retryLog,
+        });
+        return lists ?? [];
+    },
+});
+
+export const snapshotBoard = action({
+    args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
-        const url = `https://api.trello.com/1/boards/${args.boardId}/lists?key=${args.apiKey}&token=${args.token}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`Trello API Error: ${res.statusText}`);
-        return await res.json();
-    }
+        const config = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
+        if (!config) {
+            throw new Error("Trello not configured for this project");
+        }
+        const retryLog: string[] = [];
+        const lists = await trelloRequest<Array<{ id: string; name: string; cards?: Array<{ id: string; name: string; shortUrl?: string }> }>>({
+            method: "GET",
+            path: `/1/boards/${config.boardId}/lists`,
+            params: {
+                cards: "open",
+                card_fields: "name,shortUrl,idList",
+                fields: "name,id",
+            },
+            auth: config,
+            expectJson: true,
+            label: "Snapshot Trello board",
+            retryLog,
+        });
+        return {
+            lists: (lists ?? []).map((list) => ({
+                id: list.id,
+                name: list.name,
+                cards: (list.cards ?? []).map((card) => ({
+                    id: card.id,
+                    name: card.name,
+                    shortUrl: card.shortUrl,
+                })),
+            })),
+            retries: retryLog,
+        };
+    },
 });
 
 export const sync = action({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    // 1. Get Config
     const config = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
-    if (!config) throw new Error("Trello not configured for this project");
+    if (!config) {
+        throw new Error("Trello not configured for this project");
+    }
 
-    // 2. Get Tasks & Mappings
     const tasks = await ctx.runQuery(api.tasks.listByProject, { projectId: args.projectId });
     const mappings = await ctx.runQuery(internal.trelloSync.getMappings, { projectId: args.projectId });
-    
-    // Create lookup for mappings
-    const mapLookup = new Map(mappings.map(m => [m.taskId, m]));
+    const mapLookup = new Map(mappings.map((m) => [m.taskId, m]));
+    const taskIds = new Set(tasks.map((task) => task._id));
 
+    const retryLog: string[] = [];
     let syncedCount = 0;
+    let archivedCount = 0;
     const errors: string[] = [];
 
-    // 3. Iterate
     for (const task of tasks) {
-        // Prepare task payload
-        const listId = config.listMap[task.status] || config.listMap["todo"]; // Fallback
-        if (!listId) continue; // Skip if status not mapped (e.g. 'blocked' if not in map)
+        const statusKey = (STATUS_KEYS.includes(task.status as StatusKey) ? (task.status as StatusKey) : "todo");
+        const listId = config.listMap[statusKey] ?? config.listMap.todo;
+        if (!listId) {
+            continue;
+        }
 
-        // Calculate hash of relevant fields
-        const payload = {
+        const shouldArchive = task.status === "done";
+        const baseDescription = task.description ? task.description.trim() : "";
+        const desc = [baseDescription, `Priority: ${task.priority}`].filter(Boolean).join("\n\n");
+
+        const cardParams = {
             name: `[${task.category}] ${task.title}`,
-            desc: task.description || "",
+            desc,
             idList: listId,
+            pos: "bottom",
+            closed: shouldArchive ? "true" : "false",
         };
-        const currentHash = await calculateHash(payload);
+        const currentHash = await calculateHash({
+            ...cardParams,
+            status: task.status,
+            category: task.category,
+            priority: task.priority,
+        });
 
         const mapping = mapLookup.get(task._id);
-
-        if (mapping) {
-            // Update existing?
-            if (mapping.contentHash !== currentHash || mapping.trelloListId !== listId) {
-                // Update Card
-                try {
-                    const url = `https://api.trello.com/1/cards/${mapping.trelloCardId}?key=${config.apiKey}&token=${config.token}`;
-                    // We only update what changed. Simplification: Update all.
-                    // Note: Trello 'PUT' expects fields in body or query.
-                    await fetch(url, {
+        try {
+            if (mapping) {
+                if (mapping.contentHash !== currentHash || mapping.trelloListId !== listId) {
+                    await trelloRequest({
                         method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload),
+                        path: `/1/cards/${mapping.trelloCardId}`,
+                        params: cardParams,
+                        auth: config,
+                        label: `Update card ${mapping.trelloCardId}`,
+                        retryLog,
                     });
-
-                    // Update DB mapping
                     await ctx.runMutation(internal.trelloSync.updateMapping, {
                         projectId: args.projectId,
                         taskId: task._id,
@@ -159,39 +287,56 @@ export const sync = action({
                         contentHash: currentHash,
                     });
                     syncedCount++;
-                } catch (error: unknown) {
-                    const message = error instanceof Error ? error.message : "Unknown error";
-                    errors.push(`Failed to update ${task.title}: ${message}`);
+                }
+            } else {
+                const card = await trelloRequest<{ id: string; idList: string }>({
+                    method: "POST",
+                    path: "/1/cards",
+                    params: cardParams,
+                    auth: config,
+                    expectJson: true,
+                    label: `Create Trello card for ${task.title}`,
+                    retryLog,
+                });
+                if (card) {
+                    await ctx.runMutation(internal.trelloSync.updateMapping, {
+                        projectId: args.projectId,
+                        taskId: task._id,
+                        trelloCardId: card.id,
+                        trelloListId: card.idList,
+                        contentHash: currentHash,
+                    });
+                    syncedCount++;
                 }
             }
-        } else {
-            // Create New
-            try {
-                const url = `https://api.trello.com/1/cards?idList=${listId}&key=${config.apiKey}&token=${config.token}`;
-                const res = await fetch(url, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
-                });
-                if (!res.ok) throw new Error(await res.text());
-                
-                const card = await res.json();
-
-                await ctx.runMutation(internal.trelloSync.updateMapping, {
-                    projectId: args.projectId,
-                    taskId: task._id,
-                    trelloCardId: card.id,
-                    trelloListId: listId,
-                    contentHash: currentHash,
-                });
-                syncedCount++;
-            } catch (error: unknown) {
-                const message = error instanceof Error ? error.message : "Unknown error";
-                errors.push(`Failed to create ${task.title}: ${message}`);
+            if (shouldArchive) {
+                archivedCount++;
             }
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            errors.push(`Failed to sync ${task.title}: ${message}`);
         }
     }
 
-    return { syncedCount, errors };
+    for (const mapping of mappings) {
+        if (taskIds.has(mapping.taskId)) continue;
+        try {
+            await trelloRequest({
+                method: "PUT",
+                path: `/1/cards/${mapping.trelloCardId}`,
+                params: { closed: "true" },
+                auth: config,
+                label: `Archive removed card ${mapping.trelloCardId}`,
+                retryLog,
+            });
+            await ctx.runMutation(internal.trelloSync.removeMapping, { mappingId: mapping._id });
+            archivedCount++;
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            errors.push(`Failed to archive removed Trello card ${mapping.trelloCardId}: ${message}`);
+        }
+    }
+
+    return { syncedCount, archivedCount, errors, retries: retryLog };
   },
 });

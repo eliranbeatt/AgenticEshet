@@ -55,6 +55,7 @@ export default function KnowledgePage() {
     const [searchQuery, setSearchQuery] = useState("");
     const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
     const [isSearching, setIsSearching] = useState(false);
+    const [selectedDocId, setSelectedDocId] = useState<Id<"knowledgeDocs"> | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -173,35 +174,45 @@ export default function KnowledgePage() {
 
             <div className="flex-1 overflow-auto p-6 space-y-8">
                 {activeTab === "docs" && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {docs?.map((doc) => (
-                            <div key={doc._id} className="bg-white p-4 rounded shadow border flex flex-col">
-                                <div className="flex items-center justify-between gap-2 mb-2">
-                                    <h3 className="font-bold text-gray-800 truncate" title={doc.title}>
-                                        {doc.title}
-                                    </h3>
-                                    <span className="text-xs uppercase font-semibold text-gray-500">
-                                        {doc.processingStatus}
-                                    </span>
-                                </div>
-                                <p className="text-xs text-gray-500 mb-2">{new Date(doc.createdAt).toLocaleDateString()}</p>
-                                <p className="text-sm text-gray-700 line-clamp-4 mb-4 flex-1">{doc.summary}</p>
-                                <div className="flex flex-wrap gap-1 mt-auto">
-                                    {doc.tags.map((tag) => (
-                                        <span
-                                            key={tag}
-                                            className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded uppercase tracking-wide"
-                                        >
-                                            {tag}
+                    <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {docs?.map((doc) => (
+                                <button
+                                    key={doc._id}
+                                    type="button"
+                                    onClick={() => setSelectedDocId(doc._id)}
+                                    className="bg-white p-4 rounded shadow border flex flex-col text-left hover:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                    <div className="flex items-center justify-between gap-2 mb-2">
+                                        <h3 className="font-bold text-gray-800 truncate" title={doc.title}>
+                                            {doc.title}
+                                        </h3>
+                                        <span className="text-xs uppercase font-semibold text-gray-500">
+                                            {doc.processingStatus}
                                         </span>
-                                    ))}
-                                </div>
-                            </div>
-                        ))}
-                        {(!docs || docs.length === 0) && (
-                            <div className="col-span-full text-center text-gray-400 py-10">No documents yet.</div>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mb-2">{new Date(doc.createdAt).toLocaleDateString()}</p>
+                                    <p className="text-sm text-gray-700 line-clamp-4 mb-4 flex-1">{doc.summary}</p>
+                                    <div className="flex flex-wrap gap-1 mt-auto">
+                                        {doc.tags.map((tag) => (
+                                            <span
+                                                key={tag}
+                                                className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded uppercase tracking-wide"
+                                            >
+                                                {tag}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </button>
+                            ))}
+                            {(!docs || docs.length === 0) && (
+                                <div className="col-span-full text-center text-gray-400 py-10">No documents yet.</div>
+                            )}
+                        </div>
+                        {selectedDocId && (
+                            <DocDetailDrawer docId={selectedDocId} onClose={() => setSelectedDocId(null)} />
                         )}
-                    </div>
+                    </>
                 )}
 
                 {activeTab === "upload" && (
@@ -333,6 +344,97 @@ export default function KnowledgePage() {
                 )}
             </div>
         </div>
+    );
+}
+
+function DocDetailDrawer({ docId, onClose }: { docId: Id<"knowledgeDocs">; onClose: () => void }) {
+    const detail = useQuery(api.knowledge.getDocDetail, { docId });
+
+    const body = (() => {
+        if (detail === undefined) {
+            return <p className="text-sm text-gray-500">Loading...</p>;
+        }
+        if (!detail) {
+            return <p className="text-sm text-red-500">Document not found.</p>;
+        }
+        return (
+            <>
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <h2 className="text-lg font-semibold text-gray-900">{detail.title}</h2>
+                        <p className="text-xs text-gray-500">Added {new Date(detail.createdAt).toLocaleString()}</p>
+                    </div>
+                    <button onClick={onClose} className="text-gray-500 hover:text-gray-800 text-sm">Close</button>
+                </div>
+
+                <div className="space-y-4">
+                    <section>
+                        <h3 className="text-xs uppercase text-gray-500 font-semibold mb-1">Summary</h3>
+                        <p className="text-sm text-gray-800 whitespace-pre-line">{detail.summary}</p>
+                    </section>
+
+                    {detail.keyPoints?.length > 0 && (
+                        <section>
+                            <h3 className="text-xs uppercase text-gray-500 font-semibold mb-1">Key points</h3>
+                            <ul className="list-disc list-inside text-sm text-gray-800 space-y-1">
+                                {detail.keyPoints.map((point: string, index: number) => (
+                                    <li key={index}>{point}</li>
+                                ))}
+                            </ul>
+                        </section>
+                    )}
+
+                    {detail.keywords?.length > 0 && (
+                        <section>
+                            <h3 className="text-xs uppercase text-gray-500 font-semibold mb-1">Keywords</h3>
+                            <div className="flex flex-wrap gap-1">
+                                {detail.keywords.map((keyword: string) => (
+                                    <span key={keyword} className="text-[11px] uppercase bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                                        {keyword}
+                                    </span>
+                                ))}
+                            </div>
+                        </section>
+                    )}
+
+                    <section>
+                        <h3 className="text-xs uppercase text-gray-500 font-semibold mb-1">Tags</h3>
+                        <div className="flex flex-wrap gap-1">
+                            {detail.tags.map((tag: string) => (
+                                <span key={tag} className="text-[11px] uppercase bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
+                                    {tag}
+                                </span>
+                            ))}
+                        </div>
+                    </section>
+
+                    <section>
+                        <h3 className="text-xs uppercase text-gray-500 font-semibold mb-1">Original file</h3>
+                        {detail.downloadUrl ? (
+                            <a
+                                href={detail.downloadUrl}
+                                className="text-blue-600 text-sm underline"
+                                target="_blank"
+                                rel="noreferrer"
+                            >
+                                Download source
+                            </a>
+                        ) : (
+                            <p className="text-sm text-gray-500">Download URL unavailable.</p>
+                        )}
+                    </section>
+                </div>
+            </>
+        );
+    })();
+
+    return (
+        <>
+            <div className="fixed inset-0 bg-black/30 z-30" onClick={onClose}></div>
+            <div className="fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl z-40 p-6 overflow-y-auto">
+                {body}
+            </div>
+        </>
     );
 }
 
@@ -484,6 +586,15 @@ function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
                                             className="text-xs text-gray-600 underline disabled:opacity-50"
                                         >
                                             {retryingId === file._id ? "Re-running..." : "Re-run"}
+                                        </button>
+                                    )}
+                                    {file.status === "ready" && (
+                                        <button
+                                            onClick={() => handleCommit([file._id])}
+                                            disabled={isCommitting}
+                                            className="text-xs text-green-700 underline disabled:opacity-50"
+                                        >
+                                            Quick commit
                                         </button>
                                     )}
                                 </div>

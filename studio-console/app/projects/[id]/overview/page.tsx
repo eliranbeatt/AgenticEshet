@@ -36,6 +36,8 @@ export default function ProjectOverviewPage() {
         phase: "planning",
         limit: 3,
     });
+    const trelloSync = useQuery(api.trelloSync.getSyncState, { projectId });
+    const quotes = useQuery(api.agents.quote.listQuotes, { projectId });
     const updateProject = useMutation(api.projects.updateProject);
 
     const [formState, setFormState] = useState<DetailsFormState>({
@@ -85,6 +87,8 @@ export default function ProjectOverviewPage() {
             };
         });
     }, [quests, questStats]);
+
+    const latestQuote = quotes && quotes.length > 0 ? quotes[0] : null;
 
     if (project === undefined || tasks === undefined) {
         return <div>Loading overview...</div>;
@@ -139,6 +143,11 @@ export default function ProjectOverviewPage() {
                                 <span className="px-3 py-1 rounded-full bg-yellow-100 text-yellow-800">Draft plan awaiting approval</span>
                             ) : null}
                         </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <PlanStatusCard planMeta={planMeta} />
+                        <OpsPulseCard trelloSync={trelloSync} latestQuote={latestQuote} />
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -237,7 +246,7 @@ export default function ProjectOverviewPage() {
             </div>
 
             {/* Quick Actions */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
                 <QuickLink
                     href={`/projects/${projectId}/clarification`}
                     title="Clarification"
@@ -256,6 +265,96 @@ export default function ProjectOverviewPage() {
                     description="Manage execution and Trello sync."
                     accent="gray"
                 />
+                <QuickLink
+                    href={`/projects/${projectId}/quote`}
+                    title="Quote Studio"
+                    description="Review client pricing packages."
+                    accent="blue"
+                />
+                <QuickLink
+                    href={`/projects/${projectId}/knowledge`}
+                    title="Knowledge Base"
+                    description="Search docs and manage ingestion."
+                    accent="purple"
+                />
+            </div>
+        </div>
+    );
+}
+
+function PlanStatusCard({
+    planMeta,
+}: {
+    planMeta:
+        | {
+              activePlan: { planId: Id<"plans">; version: number; approvedAt: number } | null;
+              latestPlan: { planId: Id<"plans">; version: number; isDraft: boolean } | null;
+              totalPlans: number;
+              draftCount: number;
+          }
+        | null
+        | undefined;
+}) {
+    const activeLabel = planMeta?.activePlan
+        ? `Active plan v${planMeta.activePlan.version}`
+        : planMeta?.latestPlan
+            ? planMeta.latestPlan.isDraft
+                ? "Latest draft waiting approval"
+                : `Latest plan v${planMeta.latestPlan.version}`
+            : "No plan yet";
+    return (
+        <div className="bg-gray-900 text-white rounded-lg p-5 shadow-sm">
+            <p className="text-xs uppercase tracking-wide text-gray-300">Planning status</p>
+            <h3 className="text-lg font-semibold mt-2">{activeLabel}</h3>
+            <div className="text-xs text-gray-400 mt-4 flex items-center gap-4">
+                <span>{planMeta?.totalPlans ?? 0} total versions</span>
+                <span>{planMeta?.draftCount ?? 0} drafts</span>
+            </div>
+        </div>
+    );
+}
+
+function OpsPulseCard({
+    trelloSync,
+    latestQuote,
+}: {
+    trelloSync:
+        | {
+              lastSyncedAt: number | null;
+              mappedTaskCount: number;
+              totalTasks: number;
+              unmappedTasks: number;
+          }
+        | null
+        | undefined;
+    latestQuote: Doc<"quotes"> | null;
+}) {
+    return (
+        <div className="bg-white border rounded-lg p-5 shadow-sm">
+            <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Operations pulse</p>
+            <div className="space-y-3">
+                <div>
+                    <div className="text-xs text-gray-500">Last Trello sync</div>
+                    <div className="text-sm font-medium text-gray-900">
+                        {trelloSync?.lastSyncedAt ? new Date(trelloSync.lastSyncedAt).toLocaleString() : "Never"}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                        {trelloSync ? `${trelloSync.mappedTaskCount}/${trelloSync.totalTasks} mapped` : "No mapping yet"}
+                    </div>
+                </div>
+                <div>
+                    <div className="text-xs text-gray-500">Last quote total</div>
+                    <div className="text-sm font-medium text-gray-900">
+                        {latestQuote
+                            ? `${latestQuote.totalAmount.toLocaleString()} ${latestQuote.currency}`
+                            : "No quote"}
+                    </div>
+                    {latestQuote && (
+                        <div className="text-xs text-gray-500">
+                            Version v{latestQuote.version} • {new Date(latestQuote.createdAt).toLocaleDateString()}
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );

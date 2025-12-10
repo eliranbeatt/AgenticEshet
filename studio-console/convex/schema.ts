@@ -96,6 +96,8 @@ export default defineSchema({
         ),
         summary: v.string(),
         tags: v.array(v.string()),
+        keyPoints: v.optional(v.array(v.string())),
+        keywords: v.optional(v.array(v.string())),
         createdAt: v.number(),
     }).index("by_project", ["projectId"]),
 

@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { action, mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { calculateHash } from "./lib/hash";
+import type { Doc } from "./_generated/dataModel";
 
 const STATUS_KEYS = ["todo", "in_progress", "blocked", "done"] as const;
 type StatusKey = (typeof STATUS_KEYS)[number];
@@ -54,6 +55,39 @@ async function trelloRequest<T>(options: TrelloRequestOptions): Promise<T | unde
         }
     }
     return undefined;
+}
+
+type TrelloCardPayload = {
+    name: string;
+    desc: string;
+    idList: string;
+    pos: "bottom";
+    closed: "true" | "false";
+};
+
+export function deriveListId(
+    status: Doc<"tasks">["status"],
+    listMap: Record<StatusKey, string>
+): string {
+    const safeStatus: StatusKey = STATUS_KEYS.includes(status as StatusKey)
+        ? (status as StatusKey)
+        : "todo";
+    return listMap[safeStatus] || listMap.todo || "";
+}
+
+export function buildCardPayload(
+    task: Pick<Doc<"tasks">, "title" | "category" | "description" | "priority" | "status">,
+    listId: string
+): TrelloCardPayload {
+    const baseDescription = task.description ? task.description.trim() : "";
+    const descSections = [baseDescription, `Priority: ${task.priority}`].filter(Boolean);
+    return {
+        name: `[${task.category}] ${task.title}`,
+        desc: descSections.join("\n\n"),
+        idList: listId,
+        pos: "bottom",
+        closed: task.status === "done" ? "true" : "false",
+    };
 }
 
 // --- Data Models for Trello Config (stored in settings) ---
@@ -243,23 +277,13 @@ export const sync = action({
     const errors: string[] = [];
 
     for (const task of tasks) {
-        const statusKey = (STATUS_KEYS.includes(task.status as StatusKey) ? (task.status as StatusKey) : "todo");
-        const listId = config.listMap[statusKey] ?? config.listMap.todo;
+        const listId = deriveListId(task.status, config.listMap);
         if (!listId) {
             continue;
         }
 
-        const shouldArchive = task.status === "done";
-        const baseDescription = task.description ? task.description.trim() : "";
-        const desc = [baseDescription, `Priority: ${task.priority}`].filter(Boolean).join("\n\n");
-
-        const cardParams = {
-            name: `[${task.category}] ${task.title}`,
-            desc,
-            idList: listId,
-            pos: "bottom",
-            closed: shouldArchive ? "true" : "false",
-        };
+        const cardParams = buildCardPayload(task, listId);
+        const shouldArchive = cardParams.closed === "true";
         const currentHash = await calculateHash({
             ...cardParams,
             status: task.status,

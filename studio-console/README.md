@@ -29,8 +29,26 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Development Workflow
+
+1. Copy `.env.local.example` to `.env.local` and fill in Convex/OpenAI/Trello secrets.
+2. In one terminal run `npx convex dev` to boot the Convex backend (requires login).
+3. In another terminal run `npm run dev` to start Next.js on http://localhost:3000.
+4. (First-time) seed shared agent prompts via `npx convex run seed:seedSkills`.
+5. `npm run prepush` executes linting + tests; run it (or wire a git hook) before pushing to keep CI green.
+
+## Testing & Quality
+
+- `npm run lint` runs the repo-wide ESLint checks.
+- `npm run test` executes the Vitest suite (unit tests live in `tests/**/*.test.ts`). Use `npm run test -- --coverage` to see V8 coverage.
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+Additional operational playbooks live in `docs/`:
+
+- `docs/DEPLOYMENT.md` – production Convex/Vercel configuration, required environment variables.
+- `docs/QA_CHECKLIST.md` – final testing sequence (lint/tests, Trello sync smoke, RAG validation).

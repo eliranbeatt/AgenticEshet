@@ -45,6 +45,8 @@ export const createDocRecord = internalMutation({
     storageId: v.string(),
     summary: v.string(),
     tags: v.array(v.string()),
+    keyPoints: v.optional(v.array(v.string())),
+    keywords: v.optional(v.array(v.string())),
     status: v.union(
         v.literal("uploaded"),
         v.literal("processing"),
@@ -60,6 +62,8 @@ export const createDocRecord = internalMutation({
       processingStatus: args.status,
       summary: args.summary,
       tags: args.tags,
+      keyPoints: args.keyPoints,
+      keywords: args.keywords,
       createdAt: Date.now(),
     });
   },
@@ -174,6 +178,27 @@ export const listDocs = query({
     handler: async (ctx, args) => {
         return await ctx.db.query("knowledgeDocs").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect();
     }
+});
+
+export const getDocDetail = query({
+    args: { docId: v.id("knowledgeDocs") },
+    handler: async (ctx, args) => {
+        const doc = await ctx.db.get(args.docId);
+        if (!doc) {
+            return null;
+        }
+        const downloadUrl = await ctx.storage.getUrl(doc.storageId);
+        return {
+            _id: doc._id,
+            title: doc.title,
+            summary: doc.summary,
+            tags: doc.tags,
+            keyPoints: doc.keyPoints ?? [],
+            keywords: doc.keywords ?? [],
+            downloadUrl: downloadUrl ?? null,
+            createdAt: doc.createdAt,
+        };
+    },
 });
 
 export const getChunks = query({

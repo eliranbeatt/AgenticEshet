@@ -288,6 +288,8 @@ export const commitIngestionJob = action({
             }
 
             const fileTags = parseJsonList(file.suggestedTagsJson);
+            const keyPoints = parseJsonList(file.keyPointsJson);
+            const keywords = parseJsonList(file.keywordsJson);
             const tags = Array.from(new Set([...(job.defaultTags || []), ...fileTags]));
             const docId = await ctx.runMutation(internal.knowledge.createDocRecord, {
                 projectId: file.projectId ?? job.projectId,
@@ -295,6 +297,8 @@ export const commitIngestionJob = action({
                 storageId: file.storageId,
                 summary: file.summary || "No summary provided",
                 tags,
+                keyPoints,
+                keywords,
                 status: "processing",
             });
 

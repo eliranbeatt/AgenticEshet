@@ -4,13 +4,16 @@ import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 
 export default function PlanningPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
     
+    const project = useQuery(api.projects.getProject, { projectId });
+    const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
     const plans = useQuery(api.projects.getPlans, { projectId });
+    const transcript = useQuery(api.conversations.recentByPhase, { projectId, phase: "planning", limit: 10 });
     const runPlanning = useAction(api.agents.planning.run);
     const setPlanActive = useMutation(api.projects.setPlanActive);
     
@@ -19,13 +22,13 @@ export default function PlanningPage() {
     const [selection, setSelection] = useState<Id<"plans"> | null>(null);
     const [approvingPlanId, setApprovingPlanId] = useState<Id<"plans"> | null>(null);
     
+    const activePlan = useMemo(() => plans?.find((plan) => plan.isActive) ?? null, [plans]);
+
     const selectedPlan = useMemo(() => {
         if (!plans || plans.length === 0) return null;
-        if (!selection) return plans[0];
-        return plans.find((plan) => plan._id === selection) ?? plans[0];
-    }, [plans, selection]);
-
-    const activePlan = useMemo(() => plans?.find((plan) => plan.isActive) ?? null, [plans]);
+        if (!selection) return activePlan ?? plans[0];
+        return plans.find((plan) => plan._id === selection) ?? (activePlan ?? plans[0]);
+    }, [plans, selection, activePlan]);
 
     const handleGenerate = async () => {
         if (!input.trim()) return;
@@ -57,9 +60,22 @@ export default function PlanningPage() {
     };
 
     return (
-        <div className="flex h-[calc(100vh-12rem)] gap-6">
-            {/* Left: Controls */}
-            <div className="w-1/3 flex flex-col space-y-4">
+        <div className="space-y-6">
+            <PhaseBadges
+                clarificationReady={Boolean(project?.overviewSummary)}
+                planningLabel={
+                    activePlan
+                        ? `Active plan v${activePlan.version}`
+                        : planMeta?.latestPlan
+                            ? planMeta.latestPlan.isDraft
+                                ? "Draft pending approval"
+                                : `Latest plan v${planMeta.latestPlan.version}`
+                            : "No plan yet"
+                }
+            />
+            <div className="flex h-[calc(100vh-14rem)] gap-6">
+                {/* Left: Controls */}
+                <div className="w-1/3 flex flex-col space-y-4">
                 <div className="bg-white p-4 rounded shadow-sm border flex-1 flex flex-col">
                     <h2 className="text-lg font-bold mb-4">Planning Agent</h2>
                     <p className="text-sm text-gray-600 mb-4">
@@ -90,6 +106,8 @@ export default function PlanningPage() {
                     </div>
                 </div>
 
+                <ActivePlanCallout plan={activePlan} />
+
                 <div className="bg-white p-4 rounded shadow-sm border flex flex-col">
                     <h3 className="font-bold text-sm mb-3">Version History</h3>
                     <div className="text-xs text-gray-500 mb-2 flex justify-between">
@@ -116,10 +134,12 @@ export default function PlanningPage() {
                         {(!plans || plans.length === 0) && <li className="text-gray-400 italic">No plans yet</li>}
                     </ul>
                 </div>
+
+                <TranscriptPanel conversations={transcript || []} />
             </div>
 
             {/* Right: Plan Preview */}
-            <div className="flex-1 bg-white rounded shadow-sm border flex flex-col">
+                <div className="flex-1 bg-white rounded shadow-sm border flex flex-col">
                 <div className="p-4 border-b flex justify-between items-center bg-gray-50">
                     <div>
                         <h2 className="font-bold text-gray-800">
@@ -168,6 +188,7 @@ export default function PlanningPage() {
                         </div>
                     )}
                 </div>
+                </div>
             </div>
         </div>
     );
@@ -182,4 +203,67 @@ function PlanStatusBadge({ label, tone }: { label: string; tone: "green" | "ambe
     };
     const colors = palette[tone];
     return <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${colors.bg} ${colors.text}`}>{label}</span>;
+}
+
+function TranscriptPanel({ conversations }: { conversations: Doc<"conversations">[] }) {
+    return (
+        <div className="bg-white rounded shadow-sm border p-4 flex flex-col flex-1">
+            <h3 className="text-sm font-semibold text-gray-600 uppercase mb-3">Planning transcript</h3>
+            <div className="space-y-3 max-h-48 overflow-y-auto">
+                {conversations.map((conversation) => {
+                    const content = parseLatestAssistant(conversation.messagesJson);
+                    return (
+                        <div key={conversation._id} className="border rounded p-3 text-sm text-gray-700">
+                            <div className="text-xs text-gray-500 flex justify-between mb-1">
+                                <span>{new Date(conversation.createdAt).toLocaleString()}</span>
+                                <span className="capitalize">{conversation.agentRole.replace("_", " ")}</span>
+                            </div>
+                            <p className="line-clamp-3 whitespace-pre-line">{content || "No assistant output"}</p>
+                        </div>
+                    );
+                })}
+                {conversations.length === 0 && <p className="text-xs text-gray-400">No planning runs logged yet.</p>}
+            </div>
+        </div>
+    );
+}
+
+function parseLatestAssistant(messagesJson: string) {
+    try {
+        const parsed = JSON.parse(messagesJson) as { role: string; content: string }[];
+        return [...parsed].reverse().find((msg) => msg.role === "assistant")?.content ?? "";
+    } catch {
+        return "";
+    }
+}
+
+function ActivePlanCallout({ plan }: { plan: Doc<"plans"> | null }) {
+    if (!plan) {
+        return (
+            <div className="bg-white p-4 rounded shadow-sm border text-sm text-gray-500">
+                Approve a plan to expose it here while prompting the planner.
+            </div>
+        );
+    }
+    return (
+        <div className="bg-white p-4 rounded shadow-sm border space-y-2">
+            <div className="flex justify-between items-center text-sm">
+                <span className="font-semibold text-gray-800">Active Plan v{plan.version}</span>
+                <PlanStatusBadge label="Active" tone="green" />
+            </div>
+            <p className="text-xs text-gray-500">Approved {new Date(plan.createdAt).toLocaleString()}</p>
+            <p className="text-sm text-gray-700 line-clamp-4 whitespace-pre-line">{plan.contentMarkdown}</p>
+        </div>
+    );
+}
+
+function PhaseBadges({ clarificationReady, planningLabel }: { clarificationReady: boolean; planningLabel: string }) {
+    return (
+        <div className="flex flex-wrap gap-3 text-xs">
+            <span className={`px-3 py-1 rounded-full font-semibold ${clarificationReady ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"}`}>
+                Clarification {clarificationReady ? "captured" : "pending"}
+            </span>
+            <span className="px-3 py-1 rounded-full font-semibold bg-blue-50 text-blue-700">{planningLabel}</span>
+        </div>
+    );
 }

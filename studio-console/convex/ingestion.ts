@@ -33,11 +33,12 @@ async function processSingleFile(ctx: IngestionActionCtx, file: Doc<"ingestionFi
         throw new Error("File contents missing from storage");
     }
 
-    if (blob.byteLength > MAX_FILE_BYTES) {
+    if (blob.size > MAX_FILE_BYTES) {
         throw new Error(`File exceeds maximum size of ${Math.round(MAX_FILE_BYTES / (1024 * 1024))}MB`);
     }
 
-    const rawText = (await extractTextFromFile(blob, file.mimeType, file.originalFilename)).trim();
+    const buffer = await blob.arrayBuffer();
+    const rawText = (await extractTextFromFile(buffer, file.mimeType, file.originalFilename)).trim();
     if (!rawText) {
         throw new Error("Parsed document is empty");
     }

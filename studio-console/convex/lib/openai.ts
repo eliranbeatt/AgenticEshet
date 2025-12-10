@@ -48,24 +48,49 @@ export async function callChatWithSchema<T>(
     let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-            const completion = await openai.beta.chat.completions.parse({
+            // Prefer the structured parse API when available; otherwise fall back to JSON mode.
+            if (openai.beta?.chat?.completions?.parse) {
+                const completion = await openai.beta.chat.completions.parse({
+                    model,
+                    temperature: params.temperature ?? 0,
+                    messages,
+                    response_format: zodResponseFormat(schema, "output"),
+                });
+
+                const refusal = completion.choices?.[0]?.message?.refusal;
+                if (refusal) {
+                    throw new Error(`OpenAI refused request: ${refusal}`);
+                }
+
+                const result = completion.choices?.[0]?.message?.parsed;
+                if (!result) {
+                    throw new Error("OpenAI returned an empty response");
+                }
+                return result;
+            }
+
+            const completion = await openai.chat.completions.create({
                 model,
                 temperature: params.temperature ?? 0,
                 messages,
                 response_format: zodResponseFormat(schema, "output"),
             });
+            const parsedChoice = (completion as unknown as {
+                choices?: Array<{ message?: { parsed?: T; content?: unknown } }>;
+            }).choices?.[0]?.message;
 
-            const refusal = completion.choices[0].message.refusal;
-            if (refusal) {
-                throw new Error(`OpenAI refused request: ${refusal}`);
+            if (parsedChoice?.parsed) {
+                return parsedChoice.parsed;
             }
 
-            const result = completion.choices[0].message.parsed;
-            if (!result) {
+            const raw = parsedChoice?.content;
+            if (!raw) {
                 throw new Error("OpenAI returned an empty response");
             }
-
-            return result;
+            const content = Array.isArray(raw)
+                ? raw.map((part) => (typeof part === "string" ? part : (part as { text?: string }).text || "")).join("")
+                : raw;
+            return schema.parse(JSON.parse(content as string));
         } catch (error) {
             lastError = error;
             if (attempt === maxRetries - 1) break;

@@ -3,8 +3,8 @@
 import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useAction } from "convex/react";
-import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { api } from "../../../../convex/_generated/api";
+import { Id } from "../../../../convex/_generated/dataModel";
 
 type QuoteBreakdownItem = {
     label: string;

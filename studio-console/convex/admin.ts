@@ -17,7 +17,8 @@ export const saveSkill = mutation({
         metadataJson: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
-        const { skillId, ...data } = args;
+        const { skillId, metadataJson, ...rest } = args;
+        const data = { ...rest, metadataJson: metadataJson ?? "{}" };
         if (skillId) {
             await ctx.db.patch(skillId, data);
             return skillId;

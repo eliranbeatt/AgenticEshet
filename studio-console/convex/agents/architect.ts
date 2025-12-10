@@ -22,6 +22,11 @@ export const getContext = internalQuery({
     
     const latestPlan = plans.find((plan) => plan.isActive);
 
+    const quests = await ctx.db
+        .query("quests")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
     const skill = await ctx.db
       .query("skills")
       .withIndex("by_name", (q) => q.eq("name", "architect")) // We might need to seed this skill
@@ -30,6 +35,7 @@ export const getContext = internalQuery({
     return {
       project,
       latestPlan,
+      quests,
       systemPrompt: skill?.content || "You are a Senior Solutions Architect.",
     };
   },
@@ -99,18 +105,13 @@ export const run = action({
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
-    const { project, latestPlan, systemPrompt } = await ctx.runQuery(internal.agents.architect.getContext, {
+    const { project, latestPlan, systemPrompt, quests } = await ctx.runQuery(internal.agents.architect.getContext, {
       projectId: args.projectId,
     });
 
     if (!latestPlan) {
         throw new Error("No active plan found. Approve a plan before generating tasks.");
     }
-
-    const quests = await ctx.db
-        .query("quests")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
 
     const userPrompt = `Project: ${project.name}
     

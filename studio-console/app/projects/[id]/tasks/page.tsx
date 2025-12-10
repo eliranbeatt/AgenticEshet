@@ -3,8 +3,8 @@
 import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useAction } from "convex/react";
-import { api } from "../../../../../convex/_generated/api";
-import { Doc, Id } from "../../../../../convex/_generated/dataModel";
+import { api } from "../../../../convex/_generated/api";
+import { Doc, Id } from "../../../../convex/_generated/dataModel";
 import {
     DndContext,
     DragEndEvent,

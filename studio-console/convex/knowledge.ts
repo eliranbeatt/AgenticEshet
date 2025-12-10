@@ -187,7 +187,17 @@ export const getDocDetail = query({
         if (!doc) {
             return null;
         }
-        const downloadUrl = await ctx.storage.getUrl(doc.storageId);
+
+        let downloadUrl: string | null = null;
+        if (doc.storageId && doc.storageId !== "manual-upload" && !doc.storageId.startsWith("http")) {
+            try {
+                // Only attempt if it looks like a valid storage ID (not a URL, not a placeholder)
+                downloadUrl = await ctx.storage.getUrl(doc.storageId);
+            } catch (error) {
+                console.error("Failed to generate download URL for doc:", doc._id, error);
+            }
+        }
+
         return {
             _id: doc._id,
             title: doc.title,
@@ -195,7 +205,7 @@ export const getDocDetail = query({
             tags: doc.tags,
             keyPoints: doc.keyPoints ?? [],
             keywords: doc.keywords ?? [],
-            downloadUrl: downloadUrl ?? null,
+            downloadUrl,
             createdAt: doc.createdAt,
         };
     },

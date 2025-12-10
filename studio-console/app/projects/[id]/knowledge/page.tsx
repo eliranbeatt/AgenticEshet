@@ -222,8 +222,11 @@ export default function KnowledgePage() {
                             <form onSubmit={handleUpload} className="space-y-4">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Job name</label>
+                                        <label htmlFor="job-name" className="block text-sm font-medium text-gray-700 mb-1">
+                                            Job name
+                                        </label>
                                         <input
+                                            id="job-name"
                                             type="text"
                                             value={jobName}
                                             onChange={(e) => setJobName(e.target.value)}
@@ -232,8 +235,11 @@ export default function KnowledgePage() {
                                         />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Default tags</label>
+                                        <label htmlFor="job-tags" className="block text-sm font-medium text-gray-700 mb-1">
+                                            Default tags
+                                        </label>
                                         <input
+                                            id="job-tags"
                                             type="text"
                                             value={jobTags}
                                             onChange={(e) => setJobTags(e.target.value)}
@@ -244,8 +250,11 @@ export default function KnowledgePage() {
                                     </div>
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Context for enhancer</label>
+                                    <label htmlFor="job-context" className="block text-sm font-medium text-gray-700 mb-1">
+                                        Context for enhancer
+                                    </label>
                                     <textarea
+                                        id="job-context"
                                         value={jobContext}
                                         onChange={(e) => setJobContext(e.target.value)}
                                         rows={3}
@@ -257,6 +266,7 @@ export default function KnowledgePage() {
                                     <input
                                         type="file"
                                         ref={fileInputRef}
+                                        aria-label="Upload files"
                                         className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                                         multiple
                                     />

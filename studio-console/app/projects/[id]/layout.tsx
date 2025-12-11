@@ -1,9 +1,9 @@
 "use client";
 
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useParams } from "next/navigation";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Doc, Id } from "../../../convex/_generated/dataModel";
 
@@ -19,7 +19,51 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
     const projectId = params.id as Id<"projects">;
     const project = useQuery(api.projects.getProject, { projectId });
     const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
+    const updateProject = useMutation(api.projects.updateProject);
     const pathname = usePathname();
+    const [isEditingName, setIsEditingName] = useState(false);
+    const [nameInput, setNameInput] = useState("");
+    const [isSavingName, setIsSavingName] = useState(false);
+    const [nameError, setNameError] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (project?.name) {
+            setNameInput(project.name);
+        }
+    }, [project?.name]);
+
+    const handleNameSave = async () => {
+        const trimmedName = nameInput.trim();
+        if (!trimmedName) {
+            setNameError("Project name cannot be empty.");
+            return;
+        }
+        if (!project) {
+            return;
+        }
+        if (trimmedName === project.name) {
+            setIsEditingName(false);
+            return;
+        }
+
+        setIsSavingName(true);
+        setNameError(null);
+        try {
+            await updateProject({ projectId, name: trimmedName });
+            setIsEditingName(false);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to update project name";
+            setNameError(message);
+        } finally {
+            setIsSavingName(false);
+        }
+    };
+
+    const handleNameCancel = () => {
+        setIsEditingName(false);
+        setNameInput(project?.name ?? "");
+        setNameError(null);
+    };
 
     const tabs = [
         { name: "Overview", href: "overview" },
@@ -46,10 +90,53 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
         <div className="flex flex-col h-full">
             <div className="bg-white border-b px-8 py-4">
                 <div className="flex justify-between items-center mb-4">
-                    <div>
-                        <h1 className="text-2xl font-bold">{project.name}</h1>
+                    <div className="space-y-2">
+                        {isEditingName ? (
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="text"
+                                    value={nameInput}
+                                    onChange={(event) => {
+                                        setNameInput(event.target.value);
+                                        if (nameError) {
+                                            setNameError(null);
+                                        }
+                                    }}
+                                    className="border rounded px-3 py-2 text-sm w-72"
+                                    placeholder="Project name"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleNameSave}
+                                    disabled={isSavingName}
+                                    className="bg-blue-600 text-white px-3 py-2 rounded text-sm font-medium disabled:opacity-50"
+                                >
+                                    {isSavingName ? "Saving..." : "Save"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleNameCancel}
+                                    disabled={isSavingName}
+                                    className="text-sm text-gray-600 px-3 py-2 hover:text-gray-800 disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-3">
+                                <h1 className="text-2xl font-bold">{project.name}</h1>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsEditingName(true)}
+                                    className="text-sm text-blue-600 hover:text-blue-800"
+                                >
+                                    Rename
+                                </button>
+                            </div>
+                        )}
+                        {nameError && <p className="text-xs text-red-600">{nameError}</p>}
                         <div className="text-sm text-gray-500">
-                            {project.clientName} • {project.status}
+                            {project.clientName} - {project.status}
                         </div>
                     </div>
                     <div>

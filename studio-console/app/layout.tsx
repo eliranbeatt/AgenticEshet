@@ -41,6 +41,12 @@ export default function RootLayout({
                                     Projects
                                 </Link>
                                 <Link
+                                    href="/rag-chat"
+                                    className="block rounded px-4 py-2 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                                >
+                                    RAG Chat
+                                </Link>
+                                <Link
                                     href="/ingestion"
                                     className="block rounded px-4 py-2 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                                 >

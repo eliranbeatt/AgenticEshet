@@ -3,6 +3,7 @@ import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { PlanSchema } from "../lib/zodSchemas";
+import { type Doc } from "../_generated/dataModel";
 
 // 1. DATA ACCESS
 export const getContext = internalQuery({
@@ -135,7 +136,7 @@ export const run = action({
 
     const knowledgeSection = knowledgeDocs.length
         ? knowledgeDocs
-              .map((doc) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
+              .map((doc: { doc: { sourceType: string; title: string; summary?: string }; text?: string }) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
               .join("\n")
         : "No knowledge documents available.";
 

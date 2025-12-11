@@ -163,7 +163,9 @@ export const run = action({
         .join("\n");
 
     const knowledgeSummary = knowledgeResults.length
-        ? knowledgeResults.map((doc) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`).join("\n")
+        ? knowledgeResults
+              .map((doc: { doc: { sourceType: string; title: string; summary?: string }; text?: string }) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
+              .join("\n")
         : "- No knowledge documents available.";
 
     const userPrompt = [

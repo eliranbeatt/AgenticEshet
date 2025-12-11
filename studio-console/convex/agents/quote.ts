@@ -3,6 +3,7 @@ import { action, internalMutation, internalQuery, query } from "../_generated/se
 import { internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { QuoteSchema } from "../lib/zodSchemas";
+import { type Doc } from "../_generated/dataModel";
 
 type QuoteBreakdownItem = {
     label: string;
@@ -136,11 +137,13 @@ export const run = action({
     });
 
     const taskSummary = tasks
-        .map((task) => `- ${task.title} [${task.category}/${task.priority}]`)
+        .map((task: Doc<"tasks">) => `- ${task.title} [${task.category}/${task.priority}]`)
         .join("\n");
 
     const knowledgeSummary = knowledgeDocs.length
-        ? knowledgeDocs.map((doc) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`).join("\n")
+        ? knowledgeDocs
+              .map((doc: { doc: { sourceType: string; title: string; summary?: string }; text?: string }) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
+              .join("\n")
         : "No pricing references available.";
 
     const userPrompt = `Project: ${project.name}

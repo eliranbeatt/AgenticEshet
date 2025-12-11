@@ -1,12 +1,12 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { TaskBreakdownSchema } from "../lib/zodSchemas";
 import { Id, type Doc } from "../_generated/dataModel";
 
 // 1. DATA ACCESS
-export const getContext = internalQuery({
+export const getContext: ReturnType<typeof internalQuery> = internalQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
@@ -124,7 +124,7 @@ export const saveTasks = internalMutation({
         .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority}) ${task.description || ""}`)
         .join("\n");
 
-    await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+    await ctx.scheduler.runAfter(0, (internal as any).knowledge.ingestArtifact, {
         projectId: args.projectId,
         sourceType: "task",
         sourceRefId: `tasks-${Date.now()}`,
@@ -140,7 +140,7 @@ export const saveTasks = internalMutation({
 });
 
 // 2. AGENT ACTION
-export const run = action({
+export const run: ReturnType<typeof action> = action({
   args: {
     projectId: v.id("projects"),
   },
@@ -149,7 +149,7 @@ export const run = action({
       projectId: args.projectId,
     });
 
-    const knowledgeDocs = await ctx.runAction(internal.knowledge.dynamicSearch, {
+    const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
         projectId: args.projectId,
         query: latestPlan ? latestPlan.contentMarkdown.slice(0, 800) : project.details.notes || project.name,
         scope: "both",

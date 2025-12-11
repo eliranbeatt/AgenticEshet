@@ -1,21 +1,72 @@
 import { v } from "convex/values";
-import { action } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { action, internalQuery } from "./_generated/server";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { ActionCtx } from "./_generated/server";
 
 type SourceType = "doc_upload" | "plan" | "conversation" | "task" | "quest" | "quote" | "system_note";
+
+const ingestArtifact = (internal as any).knowledge.ingestArtifact;
 
 async function alreadyIngested(ctx: ActionCtx, sourceType: SourceType, sourceRefId: string) {
     const existing = await ctx.runQuery(internal.knowledge.findBySourceRef, { sourceType, sourceRefId });
     return existing.length > 0;
 }
 
+export const getProject = internalQuery({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        return ctx.db.get(args.projectId);
+    },
+});
+
+export const listProjects = internalQuery({
+    args: {},
+    handler: async (ctx) => {
+        return ctx.db.query("projects").collect();
+    },
+});
+
+export const listPlansByProject = internalQuery({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        return ctx.db.query("plans").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect();
+    },
+});
+
+export const listConversationsByProject = internalQuery({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        return ctx.db.query("conversations").withIndex("by_project_phase", (q) => q.eq("projectId", args.projectId)).collect();
+    },
+});
+
+export const listTasksByProject = internalQuery({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        return ctx.db.query("tasks").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect();
+    },
+});
+
+export const listQuestsByProject = internalQuery({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        return ctx.db.query("quests").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect();
+    },
+});
+
+export const listQuotesByProject = internalQuery({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        return ctx.db.query("quotes").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect();
+    },
+});
+
 async function ingestPlans(ctx: ActionCtx, project: Doc<"projects">, plans: Doc<"plans">[]) {
     for (const plan of plans) {
         const sourceRefId = plan._id.toString();
         if (await alreadyIngested(ctx, "plan", sourceRefId)) continue;
-        await ctx.runAction(internal.knowledge.ingestArtifact, {
+        await ctx.runAction(ingestArtifact, {
             projectId: project._id,
             sourceType: "plan",
             sourceRefId,
@@ -40,7 +91,7 @@ async function ingestConversations(ctx: ActionCtx, project: Doc<"projects">, con
         } catch {
             text = convo.messagesJson;
         }
-        await ctx.runAction(internal.knowledge.ingestArtifact, {
+        await ctx.runAction(ingestArtifact, {
             projectId: project._id,
             sourceType: "conversation",
             sourceRefId,
@@ -68,7 +119,7 @@ async function ingestTasks(ctx: ActionCtx, project: Doc<"projects">, tasks: Doc<
         ]
             .filter(Boolean)
             .join("\n");
-        await ctx.runAction(internal.knowledge.ingestArtifact, {
+        await ctx.runAction(ingestArtifact, {
             projectId: project._id,
             sourceType: "task",
             sourceRefId,
@@ -86,7 +137,7 @@ async function ingestQuests(ctx: ActionCtx, project: Doc<"projects">, quests: Do
         const sourceRefId = quest._id.toString();
         if (await alreadyIngested(ctx, "quest", sourceRefId)) continue;
         const text = `Quest: ${quest.title}\nDescription: ${quest.description || ""}\nOrder: ${quest.order}`;
-        await ctx.runAction(internal.knowledge.ingestArtifact, {
+        await ctx.runAction(ingestArtifact, {
             projectId: project._id,
             sourceType: "quest",
             sourceRefId,
@@ -115,7 +166,7 @@ async function ingestQuotes(ctx: ActionCtx, project: Doc<"projects">, quotes: Do
             "Client Document:",
             quote.clientDocumentText,
         ].join("\n");
-        await ctx.runAction(internal.knowledge.ingestArtifact, {
+        await ctx.runAction(ingestArtifact, {
             projectId: project._id,
             sourceType: "quote",
             sourceRefId,
@@ -129,18 +180,18 @@ async function ingestQuotes(ctx: ActionCtx, project: Doc<"projects">, quotes: Do
     }
 }
 
-export const backfillProject = action({
+export const backfillProject: ReturnType<typeof action> = action({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
-        const project = await ctx.db.get(args.projectId);
+        const project = await ctx.runQuery(internal.backfill.getProject, { projectId: args.projectId });
         if (!project) throw new Error("Project not found");
 
         const [plans, conversations, tasks, quests, quotes] = await Promise.all([
-            ctx.db.query("plans").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect(),
-            ctx.db.query("conversations").withIndex("by_project_phase", (q) => q.eq("projectId", args.projectId)).collect(),
-            ctx.db.query("tasks").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect(),
-            ctx.db.query("quests").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect(),
-            ctx.db.query("quotes").withIndex("by_project", (q) => q.eq("projectId", args.projectId)).collect(),
+            ctx.runQuery(internal.backfill.listPlansByProject, { projectId: args.projectId }),
+            ctx.runQuery(internal.backfill.listConversationsByProject, { projectId: args.projectId }),
+            ctx.runQuery(internal.backfill.listTasksByProject, { projectId: args.projectId }),
+            ctx.runQuery(internal.backfill.listQuestsByProject, { projectId: args.projectId }),
+            ctx.runQuery(internal.backfill.listQuotesByProject, { projectId: args.projectId }),
         ]);
 
         await ingestPlans(ctx, project, plans);
@@ -160,14 +211,14 @@ export const backfillProject = action({
     },
 });
 
-export const backfillAllProjects = action({
+export const backfillAllProjects: ReturnType<typeof action> = action({
     args: {},
     handler: async (ctx) => {
-        const projects = await ctx.db.query("projects").collect();
+        const projects = await ctx.runQuery(internal.backfill.listProjects, {});
         const results = [];
         for (const project of projects) {
             try {
-                const result = await ctx.runAction(internal.backfill.backfillProject, { projectId: project._id as Id<"projects"> });
+                const result = await ctx.runAction(api.backfill.backfillProject, { projectId: project._id as Id<"projects"> });
                 results.push(result);
             } catch (error) {
                 console.error("Backfill failed for project", project._id, error);

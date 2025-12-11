@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery, query } from "../_generated/server";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { QuoteSchema } from "../lib/zodSchemas";
 import { type Doc } from "../_generated/dataModel";
@@ -20,7 +20,7 @@ type QuoteDataPayload = {
 };
 
 // 1. DATA ACCESS
-export const getContext = internalQuery({
+export const getContext: ReturnType<typeof internalQuery> = internalQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
@@ -89,7 +89,7 @@ export const saveQuote = internalMutation({
         quoteData.clientDocumentText,
     ].join("\n");
 
-    await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+    await ctx.scheduler.runAfter(0, (internal as any).knowledge.ingestArtifact, {
         projectId: args.projectId,
         sourceType: "quote",
         sourceRefId: `quote-v${version}`,
@@ -116,7 +116,7 @@ export const listQuotes = query({
 });
 
 // 2. AGENT ACTION
-export const run = action({
+export const run: ReturnType<typeof action> = action({
   args: {
     projectId: v.id("projects"),
     instructions: v.optional(v.string()), // e.g. "Add travel expenses"
@@ -126,7 +126,7 @@ export const run = action({
       projectId: args.projectId,
     });
 
-    const knowledgeDocs = await ctx.runAction(internal.knowledge.dynamicSearch, {
+    const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
         projectId: args.projectId,
         query: [args.instructions || "", project.clientName, project.details.notes || ""].join("\n"),
         scope: "both",

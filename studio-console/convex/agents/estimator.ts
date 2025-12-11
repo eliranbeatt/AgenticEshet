@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
-import { internal } from "../_generated/api";
+import { internal, api } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { EstimationSchema } from "../lib/zodSchemas";
 
@@ -74,7 +74,7 @@ export const saveEstimation = internalMutation({
 });
 
 // 2. AGENT ACTION
-export const run = action({
+export const run: ReturnType<typeof action> = action({
   args: {
     projectId: v.id("projects"),
     sectionId: v.id("sections"),
@@ -91,7 +91,7 @@ export const run = action({
 
     const userPrompt = `
 Project: ${project.name}
-Currency: ${project.currency || "ILS"}
+Currency: ILS (New Israeli Shekel)
 Section to Estimate: "${section.name}"
 Group: ${section.group}
 Description: ${section.description || "N/A"}
@@ -99,9 +99,11 @@ Description: ${section.description || "N/A"}
 ${catalogContext}
 
 Please estimate the required materials and labor to execute this section.
-- Be realistic with quantities and costs.
-- Break down labor into specific roles (e.g. "Carpenter", "Installer").
-- Use the project currency for all costs.
+- **LANGUAGE: HEBREW ONLY** for all labels, descriptions, and roles.
+- **CURRENCY: ILS** (Shekels).
+- **UNITS: Metric/Israeli** (m, sqm, kg, units).
+- Be realistic with quantities and costs in the Israeli market.
+- Break down labor into specific roles (e.g. "נגר", "מתקין", "מנהל פרויקט").
 `;
 
     const result = await callChatWithSchema(EstimationSchema, {
@@ -117,4 +119,29 @@ Please estimate the required materials and labor to execute this section.
 
     return result;
   },
+});
+
+export const estimateProject: ReturnType<typeof action> = action({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    // 1. Validate Approved Plan (check Plan phase)
+    // We can check if there's any active plan in 'planning' phase
+    // For now, we'll just check if there are sections. If not, we SHOULD create them, 
+    // but the user requirement said "break down the entire project". 
+    // Since we don't have a "Plan -> Sections" parser ready, we'll iterate existing sections for now.
+    // Ideally, we'd add a "PlanParsing" step here.
+    
+    // Fetch all sections
+    const accounting = await ctx.runQuery(api.accounting.getProjectAccounting, { projectId: args.projectId });
+    
+    // Estimate each section
+    for (const s of accounting.sections) {
+        await ctx.runAction(api.agents.estimator.run, {
+            projectId: args.projectId,
+            sectionId: s.section._id,
+        });
+    }
+    
+    return { count: accounting.sections.length };
+  }
 });

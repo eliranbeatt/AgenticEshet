@@ -1,10 +1,10 @@
 import { v } from "convex/values";
-import { action, mutation, query, internalQuery, internalMutation } from "./_generated/server";
+import { action, mutation, query, internalQuery, internalMutation, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { embedText, callChatWithSchema, normalizeEmbedding } from "./lib/openai";
 import { chunkText } from "./lib/textChunker";
 import { EnhancerSchema } from "./lib/zodSchemas";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 
 const sourceTypeEnum = v.union(
   v.literal("doc_upload"),
@@ -111,7 +111,7 @@ export const createDocRecord = internalMutation({
   },
 });
 
-export const insertChunks = mutation({
+export const insertChunks = internalMutation({
     args: {
         chunks: v.array(v.object({
             docId: v.id("knowledgeDocs"),
@@ -133,7 +133,7 @@ export const insertChunks = mutation({
     }
 });
 
-export const updateDocStatus = mutation({
+export const updateDocStatus = internalMutation({
     args: { docId: v.id("knowledgeDocs"), status: v.union(v.literal("ready"), v.literal("failed")) },
     handler: async (ctx, args) => {
         await ctx.db.patch(args.docId, { processingStatus: args.status });
@@ -142,7 +142,7 @@ export const updateDocStatus = mutation({
 
 // --- Actions ---
 
-export const generateEmbeddings = action({
+export const generateEmbeddings: ReturnType<typeof internalAction> = internalAction({
   args: { 
     docId: v.id("knowledgeDocs"), 
     text: v.string(),
@@ -162,17 +162,28 @@ export const generateEmbeddings = action({
 
         // 2. Embed and prepare batch
         const now = Date.now();
-        const chunkData = [];
+        const chunkData: {
+            docId: Id<"knowledgeDocs">;
+            projectId?: Id<"projects">;
+            sourceType: SourceType;
+            clientName?: string;
+            topics: string[];
+            domain?: string;
+            phase?: string;
+            createdAt: number;
+            text: string;
+            embedding: number[];
+        }[] = [];
         for (const chunkText of chunks) {
             const embedding = await embedText(chunkText);
             chunkData.push({
                 docId: args.docId,
                 projectId: doc.projectId ?? args.projectId,
-                sourceType: doc.sourceType,
-                clientName: doc.clientName,
+                sourceType: (doc.sourceType as SourceType | undefined) ?? "doc_upload",
+                clientName: doc.clientName ?? undefined,
                 topics: Array.isArray(doc.topics) ? doc.topics : [],
-                domain: doc.domain,
-                phase: doc.phase,
+                domain: doc.domain ?? undefined,
+                phase: doc.phase ?? undefined,
                 createdAt: now,
                 text: chunkText,
                 embedding,
@@ -190,7 +201,7 @@ export const generateEmbeddings = action({
   },
 });
 
-export const search = action({
+export const search: ReturnType<typeof action> = action({
     args: {
         projectId: v.id("projects"),
         query: v.string(),
@@ -236,7 +247,7 @@ export const search = action({
     }
 });
 
-export const ingestArtifact = action({
+export const ingestArtifact: ReturnType<typeof internalAction> = internalAction({
     args: {
         projectId: v.optional(v.id("projects")),
         sourceType: sourceTypeEnum,
@@ -273,9 +284,9 @@ export const ingestArtifact = action({
             keyPoints: enrichment.keyPoints,
             keywords: enrichment.keywords,
             topics: args.topics ?? enrichment.topics ?? [],
-            domain: args.domain ?? enrichment.domain,
-            clientName: args.clientName ?? enrichment.clientName,
-            language: args.language ?? enrichment.language,
+            domain: args.domain ?? enrichment.domain ?? undefined,
+            clientName: args.clientName ?? enrichment.clientName ?? undefined,
+            language: args.language ?? enrichment.language ?? undefined,
             sourceType: args.sourceType as SourceType,
             sourceRefId: args.sourceRefId,
             phase: args.phase,
@@ -288,17 +299,28 @@ export const ingestArtifact = action({
             throw new Error("No text available for embedding");
         }
 
-        const chunkPayload = [];
+        const chunkPayload: {
+            docId: Id<"knowledgeDocs">;
+            projectId?: Id<"projects">;
+            sourceType: SourceType;
+            clientName?: string;
+            topics: string[];
+            domain?: string;
+            phase?: string;
+            createdAt: number;
+            text: string;
+            embedding: number[];
+        }[] = [];
         for (const chunk of chunks) {
             const embedding = await embedText(chunk);
             chunkPayload.push({
                 docId,
                 projectId: args.projectId,
                 sourceType: args.sourceType as SourceType,
-                clientName: args.clientName ?? enrichment.clientName,
+                clientName: args.clientName ?? enrichment.clientName ?? undefined,
                 topics: args.topics ?? enrichment.topics ?? [],
-                domain: args.domain ?? enrichment.domain,
-                phase: args.phase,
+                domain: args.domain ?? enrichment.domain ?? undefined,
+                phase: args.phase ?? undefined,
                 createdAt: chunkCreatedAt,
                 text: chunk,
                 embedding,
@@ -311,7 +333,7 @@ export const ingestArtifact = action({
     },
 });
 
-export const dynamicSearch = action({
+export const dynamicSearch: ReturnType<typeof action> = action({
     args: {
         projectId: v.optional(v.id("projects")),
         query: v.string(),
@@ -465,7 +487,7 @@ export const dynamicSearch = action({
     },
 });
 
-export const normalizeChunkEmbeddings = action({
+export const normalizeChunkEmbeddings: ReturnType<typeof action> = action({
     args: {},
     handler: async (ctx) => {
         const chunks = await ctx.runQuery(internal.knowledge.listChunkEmbeddings, {});

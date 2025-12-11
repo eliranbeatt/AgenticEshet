@@ -1,12 +1,12 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ClarificationSchema } from "../lib/zodSchemas";
-import { Id, type Doc } from "../_generated/dataModel";
+import { type Doc } from "../_generated/dataModel";
 
 // 1. DATA ACCESS: Get context for the agent
-export const getContext = internalQuery({
+export const getContext: ReturnType<typeof internalQuery> = internalQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
@@ -125,7 +125,7 @@ export const saveResult = internalMutation({
 });
 
 // 3. AGENT ACTION: Main entry point
-export const run = action({
+export const run: ReturnType<typeof action> = action({
   args: {
     projectId: v.id("projects"),
     chatHistory: v.array(v.object({ role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")), content: v.string() })),
@@ -136,7 +136,7 @@ export const run = action({
       projectId: args.projectId,
     });
 
-    const knowledgeResults = await ctx.runAction(internal.knowledge.dynamicSearch, {
+    const knowledgeResults = await ctx.runAction(api.knowledge.dynamicSearch, {
         projectId: args.projectId,
         query: args.chatHistory.map((m) => m.content).join("\n").slice(0, 500) || project.details.notes || project.name,
         scope: "both",
@@ -176,13 +176,21 @@ export const run = action({
         "",
         `Active Plan Snapshot:\n${planSnippet}`,
         "",
-        "Recent Clarification Interactions:",
+        "Recent Clarification Interactions (Do NOT Repeat these):",
         previousClarifications || "- None recorded",
         "",
         "Knowledge Documents:",
         knowledgeSummary,
         "",
-        "Live chat history from the user follows. Provide a structured clarification summary and list of open questions based on everything you know.",
+        "CRITICAL INSTRUCTIONS:",
+        "1. Analyze the entire conversation history below.",
+        "2. Identify what is MISSING to build a fully detailed Bill of Materials and Labor Estimation.",
+        "3. Do NOT repeat questions that have been answered or are being discussed.",
+        "4. Dig deeper: If the user says 'build a wall', ask about dimensions, materials, finish, location.",
+        "5. Reason step-by-step: 'I know X, but I need Y to estimate Z.'",
+        "6. If the plan is vague, ask for specific constraints (budget, timeline, quality level).",
+        "",
+        "Live chat history from the user follows. Provide a structured clarification summary and list of smart, non-repetitive open questions.",
     ].join("\n");
 
     // 3. Call AI

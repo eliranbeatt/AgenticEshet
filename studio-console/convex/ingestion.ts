@@ -1,7 +1,7 @@
 import { v } from "convex/values";
-import { action, mutation, query, internalQuery } from "./_generated/server";
+import { action, mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { callChatWithSchema, embedText } from "./lib/openai";
 import { EnhancerSchema } from "./lib/zodSchemas";
@@ -73,15 +73,15 @@ async function processSingleFile(ctx: IngestionActionCtx, file: Doc<"ingestionFi
         keywords: enriched.keywords,
         suggestedTags: enriched.suggestedTags,
         topics: enriched.topics ?? [],
-        domain: enriched.domain,
-        clientName: enriched.clientName,
-        language: enriched.language,
+        domain: enriched.domain ?? undefined,
+        clientName: enriched.clientName ?? undefined,
+        language: enriched.language ?? undefined,
         error: "",
     });
 }
 
 async function refreshJobStatus(ctx: IngestionActionCtx, jobId: Id<"ingestionJobs">) {
-    const files = await ctx.runQuery(internal.ingestion.listFiles, { jobId });
+    const files: Doc<"ingestionFiles">[] = await ctx.runQuery(api.ingestion.listFiles, { jobId });
     if (files.length === 0) {
         await ctx.runMutation(internal.ingestion.updateJobStatus, { jobId, status: "created" });
         return;
@@ -134,7 +134,7 @@ export const createJob = mutation({
     },
 });
 
-export const updateJobStatus = mutation({
+export const updateJobStatus = internalMutation({
     args: {
         jobId: v.id("ingestionJobs"),
         status: jobStatusEnum,
@@ -173,7 +173,7 @@ export const registerFile = mutation({
     },
 });
 
-export const updateFileStatus = mutation({
+export const updateFileStatus = internalMutation({
     args: {
         fileId: v.id("ingestionFiles"),
         status: v.optional(fileStatusEnum),
@@ -241,7 +241,7 @@ export const runIngestionJob = action({
     handler: async (ctx, args) => {
         const job = await ctx.runQuery(internal.ingestion.getJob, { jobId: args.jobId });
         if (!job) throw new Error("Job not found");
-        const files = await ctx.runQuery(internal.ingestion.listFiles, { jobId: args.jobId });
+        const files: Doc<"ingestionFiles">[] = await ctx.runQuery(api.ingestion.listFiles, { jobId: args.jobId });
         if (files.length === 0) throw new Error("No files registered for this job");
 
         await ctx.runMutation(internal.ingestion.updateJobStatus, { jobId: args.jobId, status: "processing" });
@@ -272,7 +272,7 @@ export const commitIngestionJob = action({
     handler: async (ctx, args) => {
         const job = await ctx.runQuery(internal.ingestion.getJob, { jobId: args.jobId });
         if (!job) throw new Error("Job not found");
-        const files = await ctx.runQuery(internal.ingestion.listFiles, { jobId: args.jobId });
+        const files: Doc<"ingestionFiles">[] = await ctx.runQuery(api.ingestion.listFiles, { jobId: args.jobId });
         if (files.length === 0) throw new Error("No files registered for this job");
 
         const readyFiles = files.filter((file) => file.status === "ready" || file.status === "committed");
@@ -333,16 +333,27 @@ export const commitIngestionJob = action({
             }
 
             const chunkCreatedAt = Date.now();
-            const chunkPayload = [];
+            const chunkPayload: {
+                docId: Id<"knowledgeDocs">;
+                projectId?: Id<"projects">;
+                sourceType: "doc_upload";
+                clientName?: string;
+                topics: string[];
+                domain?: string;
+                phase?: string;
+                createdAt: number;
+                text: string;
+                embedding: number[];
+            }[] = [];
             for (const chunk of chunks) {
                 const embedding = await embedText(chunk);
                 chunkPayload.push({
                     docId,
                     projectId: file.projectId ?? job.projectId,
                     sourceType: "doc_upload",
-                    clientName: file.clientName,
+                    clientName: file.clientName ?? undefined,
                     topics,
-                    domain: file.domain,
+                    domain: file.domain ?? undefined,
                     phase: undefined,
                     createdAt: chunkCreatedAt,
                     text: chunk,

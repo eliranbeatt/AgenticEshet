@@ -1,19 +1,32 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
-import { Plus } from "lucide-react";
+import { Plus, Wand2 } from "lucide-react";
 
 export default function SummaryTab({ data, projectId }: { data: any, projectId: Id<"projects"> }) {
   const addSection = useMutation(api.accounting.addSection);
-  const updateSection = useMutation(api.accounting.updateSection);
-  const deleteSection = useMutation(api.accounting.deleteSection);
+  const estimateProject = useAction(api.agents.estimator.estimateProject);
 
   const [newSectionGroup, setNewSectionGroup] = useState("General");
   const [newSectionName, setNewSectionName] = useState("");
   const [isAdding, setIsAdding] = useState(false);
+  const [isEstimatingAll, setIsEstimatingAll] = useState(false);
+
+  const handleEstimateAll = async () => {
+    if (!confirm("This will auto-estimate ALL sections in Hebrew/ILS based on the plan. This may take a minute. Continue?")) return;
+    setIsEstimatingAll(true);
+    try {
+        await estimateProject({ projectId });
+        alert("Full project estimation complete!");
+    } catch (e) {
+        alert("Estimation failed: " + e);
+    } finally {
+        setIsEstimatingAll(false);
+    }
+  };
 
   const handleAddSection = async () => {
     if (!newSectionName) return;
@@ -40,12 +53,22 @@ export default function SummaryTab({ data, projectId }: { data: any, projectId: 
     <div className="flex flex-col space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-semibold">Cost Summary</h2>
-        <button 
-          onClick={() => setIsAdding(!isAdding)}
-          className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 flex items-center text-sm"
-        >
-          <Plus className="w-4 h-4 mr-1" /> Add Section
-        </button>
+        <div className="flex space-x-2">
+            <button 
+                onClick={handleEstimateAll}
+                disabled={isEstimatingAll}
+                className="bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700 flex items-center text-sm disabled:opacity-50"
+            >
+                <Wand2 className={`w-4 h-4 mr-1 ${isEstimatingAll ? 'animate-spin' : ''}`} /> 
+                {isEstimatingAll ? "Estimating Project..." : "Auto-Estimate Project"}
+            </button>
+            <button 
+                onClick={() => setIsAdding(!isAdding)}
+                className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 flex items-center text-sm"
+            >
+                <Plus className="w-4 h-4 mr-1" /> Add Section
+            </button>
+        </div>
       </div>
 
       {isAdding && (

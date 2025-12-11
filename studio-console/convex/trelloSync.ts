@@ -205,7 +205,7 @@ export const getSyncState = query({
 
 // --- Actions (The heavy lifting) ---
 
-export const fetchLists = action({
+export const fetchLists: ReturnType<typeof action> = action({
     args: { apiKey: v.string(), token: v.string(), boardId: v.string() },
     handler: async (_ctx, args) => {
         const retryLog: string[] = [];
@@ -222,7 +222,7 @@ export const fetchLists = action({
     },
 });
 
-export const snapshotBoard = action({
+export const snapshotBoard: ReturnType<typeof action> = action({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
         const config = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
@@ -258,7 +258,7 @@ export const snapshotBoard = action({
     },
 });
 
-export const sync = action({
+export const sync: ReturnType<typeof action> = action({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const config = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });

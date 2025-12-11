@@ -189,8 +189,12 @@ export default function TasksPage() {
                                 column={col}
                                 tasks={tasksByStatus[col.id]}
                                 activeTaskId={activeTaskId}
-                                onUpdate={updateTask}
-                                onDelete={deleteTask}
+                                onUpdate={async (input) => {
+                                    await updateTask(input);
+                                }}
+                                onDelete={async (input) => {
+                                    await deleteTask(input);
+                                }}
                                 quests={quests ?? []}
                             />
                         ))}

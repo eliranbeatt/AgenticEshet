@@ -29,6 +29,7 @@ if (!apiKey) {
 const openai = new OpenAI({
     apiKey: apiKey || "dummy",
 });
+const openaiClient = openai as any;
 
 export async function callChatWithSchema<T>(
     schema: z.ZodSchema<T>,
@@ -50,8 +51,8 @@ export async function callChatWithSchema<T>(
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
             // Prefer the structured parse API when available; otherwise fall back to JSON mode.
-            if (openai.beta?.chat?.completions?.parse) {
-                const completion = await openai.beta.chat.completions.parse({
+            if (openaiClient.beta?.chat?.completions?.parse) {
+                const completion = await openaiClient.beta.chat.completions.parse({
                     model,
                     temperature: params.temperature ?? 0,
                     messages,

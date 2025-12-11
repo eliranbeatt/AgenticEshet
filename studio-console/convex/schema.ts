@@ -117,6 +117,14 @@ export default defineSchema({
         lastUpdated: v.number(), // Timestamp
     }).searchIndex("search_material", { searchField: "name" }),
 
+    // 21. LABOR RATES (Roles & Standard Costs)
+    laborRates: defineTable({
+        role: v.string(),        // "Carpenter", "Installer", "Project Manager"
+        rateType: v.string(),    // "day", "hour"
+        defaultRate: v.number(), // ILS
+        category: v.optional(v.string()), // "Studio", "Field", "Management"
+    }).searchIndex("search_role", { searchField: "role" }),
+
     // 2. CANONICAL TASKS: Internal Source of Truth
     tasks: defineTable({
         projectId: v.id("projects"),

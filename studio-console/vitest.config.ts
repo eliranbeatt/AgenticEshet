@@ -11,11 +11,6 @@ export default defineConfig({
             "src/**/*.test.ts?(x)",
             "convex/**/*.test.ts",
         ],
-        environmentMatchGlobs: [
-            ["app/**/*.test.ts?(x)", "jsdom"],
-            ["src/**/*.test.ts?(x)", "jsdom"],
-            ["tests/**/*.test.ts?(x)", "jsdom"],
-        ],
         coverage: {
             provider: "v8",
             reporter: ["text", "html"],

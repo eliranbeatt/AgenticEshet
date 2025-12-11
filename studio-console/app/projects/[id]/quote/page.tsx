@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useAction } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
-import { Id } from "../../../../convex/_generated/dataModel";
+import { Id, type Doc } from "../../../../convex/_generated/dataModel";
 
 type QuoteBreakdownItem = {
     label: string;
@@ -24,10 +24,10 @@ export default function QuotePage() {
     const [instruction, setInstruction] = useState("");
     const [selectedQuoteId, setSelectedQuoteId] = useState<Id<"quotes"> | null>(null);
     
-    const selectedQuote = useMemo(() => {
+    const selectedQuote = useMemo<Doc<"quotes"> | null>(() => {
         if (!quotes || quotes.length === 0) return null;
         if (!selectedQuoteId) return quotes[0];
-        return quotes.find((quote) => quote._id === selectedQuoteId) ?? quotes[0];
+        return quotes.find((quote: Doc<"quotes">) => quote._id === selectedQuoteId) ?? quotes[0];
     }, [quotes, selectedQuoteId]);
 
     const handleGenerate = async () => {
@@ -121,7 +121,7 @@ export default function QuotePage() {
                 <div className="bg-white p-4 rounded shadow-sm border flex-1 overflow-hidden flex flex-col">
                     <h3 className="font-bold text-sm mb-2">History</h3>
                     <div className="flex-1 overflow-y-auto space-y-2">
-                        {quotes?.map((q) => (
+                        {quotes?.map((q: Doc<"quotes">) => (
                             <button
                                 key={q._id}
                                 onClick={() => setSelectedQuoteId(q._id)}

@@ -3,6 +3,7 @@ import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ClarificationSchema } from "../lib/zodSchemas";
+import { Id, type Doc } from "../_generated/dataModel";
 
 // 1. DATA ACCESS: Get context for the agent
 export const getContext = internalQuery({
@@ -86,7 +87,7 @@ export const saveResult = internalMutation({
         "",
         "## Open Questions",
         args.response.openQuestions.length
-            ? args.response.openQuestions.map((q) => `- ${q}`).join("\n")
+            ? args.response.openQuestions.map((q: string) => `- ${q}`).join("\n")
             : "- No open questions",
         "",
         `Suggested next phase: ${args.response.suggestedNextPhase}`,
@@ -150,7 +151,7 @@ export const run = action({
         : "No approved plan yet.";
 
     const previousClarifications = recentClarifications
-        .map((conversation) => {
+        .map((conversation: Doc<"conversations">) => {
             try {
                 const parsed = JSON.parse(conversation.messagesJson) as { role: string; content: string }[];
                 const assistant = parsed.reverse().find((message) => message.role === "assistant");

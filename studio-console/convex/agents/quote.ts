@@ -4,6 +4,20 @@ import { internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { QuoteSchema } from "../lib/zodSchemas";
 
+type QuoteBreakdownItem = {
+    label: string;
+    amount: number;
+    currency: string;
+    notes: string | null;
+};
+
+type QuoteDataPayload = {
+    internalBreakdown: QuoteBreakdownItem[];
+    totalAmount: number;
+    currency: string;
+    clientDocumentText: string;
+};
+
 // 1. DATA ACCESS
 export const getContext = internalQuery({
   args: { projectId: v.id("projects") },
@@ -44,6 +58,7 @@ export const saveQuote = internalMutation({
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
+    const quoteData = args.quoteData as QuoteDataPayload;
      // Determine version
      const existing = await ctx.db
         .query("quotes")
@@ -55,22 +70,22 @@ export const saveQuote = internalMutation({
     await ctx.db.insert("quotes", {
         projectId: args.projectId,
         version,
-        internalBreakdownJson: JSON.stringify(args.quoteData.internalBreakdown),
-        clientDocumentText: args.quoteData.clientDocumentText,
-        currency: args.quoteData.currency,
-        totalAmount: args.quoteData.totalAmount,
+        internalBreakdownJson: JSON.stringify(quoteData.internalBreakdown),
+        clientDocumentText: quoteData.clientDocumentText,
+        currency: quoteData.currency,
+        totalAmount: quoteData.totalAmount,
         createdAt: Date.now(),
         createdBy: "agent",
     });
 
     const quoteText = [
-        `Currency: ${args.quoteData.currency}`,
-        `Total: ${args.quoteData.totalAmount}`,
+        `Currency: ${quoteData.currency}`,
+        `Total: ${quoteData.totalAmount}`,
         "Breakdown:",
-        ...args.quoteData.internalBreakdown.map((item: any) => `- ${item.label}: ${item.amount} ${item.currency}`),
+        ...quoteData.internalBreakdown.map((item) => `- ${item.label}: ${item.amount} ${item.currency}`),
         "",
         "Client Document:",
-        args.quoteData.clientDocumentText,
+        quoteData.clientDocumentText,
     ].join("\n");
 
     await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
@@ -79,7 +94,7 @@ export const saveQuote = internalMutation({
         sourceRefId: `quote-v${version}`,
         title: `Quote v${version}`,
         text: quoteText,
-        summary: args.quoteData.clientDocumentText.slice(0, 500),
+        summary: quoteData.clientDocumentText.slice(0, 500),
         tags: ["quote", "pricing"],
         topics: [],
         clientName: project?.clientName,

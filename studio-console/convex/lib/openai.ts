@@ -19,7 +19,8 @@ type ChatParams = {
 
 const apiKey = process.env.OPENAI_API_KEY;
 export const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-4o-2024-08-06";
-export const DEFAULT_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || "text-embedding-3-large";
+// Default to a 1536-d model to match the vector index. Larger models are down-projected.
+export const DEFAULT_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || "text-embedding-3-small";
 
 if (!apiKey) {
     console.warn("OPENAI_API_KEY is not set in environment variables");
@@ -105,12 +106,33 @@ export async function callChatWithSchema<T>(
     );
 }
 
-export async function embedText(text: string, options?: { model?: string; maxRetries?: number; retryDelayMs?: number }): Promise<number[]> {
+export function normalizeEmbedding(embedding: number[]): number[] {
+    if (embedding.length === 1536) {
+        return embedding;
+    }
+
+    if (embedding.length === 3072) {
+        // Down-project 3072-d embeddings (e.g., text-embedding-3-large) to 1536 by averaging pairs.
+        return embedding.reduce((acc: number[], val: number, idx: number) => {
+            const targetIdx = Math.floor(idx / 2);
+            acc[targetIdx] = (acc[targetIdx] ?? 0) + val / 2;
+            return acc;
+        }, new Array(1536).fill(0));
+    }
+
+    throw new Error(`Unexpected embedding dimensions: ${embedding.length}`);
+}
+
+export async function embedText(
+    text: string,
+    options?: { model?: string; maxRetries?: number; retryDelayMs?: number; normalize?: boolean }
+): Promise<number[]> {
     if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
 
     const model = options?.model || DEFAULT_EMBED_MODEL;
     const maxRetries = options?.maxRetries ?? 3;
     const retryDelayMs = options?.retryDelayMs ?? 500;
+    const normalize = options?.normalize ?? true;
 
     let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -120,7 +142,8 @@ export async function embedText(text: string, options?: { model?: string; maxRet
                 input: text,
             });
 
-            return response.data[0].embedding;
+            const embedding = response.data[0].embedding;
+            return normalize ? normalizeEmbedding(embedding) : embedding;
         } catch (error) {
             lastError = error;
             if (attempt === maxRetries - 1) break;

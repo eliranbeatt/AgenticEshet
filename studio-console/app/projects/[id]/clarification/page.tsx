@@ -32,7 +32,10 @@ export default function ClarificationPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [lastAnalysis, setLastAnalysis] = useState<AnalysisResult | null>(null);
 
-    const activePlan = useMemo(() => plans?.find((plan) => plan.isActive) ?? null, [plans]);
+    const activePlan = useMemo<Doc<"plans"> | null>(
+        () => plans?.find((plan: Doc<"plans">) => plan.isActive) ?? null,
+        [plans],
+    );
 
     const handleSend = async () => {
         if (!input.trim()) return;

@@ -3,7 +3,7 @@ import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { TaskBreakdownSchema } from "../lib/zodSchemas";
-import { Id } from "../_generated/dataModel";
+import { Id, type Doc } from "../_generated/dataModel";
 
 // 1. DATA ACCESS
 export const getContext = internalQuery({
@@ -166,12 +166,14 @@ export const run = action({
     const existingTaskSummary = existingTasks.length
         ? existingTasks
               .slice(0, 20)
-              .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority})`)
+              .map((task: Doc<"tasks">) => `- ${task.title} [${task.status}] (${task.category}/${task.priority})`)
               .join("\n")
         : "- No existing tasks found.";
 
     const knowledgeSummary = knowledgeDocs.length
-        ? knowledgeDocs.map((doc) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`).join("\n")
+        ? knowledgeDocs
+              .map((doc: { doc: { sourceType: string; title: string; summary?: string }; text?: string }) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
+              .join("\n")
         : "- No knowledge documents available.";
 
     const userPrompt = `Project: ${project.name}
@@ -180,7 +182,7 @@ Plan Content:
 ${latestPlan.contentMarkdown}
 
 Quests:
-${quests.length ? quests.map((quest) => `- ${quest.title}: ${quest.description || "No description"}`).join("\n") : "No quests defined. If necessary, supply questName field to indicate proposed grouping."}
+${quests.length ? quests.map((quest: Doc<"quests">) => `- ${quest.title}: ${quest.description || "No description"}`).join("\n") : "No quests defined. If necessary, supply questName field to indicate proposed grouping."}
 
 Existing Tasks (for deduplication):
 ${existingTaskSummary}

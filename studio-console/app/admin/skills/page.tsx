@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { Id } from "../../../convex/_generated/dataModel";
+import { Id, type Doc } from "../../../convex/_generated/dataModel";
 
 type SkillFormState = {
     name: string;
@@ -29,8 +29,8 @@ export default function SkillsAdminPage() {
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
 
-    const selectedSkill = useMemo(
-        () => skills?.find((skill) => skill._id === selectedId) ?? null,
+    const selectedSkill = useMemo<Doc<"skills"> | null>(
+        () => skills?.find((skill: Doc<"skills">) => skill._id === selectedId) ?? null,
         [skills, selectedId],
     );
 
@@ -95,7 +95,7 @@ export default function SkillsAdminPage() {
                     </button>
                 </div>
                 <div className="max-h-[540px] overflow-y-auto divide-y">
-                    {skills?.map((skill) => (
+                    {skills?.map((skill: Doc<"skills">) => (
                         <button
                             key={skill._id}
                             onClick={() => setSelectedId(skill._id)}

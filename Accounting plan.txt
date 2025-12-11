@@ -1,0 +1,664 @@
+מעולה, אז עכשיו נעבור לגרסת **spec מלאה באנגלית** (אני אסביר רק במשפט פתיחה בעברית, כל השאר – באנגלית נקי בשביל ה־AI/מפתחים).
+
+---
+
+## 1. Purpose & Scope
+
+This specification describes a **Project Costing & Breakdown module** for a studio management system.
+
+The module must:
+
+* Mirror the behavior of an existing 3-sheet Excel file used to:
+
+  * Break a project into **sections/elements**.
+  * Track **work** and **materials** per section.
+  * Apply **overhead, risk, and profit** to compute the **client price**.
+* Support both:
+
+  * **Planning/estimating** a project before it happens.
+  * **Tracking actual work and purchases** during and after execution.
+* Produce a **final pricing view** similar to the “summary” sheet in Excel.
+
+The system is **section-based**:
+
+> Project → Sections (elements & logistics) →
+> each Section has Materials (E) + Work (S) →
+> E+S = Direct Cost → Overhead + Risk + Profit → Client Price.
+
+---
+
+## 2. Core Concepts & Data Model
+
+### 2.1 Entity: Project
+
+Represents a single client project.
+
+**Fields (minimal):**
+
+* `id: string`
+* `name: string`
+  Human-readable project name.
+* `clientName: string`
+* `status: "draft" | "estimating" | "approved" | "in_progress" | "completed" | "cancelled"`
+* `currency: string`
+  e.g. `"ILS"`, `"USD"`.
+* `overheadPercent: number`
+  e.g. `0.15` for 15%.
+* `riskPercent: number`
+  e.g. `0.10` for 10%.
+* `profitPercent: number`
+  e.g. `0.30` for 30%.
+* `createdAt: Date`
+* `updatedAt: Date`
+
+**Relations:**
+
+* `sections: Section[]`
+* `costProfile: CostProfile` (optional override, see 2.6).
+
+---
+
+### 2.2 Entity: Section (Element)
+
+Represents one **budget line** in the project (e.g. “PVC wall backgrounds”, “Installation crew”, “Logistics – trucks”).
+
+Each section is a “mini P&L”: it has its own E, S, overhead, risk, profit, and client price.
+
+**Fields:**
+
+* `id: string`
+* `projectId: string`
+* `group: string`
+  Category, e.g.:
+
+  * `"Studio Elements"`
+  * `"Logistics"`
+  * `"Installation & Dismantling – Labor"`
+  * `"Service & Fix Visits"`
+  * `"General / Studio Consumables"`
+* `name: string`
+  Human-readable section name (what the client sees).
+* `description: string`
+  Internal/optional detailed description.
+* `sortOrder: number`
+  For display ordering (like row number in Excel).
+* `pricingMode: "estimated" | "actual" | "mixed"`
+
+  * `estimated`: only planned values are used for client price.
+  * `actual`: only actual values.
+  * `mixed`: use actual where available, otherwise planned.
+
+**Optional per-section overrides:**
+
+* `overheadPercentOverride?: number`
+* `riskPercentOverride?: number`
+* `profitPercentOverride?: number`
+
+**Relations:**
+
+* `materialLines: MaterialLine[]`
+* `workLines: WorkLine[]`
+
+---
+
+### 2.3 Entity: MaterialLine (per Section)
+
+Represents **one row** in the “materials” sheet for a given section: a specific material, print, outsourced production, or purchase.
+
+**Fields:**
+
+* `id: string`
+* `sectionId: string`
+* `category: string`
+  e.g. `"PVC"`, `"Paint"`, `"Metal"`, `"Logistics Equipment"`, `"Consumables"`.
+* `label: string`
+  Short name, like:
+
+  * `"Aluminum door thresholds"`
+  * `"Glitter and glue"`
+* `description: string`
+  Longer text note (e.g. supplier details, special instructions).
+* `vendorName?: string`
+* `unit: string`
+  e.g. `"m"`, `"sqm"`, `"unit"`, `"day"`, `"set"`.
+* `plannedQuantity: number`
+* `plannedUnitCost: number`
+  Cost per unit in project currency.
+* `actualQuantity?: number`
+* `actualUnitCost?: number`
+* `taxRate?: number`
+  VAT etc., e.g. `0.17` for 17%.
+
+**Derived fields (can be stored or computed):**
+
+* `plannedSubtotal = plannedQuantity * plannedUnitCost`
+* `actualSubtotal = (actualQuantity ?? plannedQuantity) * (actualUnitCost ?? plannedUnitCost)`
+
+**Status / meta:**
+
+* `status: "planned" | "ordered" | "received" | "invoiced" | "paid"`
+* `note?: string`
+
+---
+
+### 2.4 Entity: WorkLine (per Section)
+
+Represents **one row of work** in the “work days” sheet: studio days, installation crew, management hours, graphic design, fix visits, etc.
+
+**Fields:**
+
+* `id: string`
+* `sectionId: string`
+* `workType: "studio" | "field" | "management" | "graphic" | "logistics" | "other"`
+* `role: string`
+  e.g. `"Studio Assistant"`, `"Lead Designer"`, `"Installer"`, `"Project Manager"`.
+* `personId?: string`
+  Optional link to user/employee.
+* `rateType: "hour" | "day" | "flat"`
+* `plannedQuantity: number`
+  e.g. number of days or hours.
+* `plannedUnitCost: number`
+  Internal cost per day/hour or flat fee.
+* `actualQuantity?: number`
+* `actualUnitCost?: number`
+
+**Derived fields:**
+
+* `plannedSubtotal`:
+
+  * if `rateType = "flat"` → `plannedUnitCost` (quantity may be 1).
+  * else → `plannedQuantity * plannedUnitCost`.
+* `actualSubtotal` (same logic with `actual*` values).
+
+**Status / meta:**
+
+* `status: "planned" | "scheduled" | "done" | "approved" | "paid"`
+* `description: string`
+* `note?: string`
+
+---
+
+### 2.5 Calculated Cost Snapshot: SectionCost
+
+This is a computed object, not necessarily stored, used in UI and APIs.
+
+**Fields (for one Section):**
+
+* `sectionId: string`
+
+**Planned:**
+
+* `plannedMaterialsCostE: number`
+  `= SUM(materialLines.plannedSubtotal)`
+* `plannedWorkCostS: number`
+  `= SUM(workLines.plannedSubtotal)`
+* `plannedDirectCost: number`
+  `= plannedMaterialsCostE + plannedWorkCostS`
+* `plannedOverhead: number`
+  `= plannedDirectCost * overheadPercentEffective`
+* `plannedRisk: number`
+  `= plannedDirectCost * riskPercentEffective`
+* `plannedProfit: number`
+  `= plannedDirectCost * profitPercentEffective`
+* `plannedClientPrice: number`
+  `= plannedDirectCost + plannedOverhead + plannedRisk + plannedProfit`
+
+**Actual:**
+
+* `actualMaterialsCostE: number`
+  `= SUM(materialLines.actualSubtotal)`
+* `actualWorkCostS: number`
+  `= SUM(workLines.actualSubtotal)`
+* `actualDirectCost: number`
+  `= actualMaterialsCostE + actualWorkCostS`
+* `actualOverhead: number`
+  `= actualDirectCost * overheadPercentEffective`
+* `actualRisk: number`
+  `= actualDirectCost * riskPercentEffective`
+* `actualProfit: number`
+  (can be defined or used for analysis; often needed to see real margin)
+* `actualClientPrice?: number`
+  (rarely used; typically client price is based on planned, but we may compute “what it should have been”)
+
+> `overheadPercentEffective / riskPercentEffective / profitPercentEffective`
+> are taken from Section overrides if present, otherwise from Project defaults.
+
+---
+
+### 2.6 Entity: CostProfile (optional)
+
+Central configuration for percentages.
+
+**Fields:**
+
+* `id: string`
+* `label: string`  (e.g. `"Standard 15/10/30"`).
+* `overheadPercent: number`
+* `riskPercent: number`
+* `profitPercent: number`
+* `isDefault: boolean`
+
+**Relations:**
+
+* `projectIds?: string[]` (projects using this profile by default).
+
+---
+
+## 3. Calculation Rules & Business Logic
+
+### 3.1 Section-level Calculation
+
+For a given `Section` S in project P:
+
+```pseudo
+overheadPercentEffective = Section.overheadPercentOverride ?? Project.overheadPercent
+riskPercentEffective     = Section.riskPercentOverride     ?? Project.riskPercent
+profitPercentEffective   = Section.profitPercentOverride   ?? Project.profitPercent
+
+plannedMaterialsCostE = SUM(for each MaterialLine in Section: plannedSubtotal)
+plannedWorkCostS      = SUM(for each WorkLine in Section: plannedSubtotal)
+plannedDirectCost     = plannedMaterialsCostE + plannedWorkCostS
+
+plannedOverhead       = plannedDirectCost * overheadPercentEffective
+plannedRisk           = plannedDirectCost * riskPercentEffective
+plannedProfit         = plannedDirectCost * profitPercentEffective
+
+plannedClientPrice    = plannedDirectCost + plannedOverhead + plannedRisk + plannedProfit
+```
+
+For **actual** values, replace `planned*` with `actual*`.
+
+If `pricingMode = "mixed"`:
+
+```pseudo
+materialsCostEffective = SUM(
+  for each MaterialLine:
+    if actualSubtotal is defined -> actualSubtotal
+    else -> plannedSubtotal
+)
+
+workCostEffective = SUM(
+  for each WorkLine:
+    if actualSubtotal is defined -> actualSubtotal
+    else -> plannedSubtotal
+)
+
+directCostEffective = materialsCostEffective + workCostEffective
+
+overheadEffective = directCostEffective * overheadPercentEffective
+riskEffective     = directCostEffective * riskPercentEffective
+profitEffective   = directCostEffective * profitPercentEffective
+
+clientPriceEffective = directCostEffective + overheadEffective + riskEffective + profitEffective
+```
+
+### 3.2 Project-level Totals
+
+For a Project with sections `S1...Sn`:
+
+```pseudo
+projectTotals = {
+  planned: {
+    materialsE: SUM(Si.plannedMaterialsCostE),
+    workS:      SUM(Si.plannedWorkCostS),
+    direct:     SUM(Si.plannedDirectCost),
+    overhead:   SUM(Si.plannedOverhead),
+    risk:       SUM(Si.plannedRisk),
+    profit:     SUM(Si.plannedProfit),
+    clientPrice:SUM(Si.plannedClientPrice)
+  },
+  actual: {
+    materialsE: ... same as above using actual fields ...
+  }
+}
+```
+
+Also support **totals per `group`**:
+
+```pseudo
+groupTotals[groupName] = sum over sections where section.group == groupName
+```
+
+---
+
+## 4. Main Workflows
+
+### 4.1 Workflow: Create a New Project Estimate
+
+1. **Create Project**
+
+   * Input: name, clientName, default percentages (overhead, risk, profit), currency.
+   * Output: new Project with no sections yet.
+
+2. **Define Sections**
+
+   * User creates sections that match the budget lines:
+
+     * Example: `"PVC Backgrounds for Walls"`, `"Installation Crew"`, `"Logistics – Trucks"`, `"Fix Visit 1"`.
+   * For each section, user sets:
+
+     * `group`, `name`, `description`, `sortOrder`.
+
+3. **Add Materials Per Section**
+
+   * For each section:
+
+     * Create multiple `MaterialLine`s for every material or purchase.
+     * Fill `plannedQuantity` and `plannedUnitCost`.
+   * System automatically computes `plannedSubtotal` for each line and `plannedMaterialsCostE` per section.
+
+4. **Add Work Per Section**
+
+   * For each section:
+
+     * Create `WorkLine`s (e.g. `"Studio days"`, `"Installation crew, 2 days"`, `"Project management hours"`).
+     * Fill `rateType`, `plannedQuantity`, `plannedUnitCost`.
+   * System computes `plannedWorkCostS` and `plannedDirectCost`.
+
+5. **Apply Percentages**
+
+   * System uses project default or section overrides:
+
+     * Calculates `plannedOverhead`, `plannedRisk`, `plannedProfit`, `plannedClientPrice`.
+
+6. **View Final Pricing Table**
+
+   * UI screen “Final Pricing”:
+
+     * For each section: show columns similar to the Excel “summary sheet”:
+
+       | Group | Section Name | Description | E (Materials) | S (Work) | Direct (E+S) | Overhead | Risk | Profit | Client Price |
+
+   * At the bottom: project totals.
+
+---
+
+### 4.2 Workflow: Track Actual Purchases & Work
+
+1. **Material Purchases**
+
+   * For each MaterialLine, user can:
+
+     * Update `actualQuantity`, `actualUnitCost`.
+     * Update `status` (`ordered`, `received`, `paid`).
+     * Set `vendorName`, invoice number (extra fields if needed).
+
+2. **Work Tracking**
+
+   * For each WorkLine, user can:
+
+     * Update `actualQuantity` (e.g. actual days/hours).
+     * Update `actualUnitCost` (if overtime, special rate).
+     * Set `status` (`scheduled`, `done`, `paid`).
+
+3. **Variance Analysis**
+
+   * System computes:
+
+     * `varianceMaterials = actualMaterialsCostE - plannedMaterialsCostE`
+     * `varianceWork = actualWorkCostS - plannedWorkCostS`
+     * `varianceDirect = actualDirectCost - plannedDirectCost`
+   * At project level and section level.
+
+---
+
+### 4.3 Workflow: Generate Client Quote
+
+1. Select project and choose:
+
+   * `pricingSource: "planned" | "mixed"`.
+
+2. System generates a read-only **“Client Quote” view**:
+
+   * One row per section:
+
+     * Client-facing name, description, and **Price to Client**.
+   * Total project price.
+   * Optionally: hide internal columns (E, S, overhead, risk, profit).
+
+3. Optionally export to:
+
+   * PDF/Word.
+   * Or push to another system (e.g. CRM, email, Trello labels).
+
+---
+
+## 5. Example Data Structures (Pseudo-Typescript)
+
+```ts
+type Money = number; // decimal with 2 digits
+
+interface Project {
+  id: string;
+  name: string;
+  clientName: string;
+  status: "draft" | "estimating" | "approved" | "in_progress" | "completed" | "cancelled";
+  currency: string;
+  overheadPercent: number; // 0.15 = 15%
+  riskPercent: number;     // 0.10 = 10%
+  profitPercent: number;   // 0.30 = 30%
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface Section {
+  id: string;
+  projectId: string;
+  group: string;
+  name: string;
+  description: string;
+  sortOrder: number;
+  pricingMode: "estimated" | "actual" | "mixed";
+  overheadPercentOverride?: number;
+  riskPercentOverride?: number;
+  profitPercentOverride?: number;
+}
+
+interface MaterialLine {
+  id: string;
+  sectionId: string;
+  category: string;
+  label: string;
+  description: string;
+  vendorName?: string;
+  unit: string;
+  plannedQuantity: number;
+  plannedUnitCost: Money;
+  actualQuantity?: number;
+  actualUnitCost?: Money;
+  taxRate?: number;
+  status: "planned" | "ordered" | "received" | "invoiced" | "paid";
+  note?: string;
+}
+
+interface WorkLine {
+  id: string;
+  sectionId: string;
+  workType: "studio" | "field" | "management" | "graphic" | "logistics" | "other";
+  role: string;
+  personId?: string;
+  rateType: "hour" | "day" | "flat";
+  plannedQuantity: number;
+  plannedUnitCost: Money;
+  actualQuantity?: number;
+  actualUnitCost?: Money;
+  status: "planned" | "scheduled" | "done" | "approved" | "paid";
+  description: string;
+  note?: string;
+}
+```
+
+---
+
+## 6. Key Service Functions (API-Level)
+
+Below are logical service functions; they can be implemented as HTTP endpoints, DB functions, or internal services.
+
+### 6.1 Project Management
+
+```ts
+createProject(input: {
+  name: string;
+  clientName: string;
+  currency: string;
+  overheadPercent?: number;
+  riskPercent?: number;
+  profitPercent?: number;
+}): Project
+```
+
+```ts
+updateProject(projectId: string, patch: Partial<Project>): Project
+```
+
+```ts
+getProject(projectId: string): ProjectWithSectionsAndLines
+```
+
+---
+
+### 6.2 Section Management
+
+```ts
+addSection(projectId: string, input: {
+  group: string;
+  name: string;
+  description?: string;
+  sortOrder?: number;
+}): Section
+```
+
+```ts
+updateSection(sectionId: string, patch: Partial<Section>): Section
+```
+
+```ts
+deleteSection(sectionId: string): void
+```
+
+---
+
+### 6.3 Material & Work Lines
+
+```ts
+addMaterialLine(sectionId: string, input: {
+  category: string;
+  label: string;
+  description?: string;
+  vendorName?: string;
+  unit: string;
+  plannedQuantity: number;
+  plannedUnitCost: Money;
+  taxRate?: number;
+}): MaterialLine
+```
+
+```ts
+updateMaterialLine(lineId: string, patch: Partial<MaterialLine>): MaterialLine
+```
+
+```ts
+addWorkLine(sectionId: string, input: {
+  workType: WorkLine["workType"];
+  role: string;
+  rateType: WorkLine["rateType"];
+  plannedQuantity: number;
+  plannedUnitCost: Money;
+  description?: string;
+}): WorkLine
+```
+
+```ts
+updateWorkLine(lineId: string, patch: Partial<WorkLine>): WorkLine
+```
+
+---
+
+### 6.4 Cost Calculation & Summary
+
+```ts
+computeSectionCost(sectionId: string, mode: "planned" | "actual" | "mixed"): SectionCost
+```
+
+```ts
+computeProjectSummary(projectId: string, mode: "planned" | "actual" | "mixed"): {
+  sections: SectionCost[];
+  totals: {
+    materialsE: number;
+    workS: number;
+    direct: number;
+    overhead: number;
+    risk: number;
+    profit: number;
+    clientPrice: number;
+  };
+  groupedTotals: {
+    [groupName: string]: {
+      materialsE: number;
+      workS: number;
+      direct: number;
+      overhead: number;
+      risk: number;
+      profit: number;
+      clientPrice: number;
+    };
+  };
+}
+```
+
+```ts
+generateClientQuote(projectId: string, options: {
+  mode: "planned" | "mixed";
+  hideInternalColumns?: boolean;
+}): ClientQuoteDocument
+```
+
+---
+
+## 7. Example: One Section Walkthrough
+
+**Section:** `"PVC Backgrounds for Walls"`
+
+1. **Materials:**
+
+   * `PVC sheets, 20 sqm`, planned 20 sqm × 80 = 1600
+   * `Adhesive`, 5 units × 50 = 250
+   * `Glitter and decorative items`, 1 lot × 400 = 400
+
+   → `plannedMaterialsCostE = 1600 + 250 + 400 = 2250`
+
+2. **Work:**
+
+   * `Studio cutting and prep`, 2 days × 800 = 1600
+   * `On-site installation`, 1 day × 1200 = 1200
+
+   → `plannedWorkCostS = 2800`
+
+3. **Direct Cost:**
+
+   * `plannedDirectCost = 2250 + 2800 = 5050`
+
+4. **Percentages (example):**
+
+   * `overheadPercent = 0.15`
+   * `riskPercent = 0.10`
+   * `profitPercent = 0.30`
+
+5. **Overhead, Risk, Profit:**
+
+   * `plannedOverhead = 5050 * 0.15 = 757.5`
+   * `plannedRisk = 5050 * 0.10 = 505`
+   * `plannedProfit = 5050 * 0.30 = 1515`
+
+6. **Client Price:**
+
+   * `plannedClientPrice = 5050 + 757.5 + 505 + 1515 = 7827.5` (rounded as desired for presentation).
+
+This is exactly what the Excel file is doing per row in the main summary sheet; the system must behave the same way.
+
+---
+
+אם תרצי, בשלב הבא אני יכולה:
+
+* להוסיף **diagram** של המודלים (ERD),
+* או להפוך את זה למסמך קצר יותר בסגנון “API contract” ממש, או לנסח פרומפט מוכן ל־AI coding agent שמבוסס על ה-spec הזה.

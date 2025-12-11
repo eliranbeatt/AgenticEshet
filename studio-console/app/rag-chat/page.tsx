@@ -26,6 +26,25 @@ type ChatTurn = {
     citations: RetrievedDoc[];
 };
 
+type DynamicSearchResult = {
+    chunkId: Id<"knowledgeChunks">;
+    docId: Id<"knowledgeDocs">;
+    score: number;
+    text?: string;
+    scope: "project" | "global";
+    doc: {
+        _id: Id<"knowledgeDocs">;
+        title: string;
+        summary?: string;
+        tags: string[];
+        sourceType: SourceType;
+        topics: string[];
+        domain?: string | null;
+        clientName?: string | null;
+        phase?: string | null;
+    };
+};
+
 export default function RagChatPage() {
     const dynamicSearch = useAction(api.knowledge.dynamicSearch);
 
@@ -33,7 +52,7 @@ export default function RagChatPage() {
     const [projectId, setProjectId] = useState("");
     const [scope, setScope] = useState<"project" | "global" | "both">("both");
     const [limit, setLimit] = useState(6);
-    const [minScore, setMinScore] = useState(0);
+    const [minScore, setMinScore] = useState(-0.25);
     const [loading, setLoading] = useState(false);
     const [chat, setChat] = useState<ChatTurn[]>([]);
     const [error, setError] = useState<string | null>(null);
@@ -45,7 +64,7 @@ export default function RagChatPage() {
         setError(null);
 
         try {
-            const results = await dynamicSearch({
+            const results = (await dynamicSearch({
                 projectId: projectId.trim() ? (projectId.trim() as Id<"projects">) : undefined,
                 query: question,
                 scope,
@@ -55,9 +74,9 @@ export default function RagChatPage() {
                 returnChunks: true,
                 agentRole: "rag_chat",
                 sourceTypes: ["plan", "conversation", "task", "quest", "quote", "doc_upload", "system_note"],
-            });
+            })) as DynamicSearchResult[];
 
-            const citations: RetrievedDoc[] = (results as any[]).map((entry, idx) => ({
+            const citations: RetrievedDoc[] = results.map((entry, idx) => ({
                 label: `[${idx + 1}]`,
                 docId: entry.doc._id,
                 title: entry.doc.title,
@@ -148,11 +167,11 @@ export default function RagChatPage() {
                     <label className="flex flex-col gap-1">
                         <span className="text-xs uppercase text-gray-500 font-semibold">Min score</span>
                         <input
-                            type="number"
-                            min={0}
-                            max={1}
-                            step={0.01}
-                            value={minScore}
+                        type="number"
+                        min={-1}
+                        max={1}
+                        step={0.01}
+                        value={minScore}
                             onChange={(e) => setMinScore(Number(e.target.value) || 0)}
                             className="border rounded px-2 py-2"
                         />

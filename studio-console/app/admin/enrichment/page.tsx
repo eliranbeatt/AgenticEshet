@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { Id } from "../../../convex/_generated/dataModel";
+import { Id, type Doc } from "../../../convex/_generated/dataModel";
 
 type ProfileFormState = {
     name: string;
@@ -35,8 +35,8 @@ export default function EnrichmentAdminPage() {
     const [isSaving, setIsSaving] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
 
-    const selectedProfile = useMemo(
-        () => profiles?.find((profile) => profile._id === selectedId) ?? null,
+    const selectedProfile = useMemo<Doc<"enrichmentProfiles"> | null>(
+        () => profiles?.find((profile: Doc<"enrichmentProfiles">) => profile._id === selectedId) ?? null,
         [profiles, selectedId],
     );
 
@@ -101,7 +101,7 @@ export default function EnrichmentAdminPage() {
                     </button>
                 </div>
                 <div className="max-h-[540px] overflow-y-auto divide-y">
-                    {profiles?.map((profile) => (
+                    {profiles?.map((profile: Doc<"enrichmentProfiles">) => (
                         <button
                             key={profile._id}
                             onClick={() => setSelectedId(profile._id)}

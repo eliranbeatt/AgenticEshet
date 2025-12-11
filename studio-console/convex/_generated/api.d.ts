@@ -8,9 +8,11 @@
  * @module
  */
 
+import type * as accounting from "../accounting.js";
 import type * as admin from "../admin.js";
 import type * as agents_architect from "../agents/architect.js";
 import type * as agents_clarification from "../agents/clarification.js";
+import type * as agents_estimator from "../agents/estimator.js";
 import type * as agents_planning from "../agents/planning.js";
 import type * as agents_quote from "../agents/quote.js";
 import type * as backfill from "../backfill.js";
@@ -35,9 +37,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accounting: typeof accounting;
   admin: typeof admin;
   "agents/architect": typeof agents_architect;
   "agents/clarification": typeof agents_clarification;
+  "agents/estimator": typeof agents_estimator;
   "agents/planning": typeof agents_planning;
   "agents/quote": typeof agents_quote;
   backfill: typeof backfill;

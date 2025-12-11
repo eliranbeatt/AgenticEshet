@@ -22,12 +22,15 @@ export default function PlanningPage() {
     const [selection, setSelection] = useState<Id<"plans"> | null>(null);
     const [approvingPlanId, setApprovingPlanId] = useState<Id<"plans"> | null>(null);
     
-    const activePlan = useMemo(() => plans?.find((plan) => plan.isActive) ?? null, [plans]);
+    const activePlan = useMemo<Doc<"plans"> | null>(
+        () => plans?.find((plan: Doc<"plans">) => plan.isActive) ?? null,
+        [plans],
+    );
 
     const selectedPlan = useMemo(() => {
         if (!plans || plans.length === 0) return null;
         if (!selection) return activePlan ?? plans[0];
-        return plans.find((plan) => plan._id === selection) ?? (activePlan ?? plans[0]);
+        return plans.find((plan: Doc<"plans">) => plan._id === selection) ?? (activePlan ?? plans[0]);
     }, [plans, selection, activePlan]);
 
     const handleGenerate = async () => {
@@ -115,7 +118,7 @@ export default function PlanningPage() {
                         {activePlan ? <span>Active: v{activePlan.version}</span> : <span>No active plan</span>}
                     </div>
                     <ul className="text-sm space-y-2 max-h-60 overflow-y-auto">
-                        {plans?.map((plan) => (
+                        {plans?.map((plan: Doc<"plans">) => (
                             <li
                                 key={plan._id}
                                 className={`border rounded px-3 py-2 cursor-pointer transition ${selectedPlan?._id === plan._id ? "border-blue-500 bg-blue-50" : "hover:bg-gray-50"}`}

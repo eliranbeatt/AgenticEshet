@@ -72,8 +72,8 @@ export default function TasksPage() {
 
     const questProgress = useMemo<QuestProgress[]>(() => {
         if (!quests || !questStats) return [];
-        return quests.map((quest) => {
-            const stat = questStats.find((s) => s.questId === quest._id);
+        return quests.map((quest: Doc<"quests">) => {
+            const stat = questStats.find((s: { questId: Id<"quests">; percent: number; done: number; total: number }) => s.questId === quest._id);
             return {
                 questId: quest._id,
                 title: quest.title,
@@ -87,8 +87,8 @@ export default function TasksPage() {
     const filteredTasks = useMemo(() => {
         if (!tasks) return null;
         if (questFilter === "all") return tasks;
-        if (questFilter === "unassigned") return tasks.filter((task) => !task.questId);
-        return tasks.filter((task) => task.questId === questFilter);
+        if (questFilter === "unassigned") return tasks.filter((task: Doc<"tasks">) => !task.questId);
+        return tasks.filter((task: Doc<"tasks">) => task.questId === questFilter);
     }, [tasks, questFilter]);
 
     const tasksByStatus = useMemo(() => {
@@ -98,7 +98,7 @@ export default function TasksPage() {
             blocked: [],
             done: [],
         };
-        (filteredTasks ?? []).forEach((task) => {
+        (filteredTasks ?? []).forEach((task: Doc<"tasks">) => {
             grouped[task.status].push(task);
         });
         return grouped;
@@ -140,7 +140,7 @@ export default function TasksPage() {
         const nextStatus = event.over?.id as Doc<"tasks">["status"] | undefined;
         setActiveTaskId(null);
         if (!taskId || !nextStatus) return;
-        const task = tasks?.find((t) => t._id === taskId);
+        const task = tasks?.find((t: Doc<"tasks">) => t._id === taskId);
         if (!task || task.status === nextStatus) return;
         await updateTask({ taskId, status: nextStatus });
     };

@@ -41,7 +41,7 @@ export default function QuestsPage() {
 
     const handleReorder = async (questId: Id<"quests">, direction: "up" | "down") => {
         if (!quests) return;
-        const currentIndex = quests.findIndex((quest) => quest._id === questId);
+        const currentIndex = quests.findIndex((quest: Doc<"quests">) => quest._id === questId);
         if (currentIndex === -1) return;
         const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
         if (nextIndex < 0 || nextIndex >= quests.length) return;
@@ -79,8 +79,8 @@ export default function QuestsPage() {
             </div>
 
             <div className="grid gap-6">
-                {quests?.map((quest, index) => {
-                    const stat = stats?.find((s) => s.questId === quest._id);
+                {quests?.map((quest: Doc<"quests">, index: number) => {
+                    const stat = stats?.find((s: { questId: Id<"quests">; percent: number; done: number; total: number }) => s.questId === quest._id);
                     return (
                         <QuestCard
                             key={quest._id}

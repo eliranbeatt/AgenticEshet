@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { action, mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { embedText, callChatWithSchema } from "./lib/openai";
+import { embedText, callChatWithSchema, normalizeEmbedding } from "./lib/openai";
 import { chunkText } from "./lib/textChunker";
 import { EnhancerSchema } from "./lib/zodSchemas";
 import type { Doc } from "./_generated/dataModel";
@@ -214,6 +214,7 @@ export const search = action({
             .map((result) => {
                 const entry = entryMap.get(result._id);
                 if (!entry || entry.doc.processingStatus !== "ready") return null;
+                const docSourceType: SourceType = (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload";
                 return {
                     chunkId: entry.chunk._id,
                     docId: entry.chunk.docId,
@@ -224,7 +225,7 @@ export const search = action({
                         title: entry.doc.title,
                         summary: entry.doc.summary,
                         tags: entry.doc.tags,
-                        sourceType: entry.doc.sourceType,
+                        sourceType: docSourceType,
                         topics: entry.doc.topics ?? [],
                         domain: entry.doc.domain,
                         clientName: entry.doc.clientName,
@@ -328,41 +329,22 @@ export const dynamicSearch = action({
     },
     handler: async (ctx, args) => {
         const limit = args.limit ?? 8;
-        const minScore = args.minScore ?? 0;
+        const minScore = args.minScore ?? -1;
         const requestedScope = args.scope ?? "project";
         const effectiveScope = !args.projectId && requestedScope !== "global" ? "global" : requestedScope;
 
         const embedding = await embedText(args.query);
-        if (!Array.isArray(embedding) || (embedding.length !== 1536 && embedding.length !== 3072)) {
-            throw new Error(`Unexpected embedding dimensions: ${Array.isArray(embedding) ? embedding.length : "unknown"}`);
-        }
-        // Some providers may return 3072-d vectors (e.g., `text-embedding-3-large`). Down-project by averaging pairs.
-        const embedding1536 =
-            embedding.length === 1536
-                ? embedding
-                : embedding.reduce((acc: number[], val: number, idx: number) => {
-                      const targetIdx = Math.floor(idx / 2);
-                      acc[targetIdx] = (acc[targetIdx] ?? 0) + val / 2;
-                      return acc;
-                  }, new Array(1536).fill(0));
 
-        const chunkResults: { _id: Doc<"knowledgeChunks">["_id"]; _score: number; scope: "project" | "global" }[] = [];
+        type ChunkResult = { _id: Doc<"knowledgeChunks">["_id"]; _score: number; scope: "project" | "global" };
+        const chunkResults: ChunkResult[] = [];
 
         const searchVectors = async (scopeLabel: "project" | "global") => {
-            const vectorArgs: { vector: number[]; limit: number; filter?: (q: any) => any } = {
-                vector: embedding1536,
+            const results = await ctx.vectorSearch("knowledgeChunks", "by_embedding", {
+                vector: embedding,
                 limit: limit * 3,
-            };
+                filter: scopeLabel === "project" && args.projectId ? (q) => q.eq("projectId", args.projectId) : undefined,
+            });
 
-            if (scopeLabel === "project" && args.projectId) {
-                vectorArgs.filter = (q: any) => q.eq("projectId", args.projectId);
-            }
-
-            if (scopeLabel === "global") {
-                // Allow all, we'll post-filter for global-only
-            }
-
-            const results = await ctx.vectorSearch("knowledgeChunks", "by_embedding", vectorArgs as any);
             results.forEach((res) => chunkResults.push({ ...res, scope: scopeLabel }));
         };
 
@@ -398,11 +380,13 @@ export const dynamicSearch = action({
         const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: uniqueIds });
         const entryMap = new Map(chunkEntries.map((entry) => [entry.chunk._id, entry]));
 
+        type ChunkRow = { result: ChunkResult; entry: { chunk: Doc<"knowledgeChunks">; doc: Doc<"knowledgeDocs"> } };
         const filtered = chunkResults
-            .map((result) => {
+            .map<ChunkRow | null>((result) => {
                 const entry = entryMap.get(result._id);
                 if (!entry) return null;
                 if (entry.doc.processingStatus !== "ready") return null;
+                const docSourceType: SourceType = (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload";
 
                 // Scope filter for global-only requests
                 if (result.scope === "global" && entry.chunk.projectId) {
@@ -412,7 +396,7 @@ export const dynamicSearch = action({
                     return null;
                 }
 
-                if (args.sourceTypes && args.sourceTypes.length > 0 && !args.sourceTypes.includes(entry.doc.sourceType as SourceType)) {
+                if (args.sourceTypes && args.sourceTypes.length > 0 && !args.sourceTypes.includes(docSourceType)) {
                     return null;
                 }
                 if (args.clientNames && args.clientNames.length > 0) {
@@ -435,7 +419,7 @@ export const dynamicSearch = action({
 
                 return { result, entry };
             })
-            .filter(Boolean) as { result: { _id: any; _score: number; scope: "project" | "global" }; entry: { chunk: Doc<"knowledgeChunks">; doc: Doc<"knowledgeDocs"> } }[];
+            .filter((row): row is ChunkRow => row !== null);
 
         const deduped = Array.from(
             new Map(filtered.map((row) => [row.entry.chunk._id, row])).values()
@@ -463,21 +447,57 @@ export const dynamicSearch = action({
         return deduped.map(({ entry, result }) => ({
             chunkId: entry.chunk._id,
             docId: entry.chunk.docId,
-            score: result._score,
-            text: args.returnChunks === false ? undefined : entry.chunk.text,
-            scope: result.scope,
-            doc: {
-                _id: entry.doc._id,
-                title: entry.doc.title,
-                summary: args.includeSummaries === false ? undefined : entry.doc.summary,
-                tags: entry.doc.tags,
-                sourceType: entry.doc.sourceType,
-                topics: entry.doc.topics ?? [],
-                domain: entry.doc.domain,
-                clientName: entry.doc.clientName,
-                phase: entry.doc.phase,
-            },
+                score: result._score,
+                text: args.returnChunks === false ? undefined : entry.chunk.text,
+                scope: result.scope,
+                doc: {
+                    _id: entry.doc._id,
+                    title: entry.doc.title,
+                    summary: args.includeSummaries === false ? undefined : entry.doc.summary,
+                    tags: entry.doc.tags,
+                    sourceType: (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload",
+                    topics: entry.doc.topics ?? [],
+                    domain: entry.doc.domain,
+                    clientName: entry.doc.clientName,
+                    phase: entry.doc.phase,
+                },
         }));
+    },
+});
+
+export const normalizeChunkEmbeddings = action({
+    args: {},
+    handler: async (ctx) => {
+        const chunks = await ctx.runQuery(internal.knowledge.listChunkEmbeddings, {});
+        const docs = await ctx.runQuery(internal.knowledge.listDocsForNormalization, {});
+        let updated = 0;
+        let docSourceUpdates = 0;
+
+        for (const chunk of chunks) {
+            const normalized = normalizeEmbedding(chunk.embedding);
+            if (normalized.length === chunk.embedding.length) {
+                const isIdentical = normalized.every((value, idx) => value === chunk.embedding[idx]);
+                if (isIdentical) continue;
+            }
+
+            await ctx.runMutation(internal.knowledge.overwriteChunkEmbedding, {
+                chunkId: chunk._id,
+                embedding: normalized,
+            });
+            updated += 1;
+        }
+
+        for (const doc of docs) {
+            if (!doc.sourceType) {
+                await ctx.runMutation(internal.knowledge.setDocSourceType, {
+                    docId: doc._id,
+                    sourceType: "doc_upload",
+                });
+                docSourceUpdates += 1;
+            }
+        }
+
+        return { totalChunks: chunks.length, chunkUpdates: updated, docSourceUpdates };
     },
 });
 
@@ -505,6 +525,48 @@ export const logRetrieval = internalMutation({
             resultCount: args.resultCount,
             createdAt: args.createdAt,
         });
+    },
+});
+
+export const overwriteChunkEmbedding = internalMutation({
+    args: {
+        chunkId: v.id("knowledgeChunks"),
+        embedding: v.array(v.float64()),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.chunkId, { embedding: args.embedding });
+    },
+});
+
+export const setDocSourceType = internalMutation({
+    args: {
+        docId: v.id("knowledgeDocs"),
+        sourceType: sourceTypeEnum,
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.docId, { sourceType: args.sourceType });
+    },
+});
+
+export const listChunkEmbeddings = internalQuery({
+    args: {},
+    handler: async (ctx) => {
+        const chunks = await ctx.db.query("knowledgeChunks").collect();
+        return chunks.map((chunk) => ({
+            _id: chunk._id,
+            embedding: chunk.embedding,
+        }));
+    },
+});
+
+export const listDocsForNormalization = internalQuery({
+    args: {},
+    handler: async (ctx) => {
+        const docs = await ctx.db.query("knowledgeDocs").collect();
+        return docs.map((doc) => ({
+            _id: doc._id,
+            sourceType: doc.sourceType,
+        }));
     },
 });
 

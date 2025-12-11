@@ -5,6 +5,7 @@ import { api } from "../../convex/_generated/api";
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { type Doc } from "../../convex/_generated/dataModel";
 
 export default function ProjectsPage() {
     const projects = useQuery(api.projects.listProjects);
@@ -69,7 +70,7 @@ export default function ProjectsPage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {projects.map((p) => (
+                {projects.map((p: Doc<"projects">) => (
                     <Link
                         key={p._id}
                         href={`/projects/${p._id}/overview`}

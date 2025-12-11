@@ -68,16 +68,16 @@ export default function ProjectOverviewPage() {
         }
         return {
             total: tasks.length,
-            todo: tasks.filter((t) => t.status === "todo").length,
-            inProgress: tasks.filter((t) => t.status === "in_progress").length,
-            done: tasks.filter((t) => t.status === "done").length,
+            todo: tasks.filter((t: Doc<"tasks">) => t.status === "todo").length,
+            inProgress: tasks.filter((t: Doc<"tasks">) => t.status === "in_progress").length,
+            done: tasks.filter((t: Doc<"tasks">) => t.status === "done").length,
         };
     }, [tasks]);
 
     const questProgress = useMemo(() => {
         if (!quests || !questStats) return [];
-        return quests.map((quest) => {
-            const stat = questStats.find((s) => s.questId === quest._id);
+        return quests.map((quest: Doc<"quests">) => {
+            const stat = questStats.find((s: { questId: Id<"quests">; percent?: number; done?: number; total?: number }) => s.questId === quest._id);
             return {
                 questId: quest._id,
                 title: quest.title,

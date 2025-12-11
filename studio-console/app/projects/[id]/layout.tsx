@@ -25,6 +25,7 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
         { name: "Overview", href: "overview" },
         { name: "Clarification", href: "clarification", phaseKey: "clarification" as const },
         { name: "Planning", href: "planning", phaseKey: "planning" as const },
+        { name: "Accounting", href: "accounting" },
         { name: "Tasks", href: "tasks" },
         { name: "Quests", href: "quests" },
         { name: "Quote", href: "quote" },

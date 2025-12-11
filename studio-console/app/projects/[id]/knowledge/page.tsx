@@ -207,7 +207,7 @@ export default function KnowledgePage() {
                 {activeTab === "docs" && (
                     <>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {docs?.map((doc) => (
+                            {docs?.map((doc: Doc<"knowledgeDocs">) => (
                                 <button
                                     key={doc._id}
                                     type="button"
@@ -314,7 +314,7 @@ export default function KnowledgePage() {
 
                         <div className="space-y-4">
                             <h3 className="font-bold text-gray-700">Ingestion jobs</h3>
-                            {ingestionJobs?.map((job) => (
+                            {ingestionJobs?.map((job: Doc<"ingestionJobs">) => (
                                 <JobItem
                                     key={job._id}
                                     job={job}
@@ -603,7 +603,9 @@ function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
         setExpandedId(null);
     }, [job._id]);
 
-    const readyIds = (files ?? []).filter((file) => file.status === "ready").map((file) => file._id);
+    const readyIds = (files ?? [])
+        .filter((file: Doc<"ingestionFiles">) => file.status === "ready")
+        .map((file: Doc<"ingestionFiles">) => file._id);
     const readySet = new Set(readyIds);
     const selectableIds = selectedIds.filter((id) => readySet.has(id));
 
@@ -689,7 +691,7 @@ function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
 
             <div className="p-4 space-y-3">
                 {!files && <div className="text-sm text-gray-400">Loading files...</div>}
-                {files?.map((file) => {
+                {files?.map((file: Doc<"ingestionFiles">) => {
                     const keyPoints = parseJsonList(file.keyPointsJson);
                     const keywords = parseJsonList(file.keywordsJson);
                     const suggestedTags = parseJsonList(file.suggestedTagsJson);

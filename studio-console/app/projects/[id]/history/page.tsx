@@ -24,7 +24,7 @@ export default function HistoryPage() {
             return undefined;
         }
 
-        return conversations.reduce<Record<string, Doc<"conversations">[]>>((acc, curr) => {
+        return conversations.reduce<Record<string, Doc<"conversations">[]>>((acc: Record<string, Doc<"conversations">[]>, curr: Doc<"conversations">) => {
             const phase = curr.phase || "other";
             if (!acc[phase]) {
                 acc[phase] = [];
@@ -44,7 +44,7 @@ export default function HistoryPage() {
                     <div key={phase} className="mb-6">
                         <h3 className="text-xs font-bold uppercase text-gray-500 mb-2 border-b pb-1">{phase}</h3>
                         <div className="space-y-2">
-                            {grouped[phase].map((conv) => (
+                            {grouped[phase].map((conv: Doc<"conversations">) => (
                                 <div 
                                     key={conv._id}
                                     onClick={() => setSelectedConv(conv._id)}
@@ -72,7 +72,7 @@ export default function HistoryPage() {
             <div className="flex-1 bg-white p-6 rounded shadow-sm border overflow-y-auto">
                 {selectedConv ? (
                     <ConversationViewer
-                        conversation={conversations?.find((c) => c._id === selectedConv)}
+                        conversation={conversations?.find((c: Doc<"conversations">) => c._id === selectedConv)}
                     />
                 ) : (
                     <div className="flex items-center justify-center h-full text-gray-400">

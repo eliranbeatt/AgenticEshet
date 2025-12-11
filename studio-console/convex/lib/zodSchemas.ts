@@ -35,6 +35,26 @@ export const QuoteSchema = z.object({
     clientDocumentText: z.string(),
 });
 
+export const EstimationSchema = z.object({
+  materials: z.array(z.object({
+    category: z.string(),
+    label: z.string(),
+    unit: z.string(),
+    quantity: z.number(),
+    unitCost: z.number(),
+    vendor: z.optional(z.string().nullable()),
+    description: z.optional(z.string().nullable())
+  })),
+  work: z.array(z.object({
+    workType: z.string(), // studio, field, management
+    role: z.string(),
+    rateType: z.string(), // day, hour, flat
+    quantity: z.number(),
+    unitCost: z.number(),
+    description: z.optional(z.string().nullable())
+  }))
+});
+
 export const EnhancerSchema = z.object({
     normalizedText: z.string(),
     summary: z.string(),

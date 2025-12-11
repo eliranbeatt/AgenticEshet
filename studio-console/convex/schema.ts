@@ -21,7 +21,101 @@ export default defineSchema({
         overviewSummary: v.optional(v.string()),
         createdAt: v.number(),  // Date.now()
         createdBy: v.string(),  // userId/email (local for now)
+        
+        // Accounting / Costing Fields
+        currency: v.optional(v.string()), // e.g. "ILS", "USD"
+        overheadPercent: v.optional(v.number()), // 0.15
+        riskPercent: v.optional(v.number()),     // 0.10
+        profitPercent: v.optional(v.number()),   // 0.30
     }).index("by_status", ["status"]),
+
+    // 16. SECTIONS (Budget Lines)
+    sections: defineTable({
+        projectId: v.id("projects"),
+        group: v.string(), // e.g., "Studio Elements", "Logistics"
+        name: v.string(),
+        description: v.optional(v.string()),
+        sortOrder: v.number(),
+        pricingMode: v.union(v.literal("estimated"), v.literal("actual"), v.literal("mixed")),
+        
+        // Per-section overrides
+        overheadPercentOverride: v.optional(v.number()),
+        riskPercentOverride: v.optional(v.number()),
+        profitPercentOverride: v.optional(v.number()),
+    })
+    .index("by_project", ["projectId"])
+    .index("by_project_group", ["projectId", "group"]),
+
+    // 17. MATERIAL LINES (The "E" in cost)
+    materialLines: defineTable({
+        sectionId: v.id("sections"),
+        projectId: v.id("projects"), // Denormalized for easier querying
+        category: v.string(), // e.g., "PVC", "Paint"
+        label: v.string(),
+        description: v.optional(v.string()),
+        
+        // Vendor Link
+        vendorId: v.optional(v.id("vendors")),
+        vendorName: v.optional(v.string()), // Snapshot or ad-hoc name
+
+        unit: v.string(), // m, sqm, unit
+        
+        // Planning
+        plannedQuantity: v.number(),
+        plannedUnitCost: v.number(),
+        
+        // Actuals
+        actualQuantity: v.optional(v.number()),
+        actualUnitCost: v.optional(v.number()),
+        
+        taxRate: v.optional(v.number()), // e.g., 0.17
+        status: v.string(), // planned, ordered, received, paid
+        note: v.optional(v.string()),
+    })
+    .index("by_section", ["sectionId"])
+    .index("by_project", ["projectId"]),
+
+    // 18. WORK LINES (The "S" in cost)
+    workLines: defineTable({
+        sectionId: v.id("sections"),
+        projectId: v.id("projects"),
+        workType: v.string(), // studio, field, management
+        role: v.string(),
+        personId: v.optional(v.string()), // Link to user/employee if needed
+        
+        rateType: v.string(), // hour, day, flat
+        
+        // Planning
+        plannedQuantity: v.number(),
+        plannedUnitCost: v.number(),
+        
+        // Actuals
+        actualQuantity: v.optional(v.number()),
+        actualUnitCost: v.optional(v.number()),
+        
+        status: v.string(), // planned, scheduled, done, paid
+        description: v.optional(v.string()),
+    })
+    .index("by_section", ["sectionId"])
+    .index("by_project", ["projectId"]),
+    
+    // 19. VENDORS (Knowledge Base)
+    vendors: defineTable({
+        name: v.string(),
+        category: v.optional(v.string()),
+        contactInfo: v.optional(v.string()),
+        rating: v.optional(v.number()),
+    }).searchIndex("search_name", { searchField: "name" }),
+
+    // 20. MATERIAL CATALOG (Historical Data)
+    materialCatalog: defineTable({
+        category: v.string(),
+        name: v.string(),
+        defaultUnit: v.string(),
+        lastPrice: v.number(),
+        vendorId: v.optional(v.id("vendors")),
+        lastUpdated: v.number(), // Timestamp
+    }).searchIndex("search_material", { searchField: "name" }),
 
     // 2. CANONICAL TASKS: Internal Source of Truth
     tasks: defineTable({

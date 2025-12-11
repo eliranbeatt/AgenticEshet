@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
-import { Plus, Wand2 } from "lucide-react";
+import { Plus, Wand2, Save, Pencil, Trash2, X } from "lucide-react";
 
 export default function LaborTab({ data, projectId }: { data: any, projectId: Id<"projects"> }) {
   const addWorkLine = useMutation(api.accounting.addWorkLine);
   const updateWorkLine = useMutation(api.accounting.updateWorkLine);
+  const deleteWorkLine = useMutation(api.accounting.deleteWorkLine);
   const estimateSection = useAction(api.agents.estimator.run);
 
   const [filterSection, setFilterSection] = useState<string>("all");
@@ -45,6 +46,11 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
       plannedUnitCost: 0,
       status: "planned"
     });
+  };
+
+  const handleDeleteLine = async (lineId: Id<"workLines">) => {
+    if (!confirm("Delete this labor line?")) return;
+    await deleteWorkLine({ id: lineId });
   };
 
   return (
@@ -104,6 +110,7 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Qty</th>
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Rate</th>
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Gap</th>
+                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-200 bg-white">
@@ -112,6 +119,7 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
                                             key={w._id} 
                                             line={w} 
                                             update={updateWorkLine} 
+                                            onDelete={() => handleDeleteLine(w._id)}
                                         />
                                     ))}
                                 </tbody>
@@ -126,88 +134,234 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
   );
 }
 
-function WorkRow({ line, update }: { line: any, update: any }) {
-    const plannedTotal = line.rateType === "flat" ? line.plannedUnitCost : (line.plannedQuantity * line.plannedUnitCost);
-    
-    // Actuals logic
-    const actQty = line.actualQuantity ?? line.plannedQuantity;
-    const actRate = line.actualUnitCost ?? line.plannedUnitCost;
-    const actualTotal = line.rateType === "flat" ? actRate : (actQty * actRate);
+function WorkRow({
+    line,
+    update,
+    onDelete,
+}: {
+    line: any;
+    update: any;
+    onDelete: () => void;
+}) {
+    const [isEditing, setIsEditing] = useState(false);
+    const [draft, setDraft] = useState({
+        role: line.role,
+        description: line.description ?? "",
+        rateType: line.rateType,
+        plannedQuantity: line.plannedQuantity.toString(),
+        plannedUnitCost: line.plannedUnitCost.toString(),
+        actualQuantity: line.actualQuantity?.toString() ?? "",
+        actualUnitCost: line.actualUnitCost?.toString() ?? "",
+        workType: line.workType ?? "studio",
+        status: line.status ?? "",
+    });
+
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setDraft({
+            role: line.role,
+            description: line.description ?? "",
+            rateType: line.rateType,
+            plannedQuantity: line.plannedQuantity.toString(),
+            plannedUnitCost: line.plannedUnitCost.toString(),
+            actualQuantity: line.actualQuantity?.toString() ?? "",
+            actualUnitCost: line.actualUnitCost?.toString() ?? "",
+            workType: line.workType ?? "studio",
+            status: line.status ?? "",
+        });
+        setIsEditing(false);
+    }, [line]);
+
+    const parseNumber = (value: string, fallback: number) => {
+        const parsed = Number(value);
+        return Number.isNaN(parsed) ? fallback : parsed;
+    };
+
+    const plannedQty = draft.rateType === "flat" ? 1 : parseNumber(draft.plannedQuantity, line.plannedQuantity);
+    const plannedRate = parseNumber(draft.plannedUnitCost, line.plannedUnitCost);
+    const plannedTotal = draft.rateType === "flat" ? plannedRate : plannedQty * plannedRate;
+
+    const actQty = draft.rateType === "flat" ? 1 : (draft.actualQuantity ? parseNumber(draft.actualQuantity, line.plannedQuantity) : undefined);
+    const actRate = draft.actualUnitCost ? parseNumber(draft.actualUnitCost, line.plannedUnitCost) : undefined;
+    const actualTotal = draft.rateType === "flat"
+        ? (actRate ?? plannedRate)
+        : ((actQty ?? plannedQty) * (actRate ?? plannedRate));
 
     const gap = actualTotal - plannedTotal;
     const isOverBudget = gap > 0;
 
+    const handleSave = async () => {
+        await update({
+            id: line._id,
+            updates: {
+                role: draft.role || line.role,
+                description: draft.description || undefined,
+                rateType: draft.rateType,
+                plannedQuantity: draft.rateType === "flat" ? 1 : plannedQty,
+                plannedUnitCost: plannedRate,
+                actualQuantity: draft.rateType === "flat" ? undefined : (draft.actualQuantity ? parseNumber(draft.actualQuantity, line.plannedQuantity) : undefined),
+                actualUnitCost: draft.actualUnitCost ? parseNumber(draft.actualUnitCost, line.plannedUnitCost) : undefined,
+                status: draft.status || line.status,
+                workType: draft.workType,
+            },
+        });
+        setIsEditing(false);
+    };
+
+    const handleCancel = () => {
+        setDraft({
+            role: line.role,
+            description: line.description ?? "",
+            rateType: line.rateType,
+            plannedQuantity: line.plannedQuantity.toString(),
+            plannedUnitCost: line.plannedUnitCost.toString(),
+            actualQuantity: line.actualQuantity?.toString() ?? "",
+            actualUnitCost: line.actualUnitCost?.toString() ?? "",
+            workType: line.workType ?? "studio",
+            status: line.status ?? "",
+        });
+        setIsEditing(false);
+    };
+
+    const plannedQuantityCell = draft.rateType === "flat" ? <span className="text-xs text-gray-500">-</span> : (
+        isEditing ? (
+            <input
+                type="number"
+                className="w-16 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                value={draft.plannedQuantity}
+                onChange={(e) => setDraft((prev) => ({ ...prev, plannedQuantity: e.target.value }))}
+            />
+        ) : (
+            plannedQty
+        )
+    );
+
+    const actualQuantityCell = draft.rateType === "flat" ? <span className="text-xs text-gray-500">-</span> : (
+        isEditing ? (
+            <input
+                type="number"
+                className="w-16 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                placeholder={line.plannedQuantity.toString()}
+                value={draft.actualQuantity}
+                onChange={(e) => setDraft((prev) => ({ ...prev, actualQuantity: e.target.value }))}
+            />
+        ) : (
+            actQty ?? <span className="text-xs text-gray-400">-</span>
+        )
+    );
+
     return (
         <tr className="hover:bg-gray-50">
             <td className="px-3 py-2">
-                <input 
-                    className="w-full bg-transparent border-none focus:ring-1 rounded px-1 font-medium" 
-                    defaultValue={line.role}
-                    onBlur={(e) => update({ id: line._id, updates: { role: e.target.value } })}
-                />
-                <input 
-                    className="w-full bg-transparent border-none focus:ring-1 rounded px-1 text-xs text-gray-500" 
-                    defaultValue={line.description || ""}
-                    placeholder="Description..."
-                    onBlur={(e) => update({ id: line._id, updates: { description: e.target.value } })}
-                />
+                {isEditing ? (
+                    <div className="flex flex-col gap-1">
+                        <input
+                            className="w-full bg-transparent border px-2 py-1 rounded font-medium"
+                            value={draft.role}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, role: e.target.value }))}
+                        />
+                        <input
+                            className="w-full bg-transparent border px-2 py-1 rounded text-xs text-gray-700"
+                            value={draft.description}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, description: e.target.value }))}
+                            placeholder="Description..."
+                        />
+                    </div>
+                ) : (
+                    <>
+                        <div className="font-medium">{line.role}</div>
+                        <div className="text-xs text-gray-500">{line.description || "No description"}</div>
+                    </>
+                )}
             </td>
              <td className="px-3 py-2">
-                 <select 
-                    className="bg-transparent border-none focus:ring-1 rounded px-1 text-xs"
-                    value={line.rateType}
-                    onChange={(e) => update({ id: line._id, updates: { rateType: e.target.value } })}
-                 >
-                    <option value="day">Day</option>
-                    <option value="hour">Hour</option>
-                    <option value="flat">Flat</option>
-                 </select>
+                 {isEditing ? (
+                    <select
+                        className="bg-transparent border px-2 py-1 rounded text-xs"
+                        value={draft.rateType}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, rateType: e.target.value }))}
+                    >
+                        <option value="day">Day</option>
+                        <option value="hour">Hour</option>
+                        <option value="flat">Flat</option>
+                    </select>
+                 ) : (
+                    <div className="text-sm text-gray-700 capitalize">{line.rateType}</div>
+                 )}
             </td>
             
-            {/* Planned */}
             <td className="px-3 py-2 text-right bg-blue-50/30">
-                {line.rateType !== "flat" && (
+                {plannedQuantityCell}
+            </td>
+            <td className="px-3 py-2 text-right bg-blue-50/30">
+                {isEditing ? (
                     <input 
                         type="number"
-                        className="w-16 text-right bg-transparent border-none focus:ring-1 rounded px-1" 
-                        defaultValue={line.plannedQuantity}
-                        onBlur={(e) => update({ id: line._id, updates: { plannedQuantity: parseFloat(e.target.value) } })}
+                        className="w-20 text-right bg-transparent border px-2 py-1 rounded text-sm" 
+                        value={draft.plannedUnitCost}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, plannedUnitCost: e.target.value }))}
                     />
+                ) : (
+                    plannedRate.toFixed(2)
                 )}
-            </td>
-            <td className="px-3 py-2 text-right bg-blue-50/30">
-                <input 
-                    type="number"
-                    className="w-20 text-right bg-transparent border-none focus:ring-1 rounded px-1" 
-                    defaultValue={line.plannedUnitCost}
-                    onBlur={(e) => update({ id: line._id, updates: { plannedUnitCost: parseFloat(e.target.value) } })}
-                />
             </td>
 
-            {/* Actual */}
             <td className="px-3 py-2 text-right bg-green-50/30">
-                {line.rateType !== "flat" && (
-                     <input 
-                        type="number"
-                        className="w-16 text-right bg-transparent border-none focus:ring-1 rounded px-1" 
-                        placeholder={line.plannedQuantity.toString()}
-                        defaultValue={line.actualQuantity}
-                        onBlur={(e) => update({ id: line._id, updates: { actualQuantity: e.target.value ? parseFloat(e.target.value) : undefined } })}
-                    />
-                )}
+                {actualQuantityCell}
             </td>
             <td className="px-3 py-2 text-right bg-green-50/30">
-                <input 
-                    type="number"
-                    className="w-20 text-right bg-transparent border-none focus:ring-1 rounded px-1" 
-                    placeholder={line.plannedUnitCost.toString()}
-                    defaultValue={line.actualUnitCost}
-                    onBlur={(e) => update({ id: line._id, updates: { actualUnitCost: e.target.value ? parseFloat(e.target.value) : undefined } })}
-                />
+                {isEditing ? (
+                    <input 
+                        type="number"
+                        className="w-20 text-right bg-transparent border px-2 py-1 rounded text-sm" 
+                        placeholder={line.plannedUnitCost.toString()}
+                        value={draft.actualUnitCost}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, actualUnitCost: e.target.value }))}
+                    />
+                ) : (
+                    actRate?.toFixed(2) ?? <span className="text-xs text-gray-400">-</span>
+                )}
             </td>
 
             <td className={`px-3 py-2 text-right font-medium ${isOverBudget ? 'text-red-600' : 'text-green-600'}`}>
                 {gap.toFixed(2)}
+            </td>
+            <td className="px-3 py-2">
+                <div className="flex items-center gap-2">
+                    {isEditing ? (
+                        <>
+                            <button
+                                className="text-green-600 hover:text-green-700"
+                                title="Save"
+                                onClick={handleSave}
+                            >
+                                <Save className="w-4 h-4" />
+                            </button>
+                            <button
+                                className="text-gray-500 hover:text-gray-700"
+                                title="Cancel"
+                                onClick={handleCancel}
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </>
+                    ) : (
+                        <button
+                            className="text-blue-600 hover:text-blue-700"
+                            title="Edit"
+                            onClick={() => setIsEditing(true)}
+                        >
+                            <Pencil className="w-4 h-4" />
+                        </button>
+                    )}
+                    <button
+                        className="text-red-500 hover:text-red-600"
+                        title="Delete"
+                        onClick={onDelete}
+                    >
+                        <Trash2 className="w-4 h-4" />
+                    </button>
+                </div>
             </td>
         </tr>
     );

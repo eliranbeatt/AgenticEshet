@@ -105,6 +105,8 @@ export default defineSchema({
         category: v.optional(v.string()),
         contactInfo: v.optional(v.string()),
         rating: v.optional(v.number()),
+        description: v.optional(v.string()),
+        tags: v.optional(v.array(v.string())),
     }).searchIndex("search_name", { searchField: "name" }),
 
     // 20. MATERIAL CATALOG (Historical Data)
@@ -115,6 +117,8 @@ export default defineSchema({
         lastPrice: v.number(),
         vendorId: v.optional(v.id("vendors")),
         lastUpdated: v.number(), // Timestamp
+        description: v.optional(v.string()),
+        tags: v.optional(v.array(v.string())),
     }).searchIndex("search_material", { searchField: "name" }),
 
     // 21. LABOR RATES (Roles & Standard Costs)
@@ -124,6 +128,32 @@ export default defineSchema({
         defaultRate: v.number(), // ILS
         category: v.optional(v.string()), // "Studio", "Field", "Management"
     }).searchIndex("search_role", { searchField: "role" }),
+
+    // 22. EMPLOYEES (Staff & Contractors)
+    employees: defineTable({
+        name: v.string(),
+        description: v.optional(v.string()),
+        tags: v.optional(v.array(v.string())),
+        role: v.optional(v.string()),
+        contactInfo: v.optional(v.string()),
+        status: v.optional(v.string()),
+    }).searchIndex("search_name", { searchField: "name" }),
+
+    // 23. PURCHASES (Accounting / Operations)
+    purchases: defineTable({
+        itemName: v.string(),
+        description: v.optional(v.string()),
+        vendorId: v.optional(v.id("vendors")),
+        materialId: v.optional(v.id("materialCatalog")),
+        employeeId: v.optional(v.id("employees")),
+        projectId: v.optional(v.id("projects")),
+        amount: v.number(),
+        currency: v.optional(v.string()),
+        status: v.optional(v.string()),
+        tags: v.optional(v.array(v.string())),
+        purchasedAt: v.optional(v.number()),
+        createdAt: v.number(),
+    }).index("by_project", ["projectId"]),
 
     // 2. CANONICAL TASKS: Internal Source of Truth
     tasks: defineTable({

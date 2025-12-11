@@ -53,6 +53,12 @@ export default function RootLayout({
                                     Ingestion
                                 </Link>
                                 <Link
+                                    href="/management"
+                                    className="block rounded px-4 py-2 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                                >
+                                    Management
+                                </Link>
+                                <Link
                                     href="/admin"
                                     className="block rounded px-4 py-2 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                                 >

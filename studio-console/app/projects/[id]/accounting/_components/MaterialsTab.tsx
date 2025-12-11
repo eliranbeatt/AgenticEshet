@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
-import { Save, Plus, Wand2 } from "lucide-react";
+import { Save, Plus, Wand2, Pencil, Trash2, X } from "lucide-react";
 
 export default function MaterialsTab({ data, projectId }: { data: any, projectId: Id<"projects"> }) {
   const addMaterialLine = useMutation(api.accounting.addMaterialLine);
   const updateMaterialLine = useMutation(api.accounting.updateMaterialLine);
+  const deleteMaterialLine = useMutation(api.accounting.deleteMaterialLine);
   const saveToCatalog = useMutation(api.accounting.saveToCatalog);
   const estimateSection = useAction(api.agents.estimator.run);
 
@@ -46,6 +47,11 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
       plannedUnitCost: 0,
       status: "planned"
     });
+  };
+
+  const handleDeleteLine = async (lineId: Id<"materialLines">) => {
+    if (!confirm("Delete this material line?")) return;
+    await deleteMaterialLine({ id: lineId });
   };
 
   const handleSaveToCatalog = async (line: any) => {
@@ -117,7 +123,7 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Qty</th>
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Cost</th>
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Gap</th>
-                                        <th className="px-3 py-2 w-10"></th>
+                                        <th className="px-3 py-2 w-28 text-xs font-medium text-gray-500 uppercase">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-200 bg-white">
@@ -127,6 +133,7 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
                                             line={m} 
                                             update={updateMaterialLine} 
                                             onSaveCatalog={() => handleSaveToCatalog(m)}
+                                            onDelete={() => handleDeleteLine(m._id)}
                                         />
                                     ))}
                                 </tbody>
@@ -141,80 +148,233 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
   );
 }
 
-function MaterialRow({ line, update, onSaveCatalog }: { line: any, update: any, onSaveCatalog: () => void }) {
-    const plannedTotal = line.plannedQuantity * line.plannedUnitCost;
-    const actualTotal = (line.actualQuantity ?? line.plannedQuantity) * (line.actualUnitCost ?? line.plannedUnitCost);
+function MaterialRow({
+    line,
+    update,
+    onSaveCatalog,
+    onDelete,
+}: {
+    line: any;
+    update: any;
+    onSaveCatalog: () => void;
+    onDelete: () => void;
+}) {
+    const [isEditing, setIsEditing] = useState(false);
+    const [draft, setDraft] = useState({
+        label: line.label,
+        category: line.category,
+        vendorName: line.vendorName ?? "",
+        unit: line.unit,
+        plannedQuantity: line.plannedQuantity.toString(),
+        plannedUnitCost: line.plannedUnitCost.toString(),
+        actualQuantity: line.actualQuantity?.toString() ?? "",
+        actualUnitCost: line.actualUnitCost?.toString() ?? "",
+        status: line.status ?? "",
+        description: line.description ?? "",
+    });
+
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setDraft({
+            label: line.label,
+            category: line.category,
+            vendorName: line.vendorName ?? "",
+            unit: line.unit,
+            plannedQuantity: line.plannedQuantity.toString(),
+            plannedUnitCost: line.plannedUnitCost.toString(),
+            actualQuantity: line.actualQuantity?.toString() ?? "",
+            actualUnitCost: line.actualUnitCost?.toString() ?? "",
+            status: line.status ?? "",
+            description: line.description ?? "",
+        });
+        setIsEditing(false);
+    }, [line]);
+
+    const parseNumber = (value: string, fallback: number) => {
+        const parsed = Number(value);
+        return Number.isNaN(parsed) ? fallback : parsed;
+    };
+
+    const plannedQty = parseNumber(draft.plannedQuantity || "0", line.plannedQuantity);
+    const plannedCost = parseNumber(draft.plannedUnitCost || "0", line.plannedUnitCost);
+    const actualQty = draft.actualQuantity ? parseNumber(draft.actualQuantity, line.plannedQuantity) : undefined;
+    const actualCost = draft.actualUnitCost ? parseNumber(draft.actualUnitCost, line.plannedUnitCost) : undefined;
+
+    const plannedTotal = plannedQty * plannedCost;
+    const actualTotal = (actualQty ?? plannedQty) * (actualCost ?? plannedCost);
     const gap = actualTotal - plannedTotal;
     const isOverBudget = gap > 0;
+
+    const handleSave = async () => {
+        await update({
+            id: line._id,
+            updates: {
+                label: draft.label || line.label,
+                category: draft.category || "General",
+                vendorName: draft.vendorName || undefined,
+                unit: draft.unit || line.unit,
+            plannedQuantity: plannedQty,
+            plannedUnitCost: plannedCost,
+            actualQuantity: draft.actualQuantity ? parseNumber(draft.actualQuantity, line.plannedQuantity) : undefined,
+            actualUnitCost: draft.actualUnitCost ? parseNumber(draft.actualUnitCost, line.plannedUnitCost) : undefined,
+            status: draft.status || line.status,
+            description: draft.description || undefined,
+        },
+    });
+        setIsEditing(false);
+    };
+
+    const handleCancel = () => {
+        setDraft({
+            label: line.label,
+            category: line.category,
+            vendorName: line.vendorName ?? "",
+            unit: line.unit,
+            plannedQuantity: line.plannedQuantity.toString(),
+            plannedUnitCost: line.plannedUnitCost.toString(),
+            actualQuantity: line.actualQuantity?.toString() ?? "",
+            actualUnitCost: line.actualUnitCost?.toString() ?? "",
+            status: line.status ?? "",
+            description: line.description ?? "",
+        });
+        setIsEditing(false);
+    };
 
     return (
         <tr className="hover:bg-gray-50">
             <td className="px-3 py-2">
-                <input 
-                    className="w-full bg-transparent border-none focus:ring-1 rounded px-1" 
-                    defaultValue={line.label}
-                    onBlur={(e) => update({ id: line._id, updates: { label: e.target.value } })}
-                />
-                <div className="text-xs text-gray-400">{line.category}</div>
+                {isEditing ? (
+                    <div className="flex flex-col gap-1">
+                        <input
+                            className="w-full bg-transparent border px-2 py-1 rounded text-sm"
+                            value={draft.label}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, label: e.target.value }))}
+                        />
+                        <input
+                            className="w-full bg-transparent border px-2 py-1 rounded text-xs"
+                            value={draft.category}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, category: e.target.value }))}
+                            placeholder="Category"
+                        />
+                    </div>
+                ) : (
+                    <>
+                        <div className="font-medium">{line.label}</div>
+                        <div className="text-xs text-gray-500">{line.category}</div>
+                        {line.description && <div className="text-xs text-gray-400">{line.description}</div>}
+                    </>
+                )}
             </td>
             <td className="px-3 py-2">
-                 <input 
-                    className="w-full bg-transparent border-none focus:ring-1 rounded px-1" 
-                    defaultValue={line.vendorName}
-                    placeholder="Vendor..."
-                    onBlur={(e) => update({ id: line._id, updates: { vendorName: e.target.value } })}
-                />
-            </td>
-            
-            {/* Planned */}
-            <td className="px-3 py-2 text-right bg-blue-50/30">
-                <input 
-                    type="number"
-                    className="w-16 text-right bg-transparent border-none focus:ring-1 rounded px-1" 
-                    defaultValue={line.plannedQuantity}
-                    onBlur={(e) => update({ id: line._id, updates: { plannedQuantity: parseFloat(e.target.value) } })}
-                />
+                {isEditing ? (
+                    <input
+                        className="w-full bg-transparent border px-2 py-1 rounded text-sm"
+                        value={draft.vendorName}
+                        placeholder="Vendor..."
+                        onChange={(e) => setDraft((prev) => ({ ...prev, vendorName: e.target.value }))}
+                    />
+                ) : (
+                    <div className="text-sm text-gray-700">{line.vendorName || <span className="text-gray-400">-</span>}</div>
+                )}
             </td>
             <td className="px-3 py-2 text-right bg-blue-50/30">
-                <input 
-                    type="number"
-                    className="w-20 text-right bg-transparent border-none focus:ring-1 rounded px-1" 
-                    defaultValue={line.plannedUnitCost}
-                    onBlur={(e) => update({ id: line._id, updates: { plannedUnitCost: parseFloat(e.target.value) } })}
-                />
+                {isEditing ? (
+                    <input
+                        type="number"
+                        className="w-16 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                        value={draft.plannedQuantity}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, plannedQuantity: e.target.value }))}
+                    />
+                ) : (
+                    plannedQty
+                )}
+            </td>
+            <td className="px-3 py-2 text-right bg-blue-50/30">
+                {isEditing ? (
+                    <input
+                        type="number"
+                        className="w-20 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                        value={draft.plannedUnitCost}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, plannedUnitCost: e.target.value }))}
+                    />
+                ) : (
+                    plannedCost.toFixed(2)
+                )}
             </td>
 
-            {/* Actual */}
             <td className="px-3 py-2 text-right bg-green-50/30">
-                 <input 
-                    type="number"
-                    className="w-16 text-right bg-transparent border-none focus:ring-1 rounded px-1" 
-                    placeholder={line.plannedQuantity.toString()}
-                    defaultValue={line.actualQuantity}
-                    onBlur={(e) => update({ id: line._id, updates: { actualQuantity: e.target.value ? parseFloat(e.target.value) : undefined } })}
-                />
+                {isEditing ? (
+                    <input
+                        type="number"
+                        className="w-16 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                        placeholder={line.plannedQuantity.toString()}
+                        value={draft.actualQuantity}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, actualQuantity: e.target.value }))}
+                    />
+                ) : (
+                    actualQty ?? <span className="text-gray-400 text-xs">-</span>
+                )}
             </td>
             <td className="px-3 py-2 text-right bg-green-50/30">
-                <input 
-                    type="number"
-                    className="w-20 text-right bg-transparent border-none focus:ring-1 rounded px-1" 
-                    placeholder={line.plannedUnitCost.toString()}
-                    defaultValue={line.actualUnitCost}
-                    onBlur={(e) => update({ id: line._id, updates: { actualUnitCost: e.target.value ? parseFloat(e.target.value) : undefined } })}
-                />
+                {isEditing ? (
+                    <input
+                        type="number"
+                        className="w-20 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                        placeholder={line.plannedUnitCost.toString()}
+                        value={draft.actualUnitCost}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, actualUnitCost: e.target.value }))}
+                    />
+                ) : (
+                    actualCost?.toFixed(2) ?? <span className="text-gray-400 text-xs">-</span>
+                )}
             </td>
 
-            <td className={`px-3 py-2 text-right font-medium ${isOverBudget ? 'text-red-600' : 'text-green-600'}`}>
+            <td className={`px-3 py-2 text-right font-medium ${isOverBudget ? "text-red-600" : "text-green-600"}`}>
                 {gap.toFixed(2)}
             </td>
             <td className="px-3 py-2">
-                <button 
-                    onClick={onSaveCatalog}
-                    className="text-gray-400 hover:text-blue-600"
-                    title="Save to Catalog"
-                >
-                    <Save className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                    {isEditing ? (
+                        <>
+                            <button
+                                onClick={handleSave}
+                                className="text-green-600 hover:text-green-700"
+                                title="Save changes"
+                            >
+                                <Save className="w-4 h-4" />
+                            </button>
+                            <button
+                                onClick={handleCancel}
+                                className="text-gray-500 hover:text-gray-700"
+                                title="Cancel"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </>
+                    ) : (
+                        <button
+                            onClick={() => setIsEditing(true)}
+                            className="text-blue-600 hover:text-blue-700"
+                            title="Edit line"
+                        >
+                            <Pencil className="w-4 h-4" />
+                        </button>
+                    )}
+                    <button
+                        onClick={onSaveCatalog}
+                        className="text-gray-500 hover:text-blue-600"
+                        title="Save to Catalog"
+                    >
+                        <Save className="w-4 h-4" />
+                    </button>
+                    <button
+                        onClick={onDelete}
+                        className="text-red-500 hover:text-red-600"
+                        title="Delete line"
+                    >
+                        <Trash2 className="w-4 h-4" />
+                    </button>
+                </div>
             </td>
         </tr>
     );

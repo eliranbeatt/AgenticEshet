@@ -24,6 +24,7 @@ import type * as lib_hash from "../lib/hash.js";
 import type * as lib_openai from "../lib/openai.js";
 import type * as lib_textChunker from "../lib/textChunker.js";
 import type * as lib_zodSchemas from "../lib/zodSchemas.js";
+import type * as management from "../management.js";
 import type * as projects from "../projects.js";
 import type * as quests from "../quests.js";
 import type * as seed from "../seed.js";
@@ -53,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   "lib/openai": typeof lib_openai;
   "lib/textChunker": typeof lib_textChunker;
   "lib/zodSchemas": typeof lib_zodSchemas;
+  management: typeof management;
   projects: typeof projects;
   quests: typeof quests;
   seed: typeof seed;

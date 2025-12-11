@@ -28,7 +28,7 @@ export const QuoteSchema = z.object({
         label: z.string(),              // e.g. "Materials", "Studio hours"
         amount: z.number(),             // numeric total
         currency: z.string(),           // "ILS", etc.
-        notes: z.string().optional(),
+        notes: z.string().nullable(),   // API requires explicit null when absent
     })),
     totalAmount: z.number(),
     currency: z.string(),

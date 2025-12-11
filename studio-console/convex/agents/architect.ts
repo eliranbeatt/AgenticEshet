@@ -27,6 +27,16 @@ export const getContext = internalQuery({
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
         .collect();
 
+    const existingTasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
+    const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
+        projectId: args.projectId,
+        limit: 3,
+    });
+
     const skill = await ctx.db
       .query("skills")
       .withIndex("by_name", (q) => q.eq("name", "architect")) // We might need to seed this skill
@@ -36,6 +46,8 @@ export const getContext = internalQuery({
       project,
       latestPlan,
       quests,
+      existingTasks,
+      knowledgeDocs,
       systemPrompt: skill?.content || "You are a Senior Solutions Architect.",
     };
   },
@@ -49,10 +61,15 @@ export const saveTasks = internalMutation({
         description: v.string(),
         category: v.union(v.literal("Logistics"), v.literal("Creative"), v.literal("Finance"), v.literal("Admin"), v.literal("Studio")),
         priority: v.union(v.literal("High"), v.literal("Medium"), v.literal("Low")),
-        questName: v.optional(v.string()),
+        questName: v.optional(v.union(v.string(), v.null())),
     })),
   },
   handler: async (ctx, args) => {
+    const tasks = args.tasks.map((t) => ({
+        ...t,
+        questName: t.questName ?? undefined,
+    }));
+
     const existingTasks = await ctx.db
         .query("tasks")
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
@@ -67,7 +84,7 @@ export const saveTasks = internalMutation({
         .collect();
     const questLookup = new Map(quests.map((quest) => [quest.title.trim().toLowerCase(), quest._id]));
 
-    for (const t of args.tasks) {
+    for (const t of tasks) {
         const normalizedTitle = t.title.trim().toLowerCase();
         const questId = t.questName ? questLookup.get(t.questName.trim().toLowerCase()) : undefined;
         const existingTask = existingByTitle.get(normalizedTitle);
@@ -105,13 +122,24 @@ export const run = action({
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
-    const { project, latestPlan, systemPrompt, quests } = await ctx.runQuery(internal.agents.architect.getContext, {
+    const { project, latestPlan, systemPrompt, quests, existingTasks, knowledgeDocs } = await ctx.runQuery(internal.agents.architect.getContext, {
       projectId: args.projectId,
     });
 
     if (!latestPlan) {
         throw new Error("No active plan found. Approve a plan before generating tasks.");
     }
+
+    const existingTaskSummary = existingTasks.length
+        ? existingTasks
+              .slice(0, 20)
+              .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority})`)
+              .join("\n")
+        : "- No existing tasks found.";
+
+    const knowledgeSummary = knowledgeDocs.length
+        ? knowledgeDocs.map((doc) => `- ${doc.title}: ${doc.summary}`).join("\n")
+        : "- No knowledge documents available.";
 
     const userPrompt = `Project: ${project.name}
     
@@ -121,16 +149,31 @@ ${latestPlan.contentMarkdown}
 Quests:
 ${quests.length ? quests.map((quest) => `- ${quest.title}: ${quest.description || "No description"}`).join("\n") : "No quests defined. If necessary, supply questName field to indicate proposed grouping."}
 
-Task: Break down this plan into actionable, atomic tasks. Focus on the immediate next steps implied by the plan. When relevant, set the questName to one of the quests above so tasks can be grouped. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed.`;
+Existing Tasks (for deduplication):
+${existingTaskSummary}
+
+Knowledge Documents:
+${knowledgeSummary}
+
+Task: Break down this plan into actionable, atomic tasks. Focus on the immediate next steps implied by the plan. When relevant, set the questName to one of the quests above so tasks can be grouped. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge.`;
 
     const result = await callChatWithSchema(TaskBreakdownSchema, {
       systemPrompt,
       userPrompt,
     });
 
+    // Normalize questName: Convex v.optional does not accept null, only undefined.
+    const normalizedTasks = result.tasks.map((task) => {
+        const questName = task.questName?.trim();
+        return {
+            ...task,
+            questName: questName && questName.length > 0 ? questName : undefined,
+        };
+    });
+
     await ctx.runMutation(internal.agents.architect.saveTasks, {
       projectId: args.projectId,
-      tasks: result.tasks,
+      tasks: normalizedTasks,
     });
 
     return result;

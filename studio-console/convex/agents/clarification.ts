@@ -33,11 +33,17 @@ export const getContext = internalQuery({
       .order("desc")
       .take(3);
 
+    const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
+      projectId: args.projectId,
+      limit: 3,
+    });
+
     return {
       project,
       systemPrompt: skill?.content || "You are a helpful project assistant.",
       activePlan,
       recentClarifications,
+      knowledgeDocs,
     };
   },
 });
@@ -106,7 +112,7 @@ export const run = action({
   },
   handler: async (ctx, args) => {
     // 1. Get Context
-    const { project, systemPrompt, activePlan, recentClarifications } = await ctx.runQuery(internal.agents.clarification.getContext, {
+    const { project, systemPrompt, activePlan, recentClarifications, knowledgeDocs } = await ctx.runQuery(internal.agents.clarification.getContext, {
       projectId: args.projectId,
     });
 
@@ -126,6 +132,10 @@ export const run = action({
         })
         .join("\n");
 
+    const knowledgeSummary = knowledgeDocs.length
+        ? knowledgeDocs.map((doc) => `- ${doc.title}: ${doc.summary}`).join("\n")
+        : "- No knowledge documents available.";
+
     const userPrompt = [
         `Project: ${project.name}`,
         `Client: ${project.clientName}`,
@@ -136,6 +146,9 @@ export const run = action({
         "",
         "Recent Clarification Interactions:",
         previousClarifications || "- None recorded",
+        "",
+        "Knowledge Documents:",
+        knowledgeSummary,
         "",
         "Live chat history from the user follows. Provide a structured clarification summary and list of open questions based on everything you know.",
     ].join("\n");

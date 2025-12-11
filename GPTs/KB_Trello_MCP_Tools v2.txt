@@ -1,0 +1,252 @@
+# KB_Trello_MCP_Tools
+
+Guidelines:
+- All tools are `Zapier_trello_*`.
+- Always send an `instructions` field (English sentence explaining the action).
+- Parameter names = English.
+- Trello content values (board/list/card names, descriptions, checklist items, label names, comment text) = Hebrew.
+- IDs (board, list, label, card, member) come from previous tool responses.
+
+This doc focuses on tools the assistant should actually use.
+
+---
+
+## 1. Boards
+
+### 1.1 Find board by name
+**Tool:** `Zapier_trello_find_board`  
+**Use:** Check if a board (e.g., project board or `test` board) exists.
+
+**Key params:**
+- `instructions`
+- `name` – board name, e.g. `"אמלי – חתונת ליאורה"` or `"test"`
+- `organization_id` – if needed
+
+### 1.2 Create board
+**Tool:** `Zapier_trello_create_board`  
+**Use:** Create a new project board (or `test` board if missing).
+
+**Key params:**
+- `instructions`
+- `name` – board name (Hebrew for projects, `"test"` for the test board)
+- `desc` – Hebrew description for project boards
+- `prefs_permissionLevel` – e.g. `"private"`
+- `organization_id` – optional
+
+**Pattern:**
+1. Try `Zapier_trello_find_board`.
+2. If not found, call `Zapier_trello_create_board`.
+
+---
+
+## 2. Lists
+
+### 2.1 Find list on a board
+**Tool:** `Zapier_trello_find_list_on_a_board`  
+**Use:** Get list ID by name.
+
+**Key params:**
+- `instructions`
+- `name` – list name (Hebrew for project lists like `"קניות"`, or `"Backlog"` on the `test` board)
+- `board` – board ID
+
+### 2.2 Create list
+**Tool:** `Zapier_trello_create_list`  
+**Use:** Create missing lists on a board.
+
+**Key params:**
+- `instructions`
+- `name` – list name
+- `board` – board ID
+
+**Standard pattern:**
+- For project boards: ensure the default Hebrew lists exist (`הצעת מחיר`, `קניות`, `עבודה בסטודיו`, `הקמה + פירוק`, `אדמין / כספים`, ואופציונלית `פירוק`).
+- For the `test` board: ensure there is a `Backlog` list.
+
+---
+
+## 3. Labels
+
+### 3.1 Find label on board
+**Tool:** `Zapier_trello_find_label_on_board`  
+**Use:** Find label by name on a board.
+
+**Key params:**
+- `instructions`
+- `name` – Hebrew label name (`פרויקט – ...`, `סוג – ...`, `אחראי – ...`)
+- `board` – board ID
+
+### 3.2 Create label
+**Tool:** `Zapier_trello_create_label`  
+**Use:** Create label when it doesn’t exist.
+
+**Key params:**
+- `instructions`
+- `name` – Hebrew label name
+- `board` – board ID
+- `color` – e.g. `"green"` (choice is not critical)
+
+### 3.3 Add label to card
+**Tool:** `Zapier_trello_add_label_to_card`  
+**Use:** Attach label to a card after card creation (if needed).
+
+**Key params:**
+- `instructions`
+- `board`, `list`, `card`
+- `label` – label ID
+
+**Pattern:**
+- To ensure a card has project/type/employee labels:
+  1. Find or create each label.
+  2. Pass label IDs in `labels` when creating the card, or add later via `Zapier_trello_add_label_to_card`.
+
+---
+
+## 4. Members
+
+### 4.1 Find member
+**Tool:** `Zapier_trello_find_member`  
+**Use:** Map a human name to Trello member ID.
+
+**Key params:**
+- `instructions`
+- `member_name`
+- `organization_id`
+
+### 4.2 Add members to card
+**Tool:** `Zapier_trello_add_members_to_card`  
+**Use:** Assign one or more members to a card.
+
+**Key params:**
+- `instructions`
+- `board`, `list`, `card`
+- `member` – array of member IDs
+
+---
+
+## 5. Cards – creation, update, move
+
+### 5.1 Create card
+**Tool:** `Zapier_trello_create_card`  
+**Use:** Main way to create project tasks and finance cards.
+
+**Key params:**
+- `instructions`
+- `board`
+- `list`
+- `name` – Hebrew card title
+- `desc` – Hebrew description
+- `labels` – array of label IDs (project, type, employee)
+- `member` – array of member IDs
+- `due` – optional due date
+- `checklist_name` – Hebrew checklist title
+- `checklist_items` – array of Hebrew strings
+
+### 5.2 Update card
+**Tool:** `Zapier_trello_update_card`  
+**Use:** Adjust name, description, due dates, dueComplete, etc.
+
+**Useful params:**
+- `instructions`
+- `board`, `list`, `card`
+- `name` (Hebrew)
+- `desc` (Hebrew)
+- `due`, `start_date`
+- `dueComplete` – `"true"` / `"false"`
+
+### 5.3 Move card
+**Tool:** `Zapier_trello_move_card_to_list`  
+**Use:** Move a card between lists (or boards).
+
+**Key params:**
+- `instructions`
+- `board`, `card`
+- `list` – current list ID
+- `to_list` – target list ID
+- `to_board` – usually same board ID
+
+---
+
+## 6. Checklists
+
+### 6.1 Add checklist
+**Tool:** `Zapier_trello_add_checklist_to_card`  
+**Use:** Add a checklist (if not created via `create_card`).
+
+**Key params:**
+- `instructions`
+- `board`, `list`, `card`
+- `checklist_name` – Hebrew
+- `checklist_items` – array of Hebrew strings
+
+### 6.2 Add single checklist item
+**Tool:** `Zapier_trello_create_checklist_item_in_card`  
+**Use:** Append a single step.
+
+**Key params:**
+- `instructions`
+- `board`, `list`, `card`
+- `checklist` – checklist ID
+- `name` – Hebrew item text
+
+---
+
+## 7. Comments
+
+### 7.1 Create comment
+**Tool:** `Zapier_trello_create_comment`  
+**Use:** Add notes or cross-links (e.g., from finance card to source task).
+
+**Key params:**
+- `instructions`
+- `board`, `list`, `card`
+- `text` – Hebrew
+
+Example text:
+- `כרטיס זה עוקב אחרי ההוצאה מהכרטיס: <לינק לכרטיס המקורי>.`
+
+---
+
+## 8. Searching cards
+
+### 8.1 Structured search
+**Tool:** `Zapier_trello_find_card`  
+**Use:** Find cards by board, label, member, list_name, keyword.
+
+**Key params:**
+- `instructions`
+- `board` (optional)
+- `label`, `member` (optional IDs)
+- `keyword` (string)
+- `list_name` (Hebrew list name)
+- `cards_limit`
+- `open_cards_only`
+
+### 8.2 Custom query
+**Tool:** `Zapier_trello_find_card_by_custom_query`  
+**Use:** Advanced search via Trello query string.
+
+**Key params:**
+- `instructions`
+- `query`
+- `cards_limit`
+- `organization_id`
+
+---
+
+## 9. Attachments and linking
+
+### 9.1 Add attachment to card
+**Tool:** `Zapier_trello_add_attachment_to_card`  
+**Use:** Link cards together (e.g. backlog card ↔ project card) using URLs.
+
+**Key params:**
+- `instructions`
+- `board`, `list`, `card`
+- `url` – URL string of the attached resource (e.g. card URL)
+- `file` – often unused for linking
+
+**Pattern for linking:**
+1. Get the target card URL from card data.
+2. On the “backlog” card, call `Zapier_trello_add_attachment_to_card` with that URL.
+3. Optionally also attach backlog card URL to the project card for two-way linking.

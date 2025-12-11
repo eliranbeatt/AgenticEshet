@@ -1,0 +1,153 @@
+# KB_Trello_Format_Examples
+
+This file defines how the assistant should structure textual plans and shows typical MCP payload shapes.
+
+---
+
+## 1. Human-readable Trello plan (for user review / canvas editing)
+
+Use this style when presenting a full plan:
+
+```text
+שם הלוח: אמלי – חתונת ליאורה
+
+רשימה: הצעת מחיר
+- כרטיס: איסוף דרישות מהלקוח
+  תיאור: ריכוז כל הדרישות, המגבלות והעדפות הלקוח לפני בניית ההצעה.
+  צ’ק־ליסט:
+    - לקבוע שיחת תדרוך עם הלקוח
+    - לשאול על כמות אורחים, תאריך ומיקום
+    - לברר תקציב וטווחי מחיר
+    - לאסוף דוגמאות/השראות מהלקוח
+  לייבלים:
+    - פרויקט – חתונת ליאורה
+    - סוג – הצעת מחיר
+    - אחראי – אמלי
+
+רשימה: קניות
+- כרטיס: קניית פרחים מספק X
+  תיאור: רכישת פרחים לעיצוב הבמה וחלל האירוע.
+  צ’ק־ליסט:
+    - לקבל הצעת מחיר מספק X
+    - להשוות מחירים מול ספק נוסף
+    - לאשר הזמנה
+    - לתאם משלוח
+    - לקבל חשבונית
+  לייבלים:
+    - פרויקט – חתונת ליאורה
+    - סוג – קניות
+    - אחראי – אמלי
+
+רשימה: עבודה בסטודיו
+- כרטיס: בנייה של קיר רקע
+  תיאור: בניית קיר רקע מעץ וצבע לבמה המרכזית.
+  צ’ק־ליסט:
+    - להכין רשימת חומרים
+    - לחתוך קרשים
+    - להרכיב שלד
+    - לצבוע ולייבש
+    - להכין לאריזה
+  לייבלים:
+    - פרויקט – חתונת ליאורה
+    - סוג – עבודה בסטודיו
+    - אחראי – אמלי
+
+רשימה: הקמה + פירוק
+- כרטיס: הקמת הסט באולם
+  תיאור: הובלה, פריקה והקמה מלאה של הסט באולם האירועים.
+  צ’ק־ליסט:
+    - לתאם שעת הגעה עם האולם
+    - להעמיס ציוד לרכב
+    - לפרוק ציוד באולם
+    - להקים את הסט ולבדוק תאורה
+    - לוודא מוכנות לפני תחילת האירוע
+    - לפרק ולטעון ציוד בסיום
+  לייבלים:
+    - פרויקט – חתונת ליאורה
+    - סוג – הקמה + פירוק
+    - אחראי – אמלי
+
+רשימה: אדמין / כספים
+- כרטיס: הוצאה – קניית פרחים מספק X
+  תיאור: הוצאה עבור פרחים לעיצוב הבמה. ספק: X. סכום יוזן לאחר קבלת הצעת מחיר.
+  צ’ק־ליסט:
+    - לקבל הצעת מחיר
+    - לאשר הצעה
+    - להעביר תשלום לספק
+    - לקבל חשבונית
+    - לעדכן בדוח כספים
+  לייבלים:
+    - פרויקט – חתונת ליאורה
+    - סוג – אדמין / כספים
+    - אחראי – אמלי
+Notes:
+
+הכרטיסים הם משימות אמיתיות, לא דוגמאות כלליות.
+
+כל כרטיס כולל תיאור, צ’ק־ליסט, ולייבלים מלאים.
+
+פורמט זה מתאים לקריאה, עריכה ב-canvas והפיכה ישירה לכרטיסים.
+
+2. Typical MCP payload shapes
+2.1 Create a task card with labels and checklist (e.g. in הצעת מחיר)
+json
+Copy code
+{
+  "instructions": "Create a Hebrew task card in the 'הצעת מחיר' list for collecting client requirements.",
+  "board": "<project_board_id>",
+  "list": "<list_id_הצעת_מחיר>",
+  "name": "איסוף דרישות מהלקוח",
+  "desc": "ריכוז כל הדרישות, המגבלות והעדפות הלקוח לפני בניית ההצעה.",
+  "labels": [
+    "<label_id_פרויקט_חתונת_ליאורה>",
+    "<label_id_סוג_הצעת_מחיר>",
+    "<label_id_אחראי_אמלי>"
+  ],
+  "member": [
+    "<member_id_Emily>"
+  ],
+  "checklist_name": "שלבים",
+  "checklist_items": [
+    "לקבוע שיחת תדרוך עם הלקוח",
+    "לברר תאריך, מקום וכמות אורחים",
+    "לשאול על תקציב משוער",
+    "לאסוף השראות מהלקוח"
+  ]
+}
+2.2 Finance expense card (in אדמין / כספים)
+json
+Copy code
+{
+  "instructions": "Create a finance tracking card for the flower purchase expense for this project.",
+  "board": "<project_board_id>",
+  "list": "<list_id_אדמין_כספים>",
+  "name": "הוצאה – קניית פרחים מספק X",
+  "desc": "הוצאה עבור פרחים לעיצוב הבמה. ספק: X. סכום יוזן לאחר קבלת הצעת מחיר. כרטיס מקור: <קישור לכרטיס קניות>.",
+  "labels": [
+    "<label_id_פרויקט_חתונת_ליאורה>",
+    "<label_id_סוג_אדמין_כספים>",
+    "<label_id_אחראי_אמלי>"
+  ],
+  "checklist_name": "מעקב תשלום",
+  "checklist_items": [
+    "לקבל הצעת מחיר",
+    "לאשר הצעה",
+    "להעביר תשלום לספק",
+    "לקבל חשבונית",
+    "לעדכן בדוח כספים"
+  ]
+}
+2.3 Backlog linking card (on test board)
+json
+Copy code
+{
+  "instructions": "Create a backlog card on the 'test' board's Backlog list linked to a specific project card.",
+  "board": "<test_board_id>",
+  "list": "<list_id_Backlog>",
+  "name": "[חתונת ליאורה] איסוף דרישות מהלקוח",
+  "desc": "כרטיס Backlog מקושר לכרטיס בפרויקט 'אמלי – חתונת ליאורה'.",
+  "labels": [],
+  "checklist_name": "",
+  "checklist_items": []
+}
+Then, using Zapier_trello_add_attachment_to_card, attach the project card URL to this backlog card (and optionally attach the backlog card URL back to the project card).

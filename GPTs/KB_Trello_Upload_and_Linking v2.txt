@@ -1,0 +1,157 @@
+# KB_Trello_Upload_and_Linking
+
+This file gives a step-by-step checklist for the assistant for the **upload + linking** phases.
+
+---
+
+## 1. Pre-upload checklist
+
+Before calling MCP tools:
+
+- לוודא שיש תכנון מאושר (טקסט מלא של הלוח והכרטיסים).
+- לוודא שהמשתמש ביקש במפורש להעלות/לעדכן את Trello.
+- לשמור בראש:
+  - שם הלוח,
+  - רשימות וכרטיסים,
+  - שמות לייבלים (פרויקט, סוגים, אחראים),
+  - שמות עובדים.
+
+---
+
+## 2. Uploading to the project board
+
+### 2.1 Board
+
+1. `Zapier_trello_find_board` לפי שם הלוח (עברית).
+2. אם לא נמצא:
+   - `Zapier_trello_create_board` עם name + desc בעברית.
+
+שמור את מזהה הלוח (board ID) לשימוש בהמשך.
+
+### 2.2 Lists
+
+רשימות פרויקט בסיסיות:
+- `הצעת מחיר`
+- `קניות`
+- `עבודה בסטודיו`
+- `הקמה + פירוק`
+- `אדמין / כספים`
+
+רשימה אופציונלית:
+- `פירוק` – אם התכנון כולל יום/שלב פירוק נפרד.
+
+Steps:
+1. עבור כל רשימה שהוגדרה בתכנון:
+   - `Zapier_trello_find_list_on_a_board` (board ID + list name).
+   - אם חסרה, ליצור עם `Zapier_trello_create_list`.
+2. שמור mapping של שם רשימה → list ID.
+
+### 2.3 Labels (project / type / employee)
+
+For each needed label name (from the plan):
+
+1. `Zapier_trello_find_label_on_board`.
+2. If missing, `Zapier_trello_create_label`.
+3. Store mapping from label name → label ID for use when creating cards.
+
+---
+
+## 3. Creating project cards
+
+For every card in the approved plan:
+
+1. Identify for the card:
+   - Target list name (`הצעת מחיר`, `קניות`, `עבודה בסטודיו`, `הקמה + פירוק`, `אדמין / כספים`, או `פירוק`).
+   - Card name (Hebrew).
+   - Description (Hebrew).
+   - Checklist name + items (Hebrew).
+   - Project label name.
+   - Type label name (derived from list).
+   - Employee label name.
+
+2. Optionally, search for an existing card:
+   - `Zapier_trello_find_card` with:
+     - board = project board ID
+     - label = project label ID
+     - keyword = part of card name
+   - If a clear match exists, decide whether to update instead of create.
+
+3. Usually, create a new card with `Zapier_trello_create_card`:
+   - `board` = project board ID
+   - `list` = list ID from mapping
+   - `name`, `desc`
+   - `labels` = [project label ID, type label ID, employee label ID]
+   - `member` = member IDs (if known)
+   - `checklist_name` and `checklist_items` (Hebrew)
+
+4. For finance cards in `אדמין / כספים`:
+   - same pattern, but list = ID of `אדמין / כספים`.
+   - description includes reference to source task and supplier/employee info.
+
+Keep track of created card IDs and, if available, URLs for later linking.
+
+---
+
+## 4. Linking to the `test` board and `Backlog` list
+
+### 4.1 Ensure `test` board and `Backlog` list
+
+1. `Zapier_trello_find_board` with name `"test"`.
+2. If not found → `Zapier_trello_create_board` with:
+   - `name` = `"test"`
+3. On that board:
+   - `Zapier_trello_find_list_on_a_board` with `name` = `"Backlog"`.
+   - If missing → `Zapier_trello_create_list` with `name` = `"Backlog"`.
+
+Keep:
+- `test_board_id`
+- `backlog_list_id`
+
+### 4.2 Creating / linking backlog cards
+
+For each project card that was created or updated:
+
+1. Obtain project card URL from the Trello API response or a follow-up find query.
+
+2. Decide backlog card name, e.g.:
+   - `[<שם פרויקט>] <שם כרטיס>`
+
+3. Optionally check for an existing backlog card:
+   - `Zapier_trello_find_card` on the `test` board with:
+     - `list_name` = `"Backlog"`
+     - `keyword` = part of backlog name
+   - If found and clearly same task → reuse; otherwise create new.
+
+4. Create backlog card if needed:
+   - `Zapier_trello_create_card` with:
+     - `board` = `test_board_id`
+     - `list` = `backlog_list_id`
+     - `name` = backlog name
+     - `desc` = short Hebrew explanation that this card links to the specific project card
+     - `labels` = optional
+
+5. Link project ↔ backlog:
+
+   - Use `Zapier_trello_add_attachment_to_card` on the backlog card:
+     - `board` = `test_board_id`
+     - `list` = `backlog_list_id`
+     - `card` = backlog card ID
+     - `url` = project card URL
+
+   - Optionally also attach backlog card URL to the project card using the same tool with that card as target.
+
+---
+
+## 5. Post-upload validation
+
+After finishing upload & linking:
+
+1. For the project board:
+   - Optionally count how many cards exist per list via `Zapier_trello_find_card` grouped by list_name.
+2. For the `test` board:
+   - Optionally count how many backlog cards were created/linked.
+3. Report back to the user in Hebrew:
+   - איזה לוח שונה/נוצר.
+   - כמה כרטיסים נוצרו בכל רשימה.
+   - כמה כרטיסי Backlog נוצרו וקושרו.
+4. אם היו חריגות (למשל, לייבל לא ניתן ליצירה), לציין ולתת המלצה כיצד לטפל ידנית.

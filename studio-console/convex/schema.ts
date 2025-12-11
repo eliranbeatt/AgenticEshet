@@ -88,7 +88,7 @@ export default defineSchema({
         projectId: v.optional(v.id("projects")),  // null/undefined = global
         title: v.string(),
         storageId: v.string(),         // Convex file storage ID
-        sourceType: v.union(
+        sourceType: v.optional(v.union(
             v.literal("doc_upload"),
             v.literal("plan"),
             v.literal("conversation"),
@@ -96,11 +96,11 @@ export default defineSchema({
             v.literal("quest"),
             v.literal("quote"),
             v.literal("system_note")
-        ),
+        )),
         sourceRefId: v.optional(v.string()),
         phase: v.optional(v.string()),
         clientName: v.optional(v.string()),
-        topics: v.array(v.string()),
+        topics: v.optional(v.array(v.string())),
         domain: v.optional(v.string()),
         language: v.optional(v.string()),
         processingStatus: v.union(
@@ -120,7 +120,7 @@ export default defineSchema({
     knowledgeChunks: defineTable({
         docId: v.id("knowledgeDocs"),
         projectId: v.optional(v.id("projects")),
-        sourceType: v.union(
+        sourceType: v.optional(v.union(
             v.literal("doc_upload"),
             v.literal("plan"),
             v.literal("conversation"),
@@ -128,12 +128,12 @@ export default defineSchema({
             v.literal("quest"),
             v.literal("quote"),
             v.literal("system_note")
-        ),
+        )),
         clientName: v.optional(v.string()),
-        topics: v.array(v.string()),
+        topics: v.optional(v.array(v.string())),
         domain: v.optional(v.string()),
         phase: v.optional(v.string()),
-        createdAt: v.number(),
+        createdAt: v.optional(v.number()), // older chunks may not have this; new writes set it
         text: v.string(),
         embedding: v.array(v.float64()),
     }).vectorIndex("by_embedding", {

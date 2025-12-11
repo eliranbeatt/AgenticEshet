@@ -329,18 +329,28 @@ export const dynamicSearch = action({
     handler: async (ctx, args) => {
         const limit = args.limit ?? 8;
         const minScore = args.minScore ?? 0;
-        const scope = args.scope ?? "project";
-
-        if ((scope === "project" || scope === "both") && !args.projectId) {
-            throw new Error("projectId is required when scope is project or both");
-        }
+        const requestedScope = args.scope ?? "project";
+        const effectiveScope = !args.projectId && requestedScope !== "global" ? "global" : requestedScope;
 
         const embedding = await embedText(args.query);
+        if (!Array.isArray(embedding) || (embedding.length !== 1536 && embedding.length !== 3072)) {
+            throw new Error(`Unexpected embedding dimensions: ${Array.isArray(embedding) ? embedding.length : "unknown"}`);
+        }
+        // Some providers may return 3072-d vectors (e.g., `text-embedding-3-large`). Down-project by averaging pairs.
+        const embedding1536 =
+            embedding.length === 1536
+                ? embedding
+                : embedding.reduce((acc: number[], val: number, idx: number) => {
+                      const targetIdx = Math.floor(idx / 2);
+                      acc[targetIdx] = (acc[targetIdx] ?? 0) + val / 2;
+                      return acc;
+                  }, new Array(1536).fill(0));
+
         const chunkResults: { _id: Doc<"knowledgeChunks">["_id"]; _score: number; scope: "project" | "global" }[] = [];
 
         const searchVectors = async (scopeLabel: "project" | "global") => {
             const vectorArgs: { vector: number[]; limit: number; filter?: (q: any) => any } = {
-                vector: embedding,
+                vector: embedding1536,
                 limit: limit * 3,
             };
 
@@ -356,10 +366,10 @@ export const dynamicSearch = action({
             results.forEach((res) => chunkResults.push({ ...res, scope: scopeLabel }));
         };
 
-        if (scope === "project" || scope === "both") {
+        if (effectiveScope === "project" || effectiveScope === "both") {
             await searchVectors("project");
         }
-        if (scope === "global" || scope === "both") {
+        if (effectiveScope === "global" || effectiveScope === "both") {
             await searchVectors("global");
         }
 
@@ -369,19 +379,19 @@ export const dynamicSearch = action({
                 projectId: args.projectId,
                 agentRole: args.agentRole ?? "unknown",
                 query: args.query,
-                filtersJson: JSON.stringify({
-                    sourceTypes: args.sourceTypes ?? [],
-                    clientNames: args.clientNames ?? [],
-                    domains: args.domains ?? [],
-                    topics: args.topics ?? [],
-                    phases: args.phases ?? [],
-                }),
-                scope,
-                limit,
-                minScore,
-                resultCount: 0,
-                createdAt: Date.now(),
-            });
+            filtersJson: JSON.stringify({
+                sourceTypes: args.sourceTypes ?? [],
+                clientNames: args.clientNames ?? [],
+                domains: args.domains ?? [],
+                topics: args.topics ?? [],
+                phases: args.phases ?? [],
+            }),
+            scope: effectiveScope,
+            limit,
+            minScore,
+            resultCount: 0,
+            createdAt: Date.now(),
+        });
             return [];
         }
 
@@ -443,7 +453,7 @@ export const dynamicSearch = action({
                 topics: args.topics ?? [],
                 phases: args.phases ?? [],
             }),
-            scope,
+            scope: effectiveScope,
             limit,
             minScore,
             resultCount: deduped.length,

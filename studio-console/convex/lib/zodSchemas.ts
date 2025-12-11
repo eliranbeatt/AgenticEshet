@@ -41,4 +41,8 @@ export const EnhancerSchema = z.object({
     keyPoints: z.array(z.string()),
     keywords: z.array(z.string()),
     suggestedTags: z.array(z.string()),
+    topics: z.array(z.string()).default([]),
+    domain: z.string().optional(),
+    clientName: z.string().optional(),
+    language: z.string().optional(),
 });

@@ -56,8 +56,10 @@ export const saveResult = internalMutation({
     response: v.any(), // ClarificationSchema result
   },
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+
     // Log the conversation
-    await ctx.db.insert("conversations", {
+    const conversationId = await ctx.db.insert("conversations", {
       projectId: args.projectId,
       phase: "clarification",
       agentRole: "clarification_agent",
@@ -101,6 +103,23 @@ export const saveResult = internalMutation({
         createdAt: Date.now(),
         createdBy: "agent",
     });
+
+    const conversationText = args.messages
+        .map((msg) => `${msg.role.toUpperCase()}: ${msg.content}`)
+        .join("\n");
+
+    await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+        projectId: args.projectId,
+        sourceType: "conversation",
+        sourceRefId: conversationId,
+        title: `Clarification Conversation ${new Date().toISOString()}`,
+        text: conversationText,
+        summary: args.response.briefSummary || "Clarification summary",
+        tags: ["conversation", "clarification"],
+        topics: [],
+        phase: "clarification",
+        clientName: project?.clientName,
+    });
   },
 });
 
@@ -112,8 +131,18 @@ export const run = action({
   },
   handler: async (ctx, args) => {
     // 1. Get Context
-    const { project, systemPrompt, activePlan, recentClarifications, knowledgeDocs } = await ctx.runQuery(internal.agents.clarification.getContext, {
+    const { project, systemPrompt, activePlan, recentClarifications } = await ctx.runQuery(internal.agents.clarification.getContext, {
       projectId: args.projectId,
+    });
+
+    const knowledgeResults = await ctx.runAction(internal.knowledge.dynamicSearch, {
+        projectId: args.projectId,
+        query: args.chatHistory.map((m) => m.content).join("\n").slice(0, 500) || project.details.notes || project.name,
+        scope: "both",
+        sourceTypes: ["conversation", "plan", "doc_upload"],
+        limit: 6,
+        agentRole: "clarification_agent",
+        includeSummaries: true,
     });
 
     const planSnippet = activePlan
@@ -132,8 +161,8 @@ export const run = action({
         })
         .join("\n");
 
-    const knowledgeSummary = knowledgeDocs.length
-        ? knowledgeDocs.map((doc) => `- ${doc.title}: ${doc.summary}`).join("\n")
+    const knowledgeSummary = knowledgeResults.length
+        ? knowledgeResults.map((doc) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`).join("\n")
         : "- No knowledge documents available.";
 
     const userPrompt = [

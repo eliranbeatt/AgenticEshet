@@ -13,6 +13,7 @@ import type * as agents_architect from "../agents/architect.js";
 import type * as agents_clarification from "../agents/clarification.js";
 import type * as agents_planning from "../agents/planning.js";
 import type * as agents_quote from "../agents/quote.js";
+import type * as backfill from "../backfill.js";
 import type * as conversations from "../conversations.js";
 import type * as ingestion from "../ingestion.js";
 import type * as knowledge from "../knowledge.js";
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   "agents/clarification": typeof agents_clarification;
   "agents/planning": typeof agents_planning;
   "agents/quote": typeof agents_quote;
+  backfill: typeof backfill;
   conversations: typeof conversations;
   ingestion: typeof ingestion;
   knowledge: typeof knowledge;

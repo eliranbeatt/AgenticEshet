@@ -72,6 +72,10 @@ async function processSingleFile(ctx: IngestionActionCtx, file: Doc<"ingestionFi
         keyPoints: enriched.keyPoints,
         keywords: enriched.keywords,
         suggestedTags: enriched.suggestedTags,
+        topics: enriched.topics ?? [],
+        domain: enriched.domain,
+        clientName: enriched.clientName,
+        language: enriched.language,
         error: "",
     });
 }
@@ -179,6 +183,10 @@ export const updateFileStatus = mutation({
         keyPoints: v.optional(v.array(v.string())),
         keywords: v.optional(v.array(v.string())),
         suggestedTags: v.optional(v.array(v.string())),
+        topics: v.optional(v.array(v.string())),
+        domain: v.optional(v.string()),
+        clientName: v.optional(v.string()),
+        language: v.optional(v.string()),
         error: v.optional(v.string()),
         ragDocId: v.optional(v.id("knowledgeDocs")),
     },
@@ -191,6 +199,10 @@ export const updateFileStatus = mutation({
         if (args.keyPoints !== undefined) update.keyPointsJson = JSON.stringify(args.keyPoints);
         if (args.keywords !== undefined) update.keywordsJson = JSON.stringify(args.keywords);
         if (args.suggestedTags !== undefined) update.suggestedTagsJson = JSON.stringify(args.suggestedTags);
+        if (args.topics !== undefined) update.topicsJson = JSON.stringify(args.topics);
+        if (args.domain !== undefined) update.domain = args.domain;
+        if (args.clientName !== undefined) update.clientName = args.clientName;
+        if (args.language !== undefined) update.language = args.language;
         if ("error" in args) update.error = args.error && args.error.length > 0 ? args.error : undefined;
         if ("ragDocId" in args) update.ragDocId = args.ragDocId;
         await ctx.db.patch(args.fileId, update);
@@ -291,6 +303,7 @@ export const commitIngestionJob = action({
             const fileTags = parseJsonList(file.suggestedTagsJson);
             const keyPoints = parseJsonList(file.keyPointsJson);
             const keywords = parseJsonList(file.keywordsJson);
+            const topics = parseJsonList(file.topicsJson);
             const tags = Array.from(new Set([...(job.defaultTags || []), ...fileTags]));
             const docId = await ctx.runMutation(internal.knowledge.createDocRecord, {
                 projectId: file.projectId ?? job.projectId,
@@ -300,6 +313,12 @@ export const commitIngestionJob = action({
                 tags,
                 keyPoints,
                 keywords,
+                topics,
+                domain: file.domain,
+                clientName: file.clientName,
+                language: file.language,
+                sourceType: "doc_upload",
+                sourceRefId: file._id,
                 status: "processing",
             });
 
@@ -313,12 +332,19 @@ export const commitIngestionJob = action({
                 continue;
             }
 
+            const chunkCreatedAt = Date.now();
             const chunkPayload = [];
             for (const chunk of chunks) {
                 const embedding = await embedText(chunk);
                 chunkPayload.push({
                     docId,
                     projectId: file.projectId ?? job.projectId,
+                    sourceType: "doc_upload",
+                    clientName: file.clientName,
+                    topics,
+                    domain: file.domain,
+                    phase: undefined,
+                    createdAt: chunkCreatedAt,
                     text: chunk,
                     embedding,
                 });

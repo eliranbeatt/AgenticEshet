@@ -65,6 +65,7 @@ export const saveTasks = internalMutation({
     })),
   },
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
     const tasks = args.tasks.map((t) => ({
         ...t,
         questName: t.questName ?? undefined,
@@ -113,6 +114,28 @@ export const saveTasks = internalMutation({
             existingByTitle.set(normalizedTitle, { id: newTaskId, source: "agent" });
         }
     }
+
+    const taskSnapshot = await ctx.db
+        .query("tasks")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
+    const taskText = taskSnapshot
+        .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority}) ${task.description || ""}`)
+        .join("\n");
+
+    await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+        projectId: args.projectId,
+        sourceType: "task",
+        sourceRefId: `tasks-${Date.now()}`,
+        title: `Task Snapshot ${new Date().toISOString()}`,
+        text: taskText,
+        summary: `Updated ${args.tasks.length} tasks from architect agent.`,
+        tags: ["tasks", "architect"],
+        topics: [],
+        phase: "planning",
+        clientName: project?.clientName,
+    });
   },
 });
 
@@ -122,8 +145,18 @@ export const run = action({
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
-    const { project, latestPlan, systemPrompt, quests, existingTasks, knowledgeDocs } = await ctx.runQuery(internal.agents.architect.getContext, {
+    const { project, latestPlan, systemPrompt, quests, existingTasks } = await ctx.runQuery(internal.agents.architect.getContext, {
       projectId: args.projectId,
+    });
+
+    const knowledgeDocs = await ctx.runAction(internal.knowledge.dynamicSearch, {
+        projectId: args.projectId,
+        query: latestPlan ? latestPlan.contentMarkdown.slice(0, 800) : project.details.notes || project.name,
+        scope: "both",
+        sourceTypes: ["plan", "task", "quest", "doc_upload"],
+        limit: 8,
+        agentRole: "architect_agent",
+        includeSummaries: true,
     });
 
     if (!latestPlan) {
@@ -138,7 +171,7 @@ export const run = action({
         : "- No existing tasks found.";
 
     const knowledgeSummary = knowledgeDocs.length
-        ? knowledgeDocs.map((doc) => `- ${doc.title}: ${doc.summary}`).join("\n")
+        ? knowledgeDocs.map((doc) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`).join("\n")
         : "- No knowledge documents available.";
 
     const userPrompt = `Project: ${project.name}

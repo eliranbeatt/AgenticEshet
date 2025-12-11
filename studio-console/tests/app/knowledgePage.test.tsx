@@ -6,7 +6,7 @@ import KnowledgePage from "../../app/projects/[id]/knowledge/page";
 const apiMock = vi.hoisted(() => ({
     knowledge: {
         listDocs: Symbol("listDocs"),
-        search: Symbol("searchKnowledge"),
+        dynamicSearch: Symbol("dynamicSearch"),
     },
     ingestion: {
         listJobs: Symbol("listJobs"),
@@ -57,6 +57,7 @@ describe("KnowledgePage ingestion flow", () => {
 
         mockUseAction.mockImplementation((fn) => {
             if (fn === apiMock.ingestion.runIngestionJob) return runIngestionJob;
+            if (fn === apiMock.knowledge.dynamicSearch) return vi.fn();
             return vi.fn();
         });
 

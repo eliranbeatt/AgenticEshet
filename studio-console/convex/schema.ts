@@ -88,6 +88,21 @@ export default defineSchema({
         projectId: v.optional(v.id("projects")),  // null/undefined = global
         title: v.string(),
         storageId: v.string(),         // Convex file storage ID
+        sourceType: v.union(
+            v.literal("doc_upload"),
+            v.literal("plan"),
+            v.literal("conversation"),
+            v.literal("task"),
+            v.literal("quest"),
+            v.literal("quote"),
+            v.literal("system_note")
+        ),
+        sourceRefId: v.optional(v.string()),
+        phase: v.optional(v.string()),
+        clientName: v.optional(v.string()),
+        topics: v.array(v.string()),
+        domain: v.optional(v.string()),
+        language: v.optional(v.string()),
         processingStatus: v.union(
             v.literal("uploaded"),
             v.literal("processing"),
@@ -105,12 +120,26 @@ export default defineSchema({
     knowledgeChunks: defineTable({
         docId: v.id("knowledgeDocs"),
         projectId: v.optional(v.id("projects")),
+        sourceType: v.union(
+            v.literal("doc_upload"),
+            v.literal("plan"),
+            v.literal("conversation"),
+            v.literal("task"),
+            v.literal("quest"),
+            v.literal("quote"),
+            v.literal("system_note")
+        ),
+        clientName: v.optional(v.string()),
+        topics: v.array(v.string()),
+        domain: v.optional(v.string()),
+        phase: v.optional(v.string()),
+        createdAt: v.number(),
         text: v.string(),
         embedding: v.array(v.float64()),
     }).vectorIndex("by_embedding", {
         vectorField: "embedding",
         dimensions: 1536,       // matching your embedding model
-        filterFields: ["projectId"],  // scope per project
+        filterFields: ["projectId", "sourceType", "clientName", "domain", "phase"],  // scope per project
     }),
 
     // 7. QUOTES: internal + client-facing
@@ -181,6 +210,10 @@ export default defineSchema({
         keyPointsJson: v.optional(v.string()),
         keywordsJson: v.optional(v.string()),
         suggestedTagsJson: v.optional(v.string()),
+        topicsJson: v.optional(v.string()),
+        domain: v.optional(v.string()),
+        clientName: v.optional(v.string()),
+        language: v.optional(v.string()),
         userContext: v.optional(v.string()),
         error: v.optional(v.string()),
         ragDocId: v.optional(v.id("knowledgeDocs")),
@@ -198,7 +231,20 @@ export default defineSchema({
         schemaJson: v.string(),       // JSON schema for output
     }),
 
-    // 13. SKILLS (agent prompts)
+    // 13. RETRIEVAL LOGS (observability for RAG queries)
+    retrievalLogs: defineTable({
+        projectId: v.optional(v.id("projects")),
+        agentRole: v.string(),
+        query: v.string(),
+        filtersJson: v.string(),
+        scope: v.string(),            // project | global | both
+        limit: v.number(),
+        minScore: v.optional(v.number()),
+        resultCount: v.number(),
+        createdAt: v.number(),
+    }).index("by_project", ["projectId"]),
+
+    // 14. SKILLS (agent prompts)
     skills: defineTable({
         name: v.string(),         // "clarification", "planning", ...
         type: v.string(),         // "agent_system", "enrichment"
@@ -206,7 +252,7 @@ export default defineSchema({
         metadataJson: v.string(), // e.g. {"phase":"planning"}
     }).index("by_name", ["name"]),
 
-    // 14. SETTINGS (API keys, per-user, per-workspace)
+    // 15. SETTINGS (API keys, per-user, per-workspace)
     settings: defineTable({
         // for simplicity: single global row or keyed by "key"
         key: v.string(),          // "trello_api", etc.

@@ -6,12 +6,25 @@ import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
 
+type SourceType = "doc_upload" | "plan" | "conversation" | "task" | "quest" | "quote" | "system_note";
+
 type KnowledgeSearchResult = {
     chunkId: Id<"knowledgeChunks">;
     docId: Id<"knowledgeDocs">;
-    text: string;
+    text?: string;
     score: number;
-    doc: Pick<Doc<"knowledgeDocs">, "_id" | "title" | "summary" | "tags">;
+    scope: "project" | "global";
+    doc: {
+        _id: Id<"knowledgeDocs">;
+        title: string;
+        summary?: string;
+        tags: string[];
+        sourceType: SourceType;
+        topics: string[];
+        domain?: string | null;
+        clientName?: string | null;
+        phase?: string | null;
+    };
 };
 
 const jobStatusStyles: Record<Doc<"ingestionJobs">["status"], string> = {
@@ -45,7 +58,7 @@ export default function KnowledgePage() {
     const runIngestionJob = useAction(api.ingestion.runIngestionJob);
     const processFile = useAction(api.ingestion.processFile);
     const commitIngestionJob = useAction(api.ingestion.commitIngestionJob);
-    const searchKnowledge = useAction(api.knowledge.search);
+    const searchKnowledge = useAction(api.knowledge.dynamicSearch);
 
     const [activeTab, setActiveTab] = useState<"docs" | "upload" | "search">("docs");
     const [uploading, setUploading] = useState(false);
@@ -53,6 +66,10 @@ export default function KnowledgePage() {
     const [jobContext, setJobContext] = useState("");
     const [jobTags, setJobTags] = useState("");
     const [searchQuery, setSearchQuery] = useState("");
+    const [scope, setScope] = useState<"project" | "global" | "both">("project");
+    const [limit, setLimit] = useState(5);
+    const [minScore, setMinScore] = useState(0);
+    const [sourceTypes, setSourceTypes] = useState<SourceType[]>(["doc_upload", "plan", "conversation"]);
     const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
     const [isSearching, setIsSearching] = useState(false);
     const [selectedDocId, setSelectedDocId] = useState<Id<"knowledgeDocs"> | null>(null);
@@ -137,11 +154,25 @@ export default function KnowledgePage() {
         }
     };
 
+    const toggleSourceType = (type: SourceType) => {
+        setSourceTypes((prev) =>
+            prev.includes(type) ? prev.filter((entry) => entry !== type) : [...prev, type]
+        );
+    };
+
     const handleSearch = async () => {
         if (!searchQuery.trim()) return;
         setIsSearching(true);
         try {
-            const results = await searchKnowledge({ projectId, query: searchQuery });
+            const results = await searchKnowledge({
+                projectId,
+                query: searchQuery,
+                scope,
+                limit: Number.isFinite(limit) ? limit : 5,
+                minScore: Number.isFinite(minScore) ? minScore : 0,
+                sourceTypes: sourceTypes.length ? sourceTypes : undefined,
+                includeSummaries: true,
+            });
             if (Array.isArray(results)) {
                 setSearchResults(results as KnowledgeSearchResult[]);
             } else {
@@ -303,33 +334,105 @@ export default function KnowledgePage() {
 
                 {activeTab === "search" && (
                     <div className="max-w-3xl mx-auto space-y-8">
-                        <div className="flex flex-col md:flex-row gap-2">
-                            <input
-                                type="text"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                                placeholder="Search project knowledge..."
-                                className="flex-1 border rounded p-3 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                            />
-                            <button
-                                onClick={handleSearch}
-                                disabled={isSearching}
-                                className="bg-blue-600 text-white px-6 rounded font-medium disabled:opacity-50"
-                            >
-                                {isSearching ? "Searching..." : "Search"}
-                            </button>
+                        <div className="space-y-4 bg-white p-4 rounded shadow border">
+                            <div className="flex flex-col md:flex-row gap-2">
+                                <input
+                                    type="text"
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                                    placeholder="Ask across project/global knowledge..."
+                                    className="flex-1 border rounded p-3 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                />
+                                <button
+                                    onClick={handleSearch}
+                                    disabled={isSearching}
+                                    className="bg-blue-600 text-white px-6 rounded font-medium disabled:opacity-50"
+                                >
+                                    {isSearching ? "Searching..." : "Search"}
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+                                <label className="flex flex-col gap-1">
+                                    <span className="text-xs uppercase text-gray-500 font-semibold">Scope</span>
+                                    <select
+                                        value={scope}
+                                        onChange={(e) => setScope(e.target.value as "project" | "global" | "both")}
+                                        className="border rounded px-2 py-2"
+                                    >
+                                        <option value="project">Project only</option>
+                                        <option value="global">Global</option>
+                                        <option value="both">Project + global</option>
+                                    </select>
+                                </label>
+                                <label className="flex flex-col gap-1">
+                                    <span className="text-xs uppercase text-gray-500 font-semibold">Limit</span>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={20}
+                                        value={limit}
+                                        onChange={(e) => setLimit(Number(e.target.value) || 5)}
+                                        className="border rounded px-2 py-2"
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-1">
+                                    <span className="text-xs uppercase text-gray-500 font-semibold">Min score</span>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={1}
+                                        step={0.01}
+                                        value={minScore}
+                                        onChange={(e) => setMinScore(Number(e.target.value) || 0)}
+                                        className="border rounded px-2 py-2"
+                                    />
+                                </label>
+                            </div>
+
+                            <div>
+                                <p className="text-xs uppercase text-gray-500 font-semibold mb-2">Sources</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {(["doc_upload", "plan", "conversation", "task", "quest", "quote", "system_note"] as SourceType[]).map((type) => (
+                                        <label key={type} className="flex items-center gap-2 text-sm bg-gray-50 px-2 py-1 rounded border">
+                                            <input
+                                                type="checkbox"
+                                                checked={sourceTypes.includes(type)}
+                                                onChange={() => toggleSourceType(type)}
+                                            />
+                                            <span className="capitalize">{type.replace("_", " ")}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
                         </div>
 
                         <div className="space-y-4">
                             {searchResults.map((result) => (
                                 <div key={result.chunkId} className="bg-white p-4 rounded shadow border space-y-3">
                                     <div className="flex items-start justify-between gap-4">
-                                        <div>
+                                        <div className="space-y-1">
                                             <p className="text-sm font-semibold text-gray-800">{result.doc.title}</p>
-                                            <p className="text-xs text-gray-500">
-                                                Relevance: {Math.round(result.score * 100)}%
-                                            </p>
+                                            <div className="flex items-center gap-2 flex-wrap text-xs text-gray-500">
+                                                <span className="uppercase bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
+                                                    {result.doc.sourceType}
+                                                </span>
+                                                <span className="uppercase bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
+                                                    {result.scope}
+                                                </span>
+                                                {result.doc.domain && (
+                                                    <span className="uppercase bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
+                                                        {result.doc.domain}
+                                                    </span>
+                                                )}
+                                                {result.doc.clientName && (
+                                                    <span className="uppercase bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
+                                                        {result.doc.clientName}
+                                                    </span>
+                                                )}
+                                                <span>Relevance: {Math.round(result.score * 100)}%</span>
+                                            </div>
                                         </div>
                                         <div className="flex flex-wrap gap-1">
                                             {result.doc.tags.map((tag) => (
@@ -342,8 +445,21 @@ export default function KnowledgePage() {
                                             ))}
                                         </div>
                                     </div>
-                                    <p className="text-sm text-gray-700 whitespace-pre-line">{result.text}</p>
-                                    <p className="text-xs text-gray-500">{result.doc.summary}</p>
+                                    <p className="text-sm text-gray-700 whitespace-pre-line">
+                                        {result.text || result.doc.summary || "No preview available."}
+                                    </p>
+                                    {result.doc.summary && (
+                                        <p className="text-xs text-gray-500">Summary: {result.doc.summary}</p>
+                                    )}
+                                    {result.doc.topics?.length > 0 && (
+                                        <div className="flex flex-wrap gap-1 text-[11px] text-gray-600">
+                                            {result.doc.topics.map((topic) => (
+                                                <span key={topic} className="bg-gray-100 px-2 py-0.5 rounded">
+                                                    {topic}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                             {searchResults.length === 0 && !isSearching && searchQuery && (
@@ -381,6 +497,25 @@ function DocDetailDrawer({ docId, onClose }: { docId: Id<"knowledgeDocs">; onClo
                     <section>
                         <h3 className="text-xs uppercase text-gray-500 font-semibold mb-1">Summary</h3>
                         <p className="text-sm text-gray-800 whitespace-pre-line">{detail.summary}</p>
+                    </section>
+
+                    <section>
+                        <h3 className="text-xs uppercase text-gray-500 font-semibold mb-1">Source</h3>
+                        <div className="flex flex-wrap gap-2 text-xs text-gray-700">
+                            <span className="bg-gray-100 px-2 py-0.5 rounded uppercase">{detail.sourceType}</span>
+                            {detail.clientName && <span className="bg-gray-100 px-2 py-0.5 rounded uppercase">{detail.clientName}</span>}
+                            {detail.domain && <span className="bg-gray-100 px-2 py-0.5 rounded uppercase">{detail.domain}</span>}
+                            {detail.phase && <span className="bg-gray-100 px-2 py-0.5 rounded uppercase">{detail.phase}</span>}
+                        </div>
+                        {detail.topics?.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                                {detail.topics.map((topic: string) => (
+                                    <span key={topic} className="text-[11px] bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
+                                        {topic}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
                     </section>
 
                     {detail.keyPoints?.length > 0 && (

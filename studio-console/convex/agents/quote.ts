@@ -43,6 +43,7 @@ export const saveQuote = internalMutation({
     quoteData: v.any(), // QuoteSchema
   },
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
      // Determine version
      const existing = await ctx.db
         .query("quotes")
@@ -60,6 +61,29 @@ export const saveQuote = internalMutation({
         totalAmount: args.quoteData.totalAmount,
         createdAt: Date.now(),
         createdBy: "agent",
+    });
+
+    const quoteText = [
+        `Currency: ${args.quoteData.currency}`,
+        `Total: ${args.quoteData.totalAmount}`,
+        "Breakdown:",
+        ...args.quoteData.internalBreakdown.map((item: any) => `- ${item.label}: ${item.amount} ${item.currency}`),
+        "",
+        "Client Document:",
+        args.quoteData.clientDocumentText,
+    ].join("\n");
+
+    await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+        projectId: args.projectId,
+        sourceType: "quote",
+        sourceRefId: `quote-v${version}`,
+        title: `Quote v${version}`,
+        text: quoteText,
+        summary: args.quoteData.clientDocumentText.slice(0, 500),
+        tags: ["quote", "pricing"],
+        topics: [],
+        clientName: project?.clientName,
+        domain: "pricing",
     });
   },
 });
@@ -82,8 +106,18 @@ export const run = action({
     instructions: v.optional(v.string()), // e.g. "Add travel expenses"
   },
   handler: async (ctx, args) => {
-    const { project, tasks, knowledgeDocs, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
+    const { project, tasks, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
       projectId: args.projectId,
+    });
+
+    const knowledgeDocs = await ctx.runAction(internal.knowledge.dynamicSearch, {
+        projectId: args.projectId,
+        query: [args.instructions || "", project.clientName, project.details.notes || ""].join("\n"),
+        scope: "both",
+        sourceTypes: ["quote", "task", "doc_upload", "plan"],
+        limit: 8,
+        agentRole: "quote_agent",
+        includeSummaries: true,
     });
 
     const taskSummary = tasks
@@ -91,7 +125,7 @@ export const run = action({
         .join("\n");
 
     const knowledgeSummary = knowledgeDocs.length
-        ? knowledgeDocs.map((doc) => `- ${doc.title}: ${doc.summary}`).join("\n")
+        ? knowledgeDocs.map((doc) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`).join("\n")
         : "No pricing references available.";
 
     const userPrompt = `Project: ${project.name}

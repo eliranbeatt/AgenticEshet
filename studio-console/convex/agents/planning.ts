@@ -56,6 +56,7 @@ export const saveResult = internalMutation({
     planData: v.any(), // PlanSchema
   },
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
     // Determine version
     const existing = await ctx.db
         .query("plans")
@@ -90,6 +91,19 @@ export const saveResult = internalMutation({
       createdAt: Date.now(),
     });
 
+    await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+        projectId: args.projectId,
+        sourceType: "plan",
+        sourceRefId: planId,
+        title: `Plan v${version}`,
+        text: args.planData.contentMarkdown,
+        summary: args.planData.reasoning || "Plan reasoning",
+        tags: ["plan", "planning"],
+        topics: [],
+        phase: "planning",
+        clientName: project?.clientName,
+    });
+
     return planId;
   },
 });
@@ -101,8 +115,18 @@ export const run = action({
     userRequest: v.string(), // e.g. "Create initial plan" or "Refine timeline"
   },
   handler: async (ctx, args) => {
-    const { project, systemPrompt, existingPlans, latestClarification, knowledgeDocs } = await ctx.runQuery(internal.agents.planning.getContext, {
+    const { project, systemPrompt, existingPlans, latestClarification } = await ctx.runQuery(internal.agents.planning.getContext, {
       projectId: args.projectId,
+    });
+
+    const knowledgeDocs = await ctx.runAction(internal.knowledge.dynamicSearch, {
+        projectId: args.projectId,
+        query: [args.userRequest, project.details.notes || "", project.clientName].join("\n"),
+        scope: "both",
+        sourceTypes: ["plan", "doc_upload", "conversation"],
+        limit: 8,
+        agentRole: "planning_agent",
+        includeSummaries: true,
     });
 
     const clarificationSection = latestClarification
@@ -111,7 +135,7 @@ export const run = action({
 
     const knowledgeSection = knowledgeDocs.length
         ? knowledgeDocs
-              .map((doc) => `- ${doc.title}: ${doc.summary}`)
+              .map((doc) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
               .join("\n")
         : "No knowledge documents available.";
 

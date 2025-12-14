@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
-import { Plus, Wand2 } from "lucide-react";
+import { Plus, Wand2, Pencil, Trash2, Save, X } from "lucide-react";
 import { type ProjectAccountingData } from "./AccountingTypes";
 
 export default function SummaryTab({ data, projectId }: { data: ProjectAccountingData, projectId: Id<"projects"> }) {
@@ -13,6 +13,8 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
   const generateAccounting = useAction(api.agents.accountingGenerator.run);
   const deepEstimateProject = useAction(api.agents.deepResearch.runProject);
   const updateProject = useMutation(api.projects.updateProject);
+  const updateSection = useMutation(api.accounting.updateSection);
+  const deleteSection = useMutation(api.accounting.deleteSection);
 
   const [newSectionGroup, setNewSectionGroup] = useState("General");
   const [newSectionName, setNewSectionName] = useState("");
@@ -99,10 +101,6 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
     setNewSectionName("");
     setIsAdding(false);
   };
-
-  // Grouping logic is already handled by backend sort, but we might want visual headers
-  // Let's render a flat list with group headers for now or just a flat table with "Group" column.
-  // The user asked for "Excel like", so a flat table is often better, but visual separation helps.
 
   const formatMoney = (amount: number) => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: data.project.currency || 'ILS' }).format(amount);
@@ -225,28 +223,19 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
               <th className="px-3 py-2 text-right font-medium text-gray-500">Risk</th>
               <th className="px-3 py-2 text-right font-medium text-gray-500">Profit</th>
               <th className="px-3 py-2 text-right font-bold text-gray-900 bg-yellow-50">Client Price</th>
+              <th className="px-3 py-2 text-right font-medium text-gray-500 w-28">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {data.sections.map((item) => {
-               const { section, stats } = item;
-               return (
-                <tr key={section._id} className="hover:bg-gray-50 group">
-                  <td className="px-3 py-2 text-gray-500">{section.group}</td>
-                  <td className="px-3 py-2 font-medium">
-                    {section.name}
-                    {/* Add edit/delete actions on hover? */}
-                  </td>
-                  <td className="px-3 py-2 text-right bg-blue-50/50">{formatMoney(stats.plannedMaterialsCostE)}</td>
-                  <td className="px-3 py-2 text-right bg-green-50/50">{formatMoney(stats.plannedWorkCostS)}</td>
-                  <td className="px-3 py-2 text-right bg-gray-50 font-medium">{formatMoney(stats.plannedDirectCost)}</td>
-                  <td className="px-3 py-2 text-right text-gray-500">{formatMoney(stats.plannedOverhead)}</td>
-                  <td className="px-3 py-2 text-right text-gray-500">{formatMoney(stats.plannedRisk)}</td>
-                  <td className="px-3 py-2 text-right text-gray-500">{formatMoney(stats.plannedProfit)}</td>
-                  <td className="px-3 py-2 text-right font-bold bg-yellow-50/50">{formatMoney(stats.plannedClientPrice)}</td>
-                </tr>
-               );
-            })}
+            {data.sections.map((item) => (
+                <SectionRow
+                    key={item.section._id}
+                    item={item}
+                    formatMoney={formatMoney}
+                    onUpdate={updateSection}
+                    onDelete={deleteSection}
+                />
+            ))}
             {/* Totals Row */}
             <tr className="bg-gray-100 font-bold border-t-2 border-gray-300">
               <td className="px-3 py-2" colSpan={2}>TOTALS</td>
@@ -257,10 +246,175 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
               <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedRisk, 0))}</td>
               <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedProfit, 0))}</td>
               <td className="px-3 py-2 text-right bg-yellow-100">{formatMoney(data.totals.plannedClientPrice)}</td>
+              <td className="px-3 py-2" />
             </tr>
           </tbody>
         </table>
       </div>
     </div>
   );
+}
+
+function SectionRow(props: {
+    item: ProjectAccountingData["sections"][number];
+    formatMoney: (amount: number) => string;
+    onUpdate: (args: {
+        id: Id<"sections">;
+        updates: {
+            name?: string;
+            group?: string;
+            description?: string;
+            sortOrder?: number;
+            pricingMode?: "estimated" | "actual" | "mixed";
+            overheadPercentOverride?: number;
+            riskPercentOverride?: number;
+            profitPercentOverride?: number;
+        };
+    }) => Promise<void>;
+    onDelete: (args: { id: Id<"sections"> }) => Promise<void>;
+}) {
+    const { item, formatMoney, onUpdate, onDelete } = props;
+    const { section, stats } = item;
+
+    const [isEditing, setIsEditing] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [draft, setDraft] = useState(() => ({
+        group: section.group,
+        name: section.name,
+        description: section.description ?? "",
+        sortOrder: section.sortOrder.toString(),
+    }));
+
+    useEffect(() => {
+        setDraft({
+            group: section.group,
+            name: section.name,
+            description: section.description ?? "",
+            sortOrder: section.sortOrder.toString(),
+        });
+        setIsEditing(false);
+    }, [section._id, section.group, section.name, section.description, section.sortOrder]);
+
+    const parseNumber = (value: string, fallback: number) => {
+        const parsed = Number(value);
+        return Number.isNaN(parsed) ? fallback : parsed;
+    };
+
+    const handleSave = async () => {
+        setIsSaving(true);
+        try {
+            await onUpdate({
+                id: section._id,
+                updates: {
+                    group: draft.group || section.group,
+                    name: draft.name || section.name,
+                    description: draft.description.trim() ? draft.description.trim() : undefined,
+                    sortOrder: parseNumber(draft.sortOrder, section.sortOrder),
+                },
+            });
+            setIsEditing(false);
+        } catch (e) {
+            alert("Failed to update section: " + e);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!confirm("Delete this section (and all its materials & labor lines)?")) return;
+        setIsDeleting(true);
+        try {
+            await onDelete({ id: section._id });
+        } catch (e) {
+            alert("Failed to delete section: " + e);
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    return (
+        <tr className="hover:bg-gray-50 group">
+            <td className="px-3 py-2 text-gray-500">
+                {isEditing ? (
+                    <input
+                        className="w-full bg-transparent border px-2 py-1 rounded text-sm"
+                        value={draft.group}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, group: e.target.value }))}
+                    />
+                ) : (
+                    section.group
+                )}
+            </td>
+            <td className="px-3 py-2 font-medium">
+                {isEditing ? (
+                    <div className="flex flex-col gap-1">
+                        <input
+                            className="w-full bg-transparent border px-2 py-1 rounded text-sm font-medium"
+                            value={draft.name}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
+                        />
+                        <input
+                            className="w-full bg-transparent border px-2 py-1 rounded text-xs"
+                            placeholder="Description (optional)"
+                            value={draft.description}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, description: e.target.value }))}
+                        />
+                    </div>
+                ) : (
+                    <div className="flex flex-col">
+                        <span>{section.name}</span>
+                        {section.description && <span className="text-xs text-gray-500">{section.description}</span>}
+                    </div>
+                )}
+            </td>
+            <td className="px-3 py-2 text-right bg-blue-50/50">{formatMoney(stats.plannedMaterialsCostE)}</td>
+            <td className="px-3 py-2 text-right bg-green-50/50">{formatMoney(stats.plannedWorkCostS)}</td>
+            <td className="px-3 py-2 text-right bg-gray-50 font-medium">{formatMoney(stats.plannedDirectCost)}</td>
+            <td className="px-3 py-2 text-right text-gray-500">{formatMoney(stats.plannedOverhead)}</td>
+            <td className="px-3 py-2 text-right text-gray-500">{formatMoney(stats.plannedRisk)}</td>
+            <td className="px-3 py-2 text-right text-gray-500">{formatMoney(stats.plannedProfit)}</td>
+            <td className="px-3 py-2 text-right font-bold bg-yellow-50/50">{formatMoney(stats.plannedClientPrice)}</td>
+            <td className="px-3 py-2 text-right">
+                {!isEditing ? (
+                    <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition">
+                        <button
+                            onClick={() => setIsEditing(true)}
+                            className="p-1 rounded hover:bg-gray-200"
+                            title="Edit section"
+                        >
+                            <Pencil className="w-4 h-4 text-gray-700" />
+                        </button>
+                        <button
+                            onClick={handleDelete}
+                            disabled={isDeleting}
+                            className="p-1 rounded hover:bg-red-100 disabled:opacity-50"
+                            title="Delete section"
+                        >
+                            <Trash2 className="w-4 h-4 text-red-700" />
+                        </button>
+                    </div>
+                ) : (
+                    <div className="flex justify-end gap-1">
+                        <button
+                            onClick={handleSave}
+                            disabled={isSaving}
+                            className="p-1 rounded hover:bg-green-100 disabled:opacity-50"
+                            title="Save"
+                        >
+                            <Save className="w-4 h-4 text-green-700" />
+                        </button>
+                        <button
+                            onClick={() => setIsEditing(false)}
+                            disabled={isSaving}
+                            className="p-1 rounded hover:bg-gray-200 disabled:opacity-50"
+                            title="Cancel"
+                        >
+                            <X className="w-4 h-4 text-gray-700" />
+                        </button>
+                    </div>
+                )}
+            </td>
+        </tr>
+    );
 }

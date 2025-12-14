@@ -142,7 +142,7 @@ export async function performResearch(params: {
     .filter(Boolean)
     .join("\n");
 
-  const text = await generateText({ prompt, model: "gemini-pro", useGoogleSearch: false });
+  const text = await generateText({ prompt, model: "gemini-1.5-flash", useGoogleSearch: false });
   const parsed = ResearchSchema.safeParse(extractJson(text));
   if (!parsed.success) {
     throw new Error(`Failed to validate research JSON: ${parsed.error.message}`);
@@ -179,7 +179,7 @@ export async function generateJsonWithGemini<TSchema extends z.ZodTypeAny>(param
 }): Promise<z.infer<TSchema>> {
   const text = await generateText({
     prompt: params.prompt,
-    model: params.model ?? "gemini-pro",
+    model: params.model ?? "gemini-1.5-flash",
     useGoogleSearch: params.useGoogleSearch ?? false,
   });
 

@@ -1,139 +1,51 @@
 import { v } from "convex/values";
-import { action } from "../_generated/server";
-import { api } from "../_generated/api";
-import { z } from "zod";
-import { generateJsonWithGemini } from "../lib/gemini";
+import { action, internalMutation, internalQuery, query } from "../_generated/server";
+import { internal } from "../_generated/api";
 import { Doc } from "../_generated/dataModel";
+import { createDeepResearchInteraction, getInteraction } from "../lib/geminiInteractions";
 
-const DeepResearchReportSchema = z.object({
-    summary: z.string(),
-    reportMarkdown: z.string(),
-    items: z.array(
-        z.object({
-            group: z.string(),
-            section: z.string(),
-            process: z.string(),
-            materials: z.array(
-                z.object({
-                    label: z.string(),
-                    spec: z.string().optional(),
-                    quantity: z.number().nonnegative().optional(),
-                    unit: z.string().optional(),
-                    estimatedUnitCost: z.number().nonnegative().optional(),
-                    estimatedTotalCost: z.number().nonnegative().optional(),
-                    buyLinks: z
-                        .array(
-                            z.object({
-                                vendorName: z.string(),
-                                url: z.string().url().optional(),
-                                priceNote: z.string().optional(),
-                            }),
-                        )
-                        .optional(),
-                }),
-            ),
-            labor: z.array(
-                z.object({
-                    role: z.enum(["Art worker", "Art manager"]),
-                    hours: z.number().nonnegative(),
-                    hourlyCost: z.number().nonnegative(),
-                    cost: z.number().nonnegative(),
-                    notes: z.string().optional(),
-                }),
-            ),
-            totals: z.object({
-                materialsCost: z.number().nonnegative(),
-                laborCost: z.number().nonnegative(),
-                directCost: z.number().nonnegative(),
-            }),
-            citations: z
-                .array(
-                    z.object({
-                        title: z.string(),
-                        url: z.string().url(),
-                        snippet: z.string(),
-                    }),
-                )
-                .optional(),
-        }),
-    ),
-});
-
-function buildDeepResearchPrompt(args: {
+function buildPrompt(args: {
     project: Doc<"projects">;
     planMarkdown: string;
-    accountingSections: Array<{ group: string; name: string; description?: string | null }>;
-    currency: string;
+    sections: Array<{ group: string; name: string; description?: string | null }>;
 }) {
     return [
-        "You are a deep research cost estimator for a creative studio in Israel.",
-        "You MUST use web research (Google Search) to ground pricing and purchasing options when possible.",
+        "Run deep research to produce a highly detailed cost-estimation report for this project.",
         "",
-        "Return STRICT JSON only (no markdown fences, no prose).",
-        "Currency: ILS.",
-        "Labor roles and COST rates (not sell):",
-        "- Art worker: 100 ILS/hour",
-        "- Art manager: 200 ILS/hour",
+        "Output format (Markdown):",
+        "1. Executive Summary",
+        "2. Assumptions & Unknowns (explicit)",
+        "3. Per Line Item (repeat for each accounting item):",
+        "   - Item title (Group + Name)",
+        "   - Detailed process / steps",
+        "   - Materials table (name, spec, quantity, unit, estimated unit cost, estimated total cost, purchase links)",
+        "   - Labor table (role: Art worker 100 ILS/hr, Art manager 200 ILS/hr; hours; cost; notes)",
+        "   - Direct cost subtotal (materials + labor)",
+        "   - Citations (bullet list of links)",
+        "4. Risk notes (market volatility, lead times, availability)",
         "",
-        "Input includes an APPROVED plan (Markdown) and current accounting section titles.",
-        "Task:",
-        "- For EACH accounting section, produce: detailed process, materials list with realistic Israeli prices, and labor hours/costs.",
-        "- Include buy links when available (vendor pages, marketplaces, etc).",
-        "- Provide citations (title/url/snippet) for key price claims when possible.",
-        "- Be explicit about assumptions and what needs confirmation.",
+        "Rules:",
+        "- Currency: ILS.",
+        "- Provide purchasing links when available.",
+        "- If a price cannot be found, say so and give a best-effort estimate with clearly labeled confidence.",
+        "",
+        `Project: ${args.project.name} (${args.project.clientName})`,
         "",
         "Approved Plan Markdown:",
         args.planMarkdown,
         "",
-        "Accounting Sections:",
-        args.accountingSections.map((s) => `- [${s.group}] ${s.name}${s.description ? ` — ${s.description}` : ""}`).join("\n"),
-        "",
-        "Output JSON schema:",
-        JSON.stringify(
-            {
-                summary: "string",
-                reportMarkdown: "string (human-friendly markdown with links)",
-                items: [
-                    {
-                        group: "string",
-                        section: "string",
-                        process: "string (detailed steps)",
-                        materials: [
-                            {
-                                label: "string",
-                                spec: "string",
-                                quantity: 0,
-                                unit: "string",
-                                estimatedUnitCost: 0,
-                                estimatedTotalCost: 0,
-                                buyLinks: [{ vendorName: "string", url: "https://...", priceNote: "string" }],
-                            },
-                        ],
-                        labor: [
-                            {
-                                role: "Art worker|Art manager",
-                                hours: 0,
-                                hourlyCost: 0,
-                                cost: 0,
-                                notes: "string",
-                            },
-                        ],
-                        totals: { materialsCost: 0, laborCost: 0, directCost: 0 },
-                        citations: [{ title: "string", url: "https://...", snippet: "string" }],
-                    },
-                ],
-            },
-            null,
-            2,
-        ),
+        "Accounting Items (line items):",
+        args.sections
+            .map((s) => `- [${s.group}] ${s.name}${s.description ? ` — ${s.description}` : ""}`)
+            .join("\n"),
     ].join("\n");
 }
 
-export const runProject: ReturnType<typeof action> = action({
+export const getContext: ReturnType<typeof internalQuery> = internalQuery({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
-        const accounting = await ctx.runQuery(api.accounting.getProjectAccounting, { projectId: args.projectId });
-        const project = accounting.project;
+        const project = await ctx.db.get(args.projectId);
+        if (!project) throw new Error("Project not found");
 
         const activePlan = await ctx.db
             .query("plans")
@@ -141,66 +53,133 @@ export const runProject: ReturnType<typeof action> = action({
             .filter((q) => q.eq(q.field("isActive"), true))
             .first();
 
-        if (!activePlan) {
-            throw new Error("No approved plan found. Approve a plan in the Planning tab first.");
-        }
+        if (!activePlan) throw new Error("No approved plan found. Approve a plan in the Planning tab first.");
 
-        const prompt = buildDeepResearchPrompt({
-            project,
-            planMarkdown: activePlan.contentMarkdown,
-            accountingSections: accounting.sections.map((sectionData) => ({
-                group: sectionData.section.group,
-                name: sectionData.section.name,
-                description: sectionData.section.description ?? null,
-            })),
-            currency: project.currency ?? "ILS",
+        const sections = await ctx.db
+            .query("sections")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+        sections.sort((a, b) => (a.group !== b.group ? a.group.localeCompare(b.group) : a.sortOrder - b.sortOrder));
+
+        return { project, activePlan, sections };
+    },
+});
+
+export const createRun = internalMutation({
+    args: {
+        projectId: v.id("projects"),
+        planId: v.id("plans"),
+        interactionId: v.string(),
+    },
+    handler: async (ctx, args) => {
+        return await ctx.db.insert("deepResearchRuns", {
+            projectId: args.projectId,
+            planId: args.planId,
+            createdAt: Date.now(),
+            createdBy: "user",
+            status: "in_progress",
+            interactionId: args.interactionId,
+            lastPolledAt: Date.now(),
+        });
+    },
+});
+
+export const updateRun = internalMutation({
+    args: {
+        runId: v.id("deepResearchRuns"),
+        patch: v.object({
+            status: v.optional(v.union(v.literal("in_progress"), v.literal("completed"), v.literal("failed"))),
+            lastPolledAt: v.optional(v.number()),
+            reportMarkdown: v.optional(v.string()),
+            reportJson: v.optional(v.string()),
+            error: v.optional(v.string()),
+        }),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.runId, args.patch);
+    },
+});
+
+export const getRun = query({
+    args: { runId: v.id("deepResearchRuns") },
+    handler: async (ctx, args) => {
+        return await ctx.db.get(args.runId);
+    },
+});
+
+export const startProject: ReturnType<typeof action> = action({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const { project, activePlan, sections } = await ctx.runQuery(internal.agents.deepResearch.getContext, {
+            projectId: args.projectId,
         });
 
-        try {
-            let report: z.infer<typeof DeepResearchReportSchema>;
-            try {
-                report = await generateJsonWithGemini({
-                    schema: DeepResearchReportSchema,
-                    prompt,
-                    model: "gemini-2.0-flash",
-                    useGoogleSearch: true,
-                });
-            } catch (error) {
-                const message = error instanceof Error ? error.message : "Deep research failed";
-                report = await generateJsonWithGemini({
-                    schema: DeepResearchReportSchema,
-                    prompt: `${prompt}\n\nNOTE: Google Search tool may be unavailable in this environment. Provide best-effort estimates and cite sources only when you are confident.`,
-                    model: "gemini-pro",
-                    useGoogleSearch: false,
-                });
-                report = {
-                    ...report,
-                    reportMarkdown: `> Warning: Deep research tool failed (${message}). Report is best-effort without live search.\n\n${report.reportMarkdown}`,
-                };
-            }
+        const prompt = buildPrompt({
+            project,
+            planMarkdown: activePlan.contentMarkdown,
+            sections: sections.map((s) => ({ group: s.group, name: s.name, description: s.description ?? null })),
+        });
 
-            await ctx.db.insert("deepResearchRuns", {
-                projectId: args.projectId,
-                planId: activePlan._id,
-                createdAt: Date.now(),
-                createdBy: "user",
-                status: "completed",
-                reportMarkdown: report.reportMarkdown,
-                reportJson: JSON.stringify(report),
-            });
+        const interaction = await createDeepResearchInteraction({
+            input: prompt,
+            agent: "deep-research-pro-preview-12-2025",
+        });
 
-            return { items: report.items.length };
-        } catch (error) {
-            const message = error instanceof Error ? error.message : "Deep research failed";
-            await ctx.db.insert("deepResearchRuns", {
-                projectId: args.projectId,
-                planId: activePlan._id,
-                createdAt: Date.now(),
-                createdBy: "user",
-                status: "failed",
-                error: message,
+        const interactionId = interaction.id;
+        if (!interactionId) throw new Error("Deep research did not return an interaction id");
+
+        const runId = await ctx.runMutation(internal.agents.deepResearch.createRun, {
+            projectId: args.projectId,
+            planId: activePlan._id,
+            interactionId,
+        });
+
+        return { runId, interactionId };
+    },
+});
+
+export const pollRun: ReturnType<typeof action> = action({
+    args: { runId: v.id("deepResearchRuns") },
+    handler: async (ctx, args) => {
+        const run = await ctx.runQuery(internal.agents.deepResearch.getRun, { runId: args.runId });
+        if (!run) throw new Error("Run not found");
+        if (!run.interactionId) throw new Error("Run has no interactionId");
+
+        const interaction = await getInteraction({ id: run.interactionId });
+        const status = interaction.status ?? "in_progress";
+        const lastText = interaction.outputs?.[interaction.outputs.length - 1]?.text ?? "";
+
+        if (status === "completed") {
+            await ctx.runMutation(internal.agents.deepResearch.updateRun, {
+                runId: args.runId,
+                patch: {
+                    status: "completed",
+                    lastPolledAt: Date.now(),
+                    reportMarkdown: lastText,
+                    reportJson: JSON.stringify(interaction),
+                },
             });
-            throw error;
+        } else if (status === "failed") {
+            await ctx.runMutation(internal.agents.deepResearch.updateRun, {
+                runId: args.runId,
+                patch: {
+                    status: "failed",
+                    lastPolledAt: Date.now(),
+                    error: interaction.error ?? "Deep research failed",
+                    reportJson: JSON.stringify(interaction),
+                },
+            });
+        } else {
+            await ctx.runMutation(internal.agents.deepResearch.updateRun, {
+                runId: args.runId,
+                patch: {
+                    status: "in_progress",
+                    lastPolledAt: Date.now(),
+                    reportJson: JSON.stringify(interaction),
+                },
+            });
         }
+
+        return { status };
     },
 });

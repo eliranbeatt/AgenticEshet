@@ -11,7 +11,7 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
   const addSection = useMutation(api.accounting.addSection);
   const estimateProject = useAction(api.agents.estimator.estimateProject);
   const generateAccounting = useAction(api.agents.accountingGenerator.run);
-  const deepEstimateProject = useAction(api.agents.deepResearch.runProject);
+  const startDeepResearch = useAction(api.agents.deepResearch.startProject);
   const updateProject = useMutation(api.projects.updateProject);
   const updateSection = useMutation(api.accounting.updateSection);
   const deleteSection = useMutation(api.accounting.deleteSection);
@@ -80,8 +80,8 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
     if (!confirm("This will run Gemini Deep Research on the entire approved plan and store results under the Deep-Research tab. Continue?")) return;
     setIsDeepEstimating(true);
     try {
-        await deepEstimateProject({ projectId });
-        alert("Deep research completed. Open the Deep-Research tab.");
+        await startDeepResearch({ projectId });
+        alert("Deep research started. Open the Deep-Research tab to track progress.");
     } catch (e) {
         alert("Deep research failed: " + e);
     } finally {

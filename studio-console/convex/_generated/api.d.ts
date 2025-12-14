@@ -31,6 +31,7 @@ import type * as knowledge from "../knowledge.js";
 import type * as lib_costing from "../lib/costing.js";
 import type * as lib_fileParsers from "../lib/fileParsers.js";
 import type * as lib_gemini from "../lib/gemini.js";
+import type * as lib_geminiInteractions from "../lib/geminiInteractions.js";
 import type * as lib_hash from "../lib/hash.js";
 import type * as lib_openai from "../lib/openai.js";
 import type * as lib_textChunker from "../lib/textChunker.js";
@@ -76,6 +77,7 @@ declare const fullApi: ApiFromModules<{
   "lib/costing": typeof lib_costing;
   "lib/fileParsers": typeof lib_fileParsers;
   "lib/gemini": typeof lib_gemini;
+  "lib/geminiInteractions": typeof lib_geminiInteractions;
   "lib/hash": typeof lib_hash;
   "lib/openai": typeof lib_openai;
   "lib/textChunker": typeof lib_textChunker;

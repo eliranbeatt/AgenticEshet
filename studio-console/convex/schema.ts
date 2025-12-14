@@ -186,7 +186,7 @@ export default defineSchema({
         source: v.union(v.literal("user"), v.literal("agent")),
         confidenceScore: v.optional(v.number()),
         // Timestamps
-        createdAt: v.number(),
+        createdAt: v.optional(v.number()),
         updatedAt: v.number(),
     }).index("by_project", ["projectId"]),
 
@@ -315,13 +315,13 @@ export default defineSchema({
         enrichmentProfileId: v.optional(v.id("enrichmentProfiles")),
         
         // New fields per plan
-        sourceType: v.union(
+        sourceType: v.optional(v.union(
             v.literal("upload"),
             v.literal("drive"),
             v.literal("email"),
             v.literal("whatsapp")
-        ),
-        stage: v.union(
+        )),
+        stage: v.optional(v.union(
             v.literal("received"),
             v.literal("parsed"),
             v.literal("enriched"),
@@ -329,12 +329,12 @@ export default defineSchema({
             v.literal("embedded"),
             v.literal("ready"),
             v.literal("failed")
-        ),
-        progress: v.object({
+        )),
+        progress: v.optional(v.object({
             totalFiles: v.number(),
             doneFiles: v.number(),
             failedFiles: v.number(),
-        }),
+        })),
         startedAt: v.optional(v.number()),
         finishedAt: v.optional(v.number()),
         errorSummary: v.optional(v.string()),
@@ -365,14 +365,14 @@ export default defineSchema({
         mimeType: v.string(),
         
         // New fields per plan
-        sourceType: v.union(
+        sourceType: v.optional(v.union(
             v.literal("upload"),
             v.literal("drive"),
             v.literal("email"),
             v.literal("whatsapp")
-        ),
-        sizeBytes: v.number(),
-        stage: v.union(
+        )),
+        sizeBytes: v.optional(v.number()),
+        stage: v.optional(v.union(
             v.literal("received"),
             v.literal("parsed"),
             v.literal("enriched"),
@@ -380,7 +380,7 @@ export default defineSchema({
             v.literal("embedded"),
             v.literal("ready"),
             v.literal("failed")
-        ),
+        )),
         parsed: v.optional(v.object({
             textBytes: v.optional(v.number()),
             pageCount: v.optional(v.number()),
@@ -392,8 +392,8 @@ export default defineSchema({
                 format: v.string(),
             })),
         })),
-        createdAt: v.number(),
-        updatedAt: v.number(),
+        createdAt: v.optional(v.number()),
+        updatedAt: v.optional(v.number()),
 
         status: v.union(
             v.literal("uploaded"),
@@ -506,10 +506,12 @@ export default defineSchema({
             refreshToken: v.optional(v.string()),
             expiryDate: v.optional(v.number()),
             email: v.optional(v.string()),
+            googleUserId: v.optional(v.string()),
         }),
         createdAt: v.number(),
         updatedAt: v.number(),
-    }),
+    })
+    .index("by_owner_type", ["ownerUserId", "type"]),
 
     // 26. CONNECTOR WATCHES
     connectorWatches: defineTable({

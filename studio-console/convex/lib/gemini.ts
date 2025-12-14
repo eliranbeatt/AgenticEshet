@@ -1,4 +1,3 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { z } from "zod";
 
 const apiKey = process.env.GOOGLE_API_KEY;
@@ -7,7 +6,45 @@ if (!apiKey) {
   console.warn("GOOGLE_API_KEY is not set in environment variables");
 }
 
-const genAI = new GoogleGenerativeAI(apiKey || "dummy");
+type GeminiGenerateContentResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ text?: string }>;
+    };
+  }>;
+  promptFeedback?: { blockReason?: string };
+  error?: { message?: string };
+};
+
+async function generateText(prompt: string): Promise<string> {
+  if (!apiKey) throw new Error("GOOGLE_API_KEY is not set");
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+    }),
+  });
+
+  const payload = (await response
+    .json()
+    .catch(() => ({}))) as GeminiGenerateContentResponse;
+
+  if (!response.ok) {
+    const message = payload?.error?.message ?? `Gemini request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  if (payload.promptFeedback?.blockReason) {
+    throw new Error(`Gemini request blocked: ${payload.promptFeedback.blockReason}`);
+  }
+
+  const text = payload.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  if (!text.trim()) throw new Error("Gemini response was empty");
+  return text;
+}
 
 const ResearchSchema = z.object({
   summary: z.string(),
@@ -70,8 +107,6 @@ export async function performResearch(params: {
 }): Promise<ResearchResult> {
   if (!apiKey) throw new Error("GOOGLE_API_KEY is not set");
 
-  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-
   const prompt = [
     "You are a buying assistant.",
     "Return STRICT JSON only (no markdown, no prose).",
@@ -105,8 +140,7 @@ export async function performResearch(params: {
     .filter(Boolean)
     .join("\n");
 
-  const result = await model.generateContent(prompt);
-  const text = result.response.text();
+  const text = await generateText(prompt);
   const parsed = ResearchSchema.safeParse(extractJson(text));
   if (!parsed.success) {
     throw new Error(`Failed to validate research JSON: ${parsed.error.message}`);

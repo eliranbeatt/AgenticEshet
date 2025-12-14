@@ -37,6 +37,13 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 4. (First-time) seed shared agent prompts via `npx convex run seed:seedSkills`.
 5. `npm run prepush` executes linting + tests; run it (or wire a git hook) before pushing to keep CI green.
 
+## Google Drive Connector
+
+1. Create an OAuth client in Google Cloud Console (OAuth consent screen + "Web application" client).
+2. Add `GOOGLE_DRIVE_CLIENT_ID` and `GOOGLE_DRIVE_CLIENT_SECRET` to `studio-console/.env.local` (see `studio-console/.env.local.example`).
+3. Add `http://localhost:3000/api/google-drive/auth/callback` as an authorized redirect URI (or set `GOOGLE_DRIVE_REDIRECT_URI` to match your configured URI).
+4. In the app, go to `/ingestion/connectors`, connect Google Drive, then pick a folder to watch and click "Sync now" to create an ingestion job.
+
 ## Testing & Quality
 
 - `npm run lint` runs the repo-wide ESLint checks.

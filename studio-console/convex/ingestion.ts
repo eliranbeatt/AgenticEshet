@@ -67,11 +67,12 @@ export const addFilesToJob = mutation({
         }
 
         // Update job progress
+        const progress = job.progress ?? { totalFiles: 0, doneFiles: 0, failedFiles: 0 };
         await ctx.db.patch(args.jobId, {
             progress: {
-                totalFiles: job.progress.totalFiles + args.files.length,
-                doneFiles: job.progress.doneFiles,
-                failedFiles: job.progress.failedFiles,
+                totalFiles: progress.totalFiles + args.files.length,
+                doneFiles: progress.doneFiles,
+                failedFiles: progress.failedFiles,
             },
             status: "queued", // Ready to run
         });
@@ -90,6 +91,7 @@ export const retryJob = mutation({
     handler: async (ctx, args) => {
         const job = await ctx.db.get(args.jobId);
         if (!job) throw new Error("Job not found");
+        const progress = job.progress ?? { totalFiles: 0, doneFiles: 0, failedFiles: 0 };
         
         // Reset failed files to 'uploaded'/'received' so they can be picked up again
         const failedFiles = await ctx.db
@@ -109,8 +111,8 @@ export const retryJob = mutation({
         await ctx.db.patch(args.jobId, {
             status: "queued",
             progress: {
-                totalFiles: job.progress.totalFiles,
-                doneFiles: job.progress.doneFiles, // Keep done count
+                totalFiles: progress.totalFiles,
+                doneFiles: progress.doneFiles, // Keep done count
                 failedFiles: 0, // Reset failed count
             }
         });
@@ -263,9 +265,10 @@ export const runJob = action({
         });
 
         const files: Doc<"ingestionFiles">[] = await ctx.runQuery(api.ingestion.listFiles, { jobId: args.jobId });
+        const progress = job.progress ?? { totalFiles: 0, doneFiles: 0, failedFiles: 0 };
         
-        let doneFiles = job.progress.doneFiles;
-        let failedFiles = job.progress.failedFiles;
+        let doneFiles = progress.doneFiles;
+        let failedFiles = progress.failedFiles;
 
         for (const file of files) {
             if (file.status === "ready" || file.status === "committed") continue;
@@ -290,7 +293,7 @@ export const runJob = action({
                 jobId: args.jobId,
                 status: "running",
                 progress: {
-                    totalFiles: job.progress.totalFiles,
+                    totalFiles: progress.totalFiles,
                     doneFiles,
                     failedFiles,
                 }
@@ -303,7 +306,7 @@ export const runJob = action({
             status: finalStatus,
             stage: "ready",
             progress: {
-                totalFiles: job.progress.totalFiles,
+                totalFiles: progress.totalFiles,
                 doneFiles,
                 failedFiles,
             }

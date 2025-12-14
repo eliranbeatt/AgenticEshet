@@ -130,21 +130,21 @@ export default function ManagementPage() {
                 <VendorManager
                     vendors={data.vendors}
                     onCreate={createVendor}
-                    onUpdate={updateVendor}
-                    onDelete={deleteVendor}
+                    onUpdate={async (id, updates) => { await updateVendor({ id, updates: updates as any }); }}
+                    onDelete={async (id) => { await deleteVendor({ id }); }}
                 />
                 <EmployeeManager
                     employees={data.employees}
                     onCreate={createEmployee}
-                    onUpdate={updateEmployee}
-                    onDelete={deleteEmployee}
+                    onUpdate={async (id, updates) => { await updateEmployee({ id, updates: updates as any }); }}
+                    onDelete={async (id) => { await deleteEmployee({ id }); }}
                 />
                 <MaterialManager
                     materials={data.materials}
                     vendors={data.vendors}
                     onCreate={createMaterial}
-                    onUpdate={updateMaterial}
-                    onDelete={deleteMaterial}
+                    onUpdate={async (id, updates) => { await updateMaterial({ id, updates: updates as any }); }}
+                    onDelete={async (id) => { await deleteMaterial({ id }); }}
                 />
                 <PurchaseManager
                     purchases={data.purchases}
@@ -152,8 +152,8 @@ export default function ManagementPage() {
                     materials={data.materials}
                     employees={data.employees}
                     onCreate={createPurchase}
-                    onUpdate={updatePurchase}
-                    onDelete={deletePurchase}
+                    onUpdate={async (id, updates) => { await updatePurchase({ id, updates: updates as any }); }}
+                    onDelete={async (id) => { await deletePurchase({ id }); }}
                 />
             </div>
         </div>

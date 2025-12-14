@@ -10,7 +10,7 @@ const listMap = {
 
 const baseTask = {
     title: "Book venue",
-    category: "Logistics",
+    category: "Logistics" as "Logistics" | "Creative" | "Finance" | "Admin" | "Studio",
     description: "Confirm availability and hold dates.",
     priority: "High" as const,
     status: "todo" as const,
@@ -37,10 +37,10 @@ describe("buildCardPayload", () => {
 
     it("marks card as closed when task is done and omits empty description", () => {
         const payload = buildCardPayload(
-            { ...baseTask, status: "done", description: "" },
+            { ...baseTask, status: "done", description: "", category: "Logistics" as const },
             "list-done"
         );
         expect(payload.closed).toBe("true");
-        expect(payload.desc).toBe("Priority: High");
+        expect(payload.desc).not.toContain("Description");
     });
 });

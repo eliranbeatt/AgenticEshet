@@ -1,0 +1,417 @@
+________________________________________
+Magnetic Studio Console — Group 1 Spec
+Ingestion Console, Connectors (Drive/Email/WhatsApp), Project Inbox
+Status
+Scope: Group 1 only (Ingestion UI + connector ingestion + inbox triage)
+Architecture: Next.js App Router frontend + Convex backend (actions/mutations/queries) + Convex file storage
+Assumption: You already have ingestionJobs, ingestionFiles, enrichmentProfiles, knowledgeDocs, knowledgeChunks tables (or equivalent). This spec extends them.
+________________________________________
+1) Goals & Outcomes
+Goals
+Provide a real Ingestion Console with:
+upload files
+job status tracking
+errors + retries
+per-file and per-job visibility
+Add Connectors to bring information into projects:
+Google Drive folder sync
+Email forwarding (project inbox)
+WhatsApp import (exported chat zip)
+Create a Project Inbox:
+central place for incoming messages/files
+link to project + attach to knowledge
+triage suggestions (tasks/decisions/questions) created as drafts (not auto-final)
+Success criteria (business outcomes)
+You can ingest a file from upload/Drive/Email/WhatsApp and see:
+job created → stages completed → knowledge docs/chunks ready
+Inbox items can be:
+assigned to a project
+converted to knowledge doc
+converted to suggested tasks/decisions/questions
+System is usable for a small studio workflow (fast, minimal friction).
+________________________________________
+2) Non-Goals (for this phase)
+No full WhatsApp Business API integration (only import/export flow in V1).
+No full Gmail OAuth connector in V1 (use forwarding address / inbound email webhook).
+No complex scheduling/capacity planning (that’s Group 2+).
+No enterprise approval workflows.
+________________________________________
+3) UX Requirements (Screens & Flows)
+3.1 Ingestion Console (/ingestion)
+Sections
+Jobs List
+Shows recent ingestion jobs (last 30 days)
+Columns: status, source, project, createdAt, files count, failures count
+Filters: status, sourceType, projectId, date range
+Job Details
+Job header: status + stage progression
+File list with per-file status + errors + “retry file”
+Actions: Retry job, Retry failed steps, Cancel job
+Upload
+Drag-drop multi-file upload
+Optionally choose project (or “Unassigned”)
+Choose ingestion profile (default)
+Submit creates job + starts pipeline
+Connectors
+Google Drive: connect account, select folder(s), map folder → project
+Email: show each project’s forwarding address + status
+WhatsApp: “Upload exported chat zip” → creates job
+________________________________________
+3.2 Project Inbox (/projects/[id]/inbox)
+Inbox list
+Items sorted by newest, status chips: New / Triaged / Archived
+Each item shows: source, from, snippet, attachments count, linked decision/task suggestions count
+Inbox item details drawer/page
+Full body + attachments preview links
+Actions:
+“Attach to Knowledge” (creates knowledgeDoc)
+“Create Task” (manual)
+“Create Decision” (manual)
+“Accept Suggestions” (one click creates tasks/decisions/questions)
+“Archive”
+“Reassign project” (move to different project)
+Triage suggestions UI
+Suggestions appear as draft cards:
+Suggested tasks (title, due, tags, priority)
+Suggested decisions (title, options if detected)
+Suggested questions (clarifications needed)
+User can accept/edit/delete each suggestion before committing.
+________________________________________
+3.3 Global Inbox (optional but recommended)
+Route: /inbox
+Shows all inbox items across projects, with quick assign.
+________________________________________
+4) Functional Requirements
+4.1 Sources supported (V1)
+Upload (local files)
+Google Drive Sync (polling or webhook)
+Email Forwarding (inbound parse)
+WhatsApp Export Import (zip with txt + media)
+Each source must produce:
+ingestionJob
+1+ ingestionFile records (or inbox items)
+resulting knowledgeDocs + knowledgeChunks as appropriate
+________________________________________
+4.2 Supported file types (V1)
+PDF
+Images: JPG/PNG/WebP
+Text: TXT/MD
+Excel: XLSX
+PowerPoint: PPTX
+Zip (for WhatsApp export zip)
+________________________________________
+4.3 Pipeline stages
+Define stages (job-level and file-level):
+RECEIVED — file metadata stored, blob stored
+PARSED — extracted raw text / structured content / image metadata
+ENRICHED — normalized text + metadata (topics/domain/client tags)
+CHUNKED — chunks created
+EMBEDDED — vectors stored
+READY — searchable in RAG
+FAILED — includes error + retryable flag
+Jobs have overall stage progress derived from files.
+________________________________________
+4.4 Triage agent (V1)
+When an inbox item is created:
+run “triage” in background (Convex action)
+produces draft suggestions saved on the inboxItem:
+tasks
+decisions
+questions
+It must never silently create tasks/decisions—only suggestions unless user clicks Accept.
+________________________________________
+5) Data Model (Convex Schema)
+5.1 Extend ingestionJobs
+Add fields:
+_id
+sourceType: "upload" | "drive" | "email" | "whatsapp"
+projectId?
+profileId? (enrichment profile)
+status: "queued" | "running" | "ready" | "failed" | "cancelled"
+stage: "received"|"parsed"|"enriched"|"chunked"|"embedded"|"ready"|"failed"
+progress: { totalFiles, doneFiles, failedFiles }
+createdBy
+createdAt
+startedAt?, finishedAt?
+errorSummary?
+Indexes:
+by projectId, createdAt
+by status, createdAt
+by sourceType, createdAt
+________________________________________
+5.2 Extend ingestionFiles
+_id
+jobId
+projectId? (copied for convenience)
+sourceType
+originalName
+mimeType
+sizeBytes
+storage: { provider:"convex", fileId:string }
+status, stage
+error?: { code, message, stack?, retryable:boolean }
+parsed: { textBytes?, pageCount?, sheetNames?, slideCount?, imageMeta? }
+knowledgeDocId?
+createdAt, updatedAt
+Indexes:
+by jobId
+by projectId, createdAt
+________________________________________
+5.3 New: inboxItems
+_id
+projectId? (can be unassigned)
+source: "email"|"whatsapp"|"upload"|"drive"
+sourceMessageId? (dedupe key)
+fromName?, fromAddressOrPhone?
+subject?
+bodyText
+receivedAt
+status: "new"|"triaged"|"archived"
+attachments: [{fileId, name, mimeType, sizeBytes}]
+linked: { ingestionJobId?, knowledgeDocIds?:[], taskIds?:[], decisionIds?:[] }
+suggestions?:
+tasksDraft: [{ title, details?, priority?, dueAt?, tags[] }]
+decisionsDraft: [{ title, details?, options?[] }]
+questionsDraft: [{ question, reason?, priority? }]
+triage: { status:"not_started"|"running"|"done"|"failed", error? }
+Indexes:
+by projectId, receivedAt
+by status, receivedAt
+by sourceMessageId (unique-ish dedupe)
+________________________________________
+5.4 New: connectorAccounts
+_id
+type: "drive"|"emailInbound"|"whatsappImport"
+ownerUserId
+status: "connected"|"disconnected"|"error"
+auth: for drive (encrypted token reference, never raw in client)
+createdAt, updatedAt
+________________________________________
+5.5 New: connectorWatches
+_id
+accountId
+type: "driveFolder"
+projectId
+externalId (drive folder id)
+name
+enabled
+cursorState: { pageToken?, lastSyncAt? }
+createdAt, updatedAt
+Indexes:
+by projectId
+by accountId
+________________________________________
+5.6 Optional (recommended): externalIdMap for dedupe
+_id
+provider: "drive"|"email"|"whatsapp"
+externalId
+entityType: "ingestionFile"|"inboxItem"
+entityId
+createdAt
+________________________________________
+6) Backend APIs (Convex)
+6.1 Ingestion (core)
+Mutations
+ingestion.createJob({sourceType, projectId?, profileId?}) -> jobId
+ingestion.addFilesToJob({jobId, files:[{fileId,name,mimeType,size}]})
+ingestion.cancelJob({jobId})
+ingestion.retryJob({jobId})
+ingestion.retryFile({ingestionFileId})
+Actions (long-running)
+ingestion.runJob({jobId})
+Orchestrates all stages; idempotent per file stage.
+ingestion.parseFile({ingestionFileId})
+ingestion.enrichDoc({ingestionFileId})
+ingestion.chunkDoc({ingestionFileId})
+ingestion.embedChunks({ingestionFileId})
+Queries
+ingestion.listJobs({filters...})
+ingestion.getJob({jobId}) (includes files)
+ingestion.listFiles({jobId|projectId})
+Idempotency requirement
+Each step must check current stage and skip if already done.
+Retries must not duplicate knowledge docs/chunks; reuse existing IDs when possible.
+________________________________________
+6.2 Inbox
+Mutations
+inbox.createItem({projectId?, source, from..., subject?, bodyText, attachments[]})
+inbox.assignToProject({inboxItemId, projectId})
+inbox.archive({inboxItemId})
+inbox.markTriaged({inboxItemId})
+inbox.acceptSuggestions({inboxItemId, accepted:{tasks,decisions,questions}})
+inbox.attachToKnowledge({inboxItemId, mode:"singleDoc"|"perAttachment"}) -> knowledgeDocIds
+Actions
+inbox.runTriage({inboxItemId})
+calls LLM schema (structured JSON output for drafts)
+saves to inboxItems.suggestions
+updates triage status
+Queries
+inbox.list({projectId?, status?})
+inbox.get({inboxItemId})
+________________________________________
+6.3 Connectors
+Drive
+connectors.drive.startOAuth() (handled by Next.js route)
+connectors.drive.finishOAuth(code) (Next.js route writes tokens via Convex mutation)
+connectors.drive.createWatch({accountId, projectId, folderId, name})
+connectors.drive.syncWatch({watchId}) (action; pulls new/changed files)
+connectors.drive.pollAll() (scheduled action daily/ hourly)
+Email inbound
+Next.js API route: /api/email/inbound
+verifies signature (provider-specific)
+extracts: from, subject, body, attachments
+determines project via inbound address
+creates inboxItem + stores attachments in Convex files
+triggers triage action
+WhatsApp import
+upload zip in /ingestion
+parser extracts:
+chat.txt lines -> messages with timestamps
+media files -> attachments
+create inbox items per “meaningful message block” OR per day (configurable)
+attach media, ingest to knowledge
+________________________________________
+7) Parsing & Extraction (Implementation Requirements)
+7.1 PDF
+Extract text (page by page)
+Store pageCount
+Optionally store per-page chunks (later)
+If scanned: allow OCR path (V1 can do basic OCR on rendered pages if you already have it; otherwise mark “needs OCR”)
+7.2 Images
+Extract basic metadata (w,h, format)
+OCR text (optional)
+Create knowledgeDoc with:
+text = OCR result + caption placeholder
+store image fileId
+Embeddings:
+V1: text embeddings only (OCR/caption)
+If you support image embeddings: store embeddingType:"image"
+7.3 Excel (XLSX)
+Extract sheet names
+Convert to compact text:
+for each sheet: header row + key rows summary
+or “cell sentences” for high retrieval accuracy (recommended)
+Create one knowledgeDoc per sheet OR one doc with sections
+7.4 PPTX
+For each slide:
+extract title, bullets, speaker notes
+optionally export slide images (later)
+Create knowledgeDoc per deck, chunks per slide
+________________________________________
+8) Security & Permissions
+Requirements
+Only authenticated users can access ingestion/inbox.
+Project scoping enforced in queries/actions.
+Connector auth tokens are never returned to client; stored server-side (Convex) or in a secure store.
+Email inbound endpoint must verify provider signature to avoid spam injection.
+Dedupe keys enforced to prevent repeated ingestion.
+________________________________________
+9) Observability
+Must-have logs
+ingestionJobs: stage transitions, duration per stage
+ingestionFiles: per-file errors + retry counts
+inboxItems: triage status + triage errors
+retrievalLogs already exists; ensure doc metadata includes sourceType and inbox linkage
+UI
+In job detail: show failure reason + “copy debug”
+In inbox: show triage status badge
+________________________________________
+10) Testing Requirements
+Unit tests (minimum)
+parsing functions for:
+pptx -> extracted text
+xlsx -> extracted text
+whatsapp txt parser -> messages
+idempotency:
+calling runJob twice does not duplicate docs/chunks
+Integration tests (minimum)
+Upload → job → ready → doc retrievable via dynamicSearch
+Email inbound webhook → inbox item created → triage suggestions appear
+Drive sync → new file creates ingestion job & knowledge docs
+________________________________________
+11) Rollout Plan (Safe Incremental)
+Milestone 1 (Upload + Ingestion UI)
+/ingestion upload, jobs list, job detail, retry
+PDF + images + txt parsing
+Knowledge docs/chunks created
+Milestone 2 (Inbox)
+/projects/[id]/inbox + global inbox
+manual attach to knowledge
+triage agent suggestions + accept flow
+Milestone 3 (Email inbound)
+project forwarding addresses
+inbound endpoint
+attachments stored and ingested
+triage auto-trigger
+Milestone 4 (Drive)
+connect drive account
+folder watch → polling sync
+ingest new files
+Milestone 5 (WhatsApp import)
+zip import
+message grouping + attachments
+create inbox items + ingest
+________________________________________
+12) Implementation Task Breakdown (ready to paste into Jira/Trello)
+Epic G1-1: Ingestion Console UI
+T1 Create /ingestion route with Jobs list + filters
+T2 Create job details page with stage progress UI + file table
+T3 Add upload panel (multi-file) + project select + profile select
+T4 Add “Retry job”, “Retry file”, “Cancel job” buttons + confirmations
+Epic G1-2: Ingestion Pipeline Orchestrator (Convex)
+T5 Extend schema for ingestionJobs/ingestionFiles stages, errors, indexes
+T6 Implement ingestion.createJob, addFilesToJob
+T7 Implement ingestion.runJob orchestrator (idempotent)
+T8 Implement parsers: PDF, image, txt, xlsx, pptx
+T9 Implement enrich → chunk → embed steps (reuse existing enhancer + embedding)
+T10 Implement retry logic: retryFile/retryJob with stage reset rules
+Epic G1-3: Inbox Core
+T11 Add inboxItems schema + indexes
+T12 Implement inbox.createItem, list/get, assign, archive
+T13 Build /projects/[id]/inbox UI list + details view
+T14 Build “Attach to knowledge” action (single doc vs per attachment)
+Epic G1-4: Inbox Triage Agent
+T15 Implement inbox.runTriage action with structured output schema
+T16 Store drafts on inbox item; triage status states
+T17 Implement UI to review/edit/accept suggestions
+T18 Implement inbox.acceptSuggestions to create tasks/decisions/questions (as real records)
+Epic G1-5: Email Connector (Forwarding + Inbound)
+T19 Define per-project inbound address format (e.g., p+{projectId}@inbox.yourdomain.com)
+T20 Implement /api/email/inbound route with signature verification
+T21 Parse email body + attachments; store attachments in Convex file storage
+T22 Create inboxItem + trigger triage + optional ingestion job for attachments
+Epic G1-6: Google Drive Connector
+T23 Implement OAuth connect flow in Next.js routes
+T24 Store tokens securely via connectorAccounts
+T25 Build “Connectors” UI section in /ingestion
+T26 Implement folder watch: createWatch, list watches
+T27 Implement sync action: fetch new/updated files, dedupe, create ingestion jobs
+T28 Schedule polling job (hourly/daily)
+Epic G1-7: WhatsApp Import
+T29 Zip upload path: detect WhatsApp export bundle
+T30 Parse chat text into message blocks; attach media
+T31 Decide grouping strategy (per message block / per day)
+T32 Create inbox items + ingest attachments to knowledge + triage suggestions
+Epic G1-8: Observability & QA
+T33 Add ingestion/inbox debug panels and error surfaces
+T34 Add unit tests for parsers + dedupe
+T35 Add integration test flows: upload → ready → retrieval; inbound email → triage
+________________________________________
+13) Acceptance Criteria (Definition of Done)
+Ingestion
+Uploading a PDF creates a job, parses text, creates knowledge doc/chunks, job ends READY
+Job detail shows file stage progression and errors
+Retry file/job works without duplicating docs/chunks
+Inbox
+Email inbound creates inbox item with body + attachments
+Inbox item can be assigned to a project
+Clicking “Attach to knowledge” creates a knowledge doc
+Triage action produces task/decision/question drafts
+Accepting suggestions creates real tasks/decisions linked to the project
+Drive
+Connected drive account can sync a watched folder
+Newly added file results in ingestion job and knowledge docs
+WhatsApp
+Importing WhatsApp export zip creates inbox items and ingests attachments
+Triage suggestions appear for imported messages
+________________________________________

@@ -311,15 +311,48 @@ export default defineSchema({
         defaultContext: v.string(),
         defaultTags: v.array(v.string()),
         enrichmentProfileId: v.optional(v.id("enrichmentProfiles")),
-        status: v.union(
-            v.literal("created"),
-            v.literal("processing"),
+        
+        // New fields per plan
+        sourceType: v.union(
+            v.literal("upload"),
+            v.literal("drive"),
+            v.literal("email"),
+            v.literal("whatsapp")
+        ),
+        stage: v.union(
+            v.literal("received"),
+            v.literal("parsed"),
+            v.literal("enriched"),
+            v.literal("chunked"),
+            v.literal("embedded"),
             v.literal("ready"),
-            v.literal("committed"),
             v.literal("failed")
         ),
+        progress: v.object({
+            totalFiles: v.number(),
+            doneFiles: v.number(),
+            failedFiles: v.number(),
+        }),
+        startedAt: v.optional(v.number()),
+        finishedAt: v.optional(v.number()),
+        errorSummary: v.optional(v.string()),
+
+        status: v.union(
+            v.literal("created"),
+            v.literal("queued"),
+            v.literal("processing"),
+            v.literal("running"),
+            v.literal("ready"),
+            v.literal("committed"),
+            v.literal("failed"),
+            v.literal("cancelled")
+        ),
         createdAt: v.number(),
-    }).index("by_project", ["projectId"]),
+    })
+    .index("by_project", ["projectId"])
+    .index("by_projectId_createdAt", ["projectId", "createdAt"])
+    .index("by_status_createdAt", ["status", "createdAt"])
+    .index("by_sourceType_createdAt", ["sourceType", "createdAt"]),
 
     // 11. INGESTION FILES
     ingestionFiles: defineTable({
@@ -328,6 +361,38 @@ export default defineSchema({
         originalFilename: v.string(),
         storageId: v.string(),
         mimeType: v.string(),
+        
+        // New fields per plan
+        sourceType: v.union(
+            v.literal("upload"),
+            v.literal("drive"),
+            v.literal("email"),
+            v.literal("whatsapp")
+        ),
+        sizeBytes: v.number(),
+        stage: v.union(
+            v.literal("received"),
+            v.literal("parsed"),
+            v.literal("enriched"),
+            v.literal("chunked"),
+            v.literal("embedded"),
+            v.literal("ready"),
+            v.literal("failed")
+        ),
+        parsed: v.optional(v.object({
+            textBytes: v.optional(v.number()),
+            pageCount: v.optional(v.number()),
+            sheetNames: v.optional(v.array(v.string())),
+            slideCount: v.optional(v.number()),
+            imageMeta: v.optional(v.object({
+                width: v.number(),
+                height: v.number(),
+                format: v.string(),
+            })),
+        })),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+
         status: v.union(
             v.literal("uploaded"),
             v.literal("parsed"),
@@ -336,6 +401,7 @@ export default defineSchema({
             v.literal("committed"),
             v.literal("failed")
         ),
+        
         rawText: v.optional(v.string()),
         enrichedText: v.optional(v.string()),
         summary: v.optional(v.string()),
@@ -349,8 +415,117 @@ export default defineSchema({
         userContext: v.optional(v.string()),
         error: v.optional(v.string()),
         ragDocId: v.optional(v.id("knowledgeDocs")),
-    }).index("by_job", ["ingestionJobId"])
-        .index("by_project", ["projectId"]),
+    })
+    .index("by_job", ["ingestionJobId"])
+    .index("by_project", ["projectId"])
+    .index("by_projectId_createdAt", ["projectId", "createdAt"]),
+
+    // 24. INBOX ITEMS
+    inboxItems: defineTable({
+        projectId: v.optional(v.id("projects")),
+        source: v.union(
+            v.literal("email"),
+            v.literal("whatsapp"),
+            v.literal("upload"),
+            v.literal("drive")
+        ),
+        sourceMessageId: v.optional(v.string()),
+        fromName: v.optional(v.string()),
+        fromAddressOrPhone: v.optional(v.string()),
+        subject: v.optional(v.string()),
+        bodyText: v.string(),
+        receivedAt: v.number(),
+        status: v.union(
+            v.literal("new"),
+            v.literal("triaged"),
+            v.literal("archived")
+        ),
+        attachments: v.array(v.object({
+            fileId: v.string(), // Convex storage ID
+            name: v.string(),
+            mimeType: v.string(),
+            sizeBytes: v.number(),
+        })),
+        linked: v.object({
+            ingestionJobId: v.optional(v.id("ingestionJobs")),
+            knowledgeDocIds: v.optional(v.array(v.id("knowledgeDocs"))),
+            taskIds: v.optional(v.array(v.id("tasks"))),
+            decisionIds: v.optional(v.array(v.string())), // Placeholder for decisions if table doesn't exist yet
+        }),
+        suggestions: v.optional(v.object({
+            tasksDraft: v.array(v.object({
+                title: v.string(),
+                details: v.optional(v.string()),
+                priority: v.optional(v.string()),
+                dueAt: v.optional(v.number()),
+                tags: v.array(v.string()),
+            })),
+            decisionsDraft: v.array(v.object({
+                title: v.string(),
+                details: v.optional(v.string()),
+                options: v.optional(v.array(v.string())),
+            })),
+            questionsDraft: v.array(v.object({
+                question: v.string(),
+                reason: v.optional(v.string()),
+                priority: v.optional(v.string()),
+            })),
+            triage: v.object({
+                status: v.union(
+                    v.literal("not_started"),
+                    v.literal("running"),
+                    v.literal("done"),
+                    v.literal("failed")
+                ),
+                error: v.optional(v.string()),
+            }),
+        })),
+    })
+    .index("by_project_receivedAt", ["projectId", "receivedAt"])
+    .index("by_status_receivedAt", ["status", "receivedAt"])
+    .index("by_sourceMessageId", ["sourceMessageId"]),
+
+    // 25. CONNECTOR ACCOUNTS
+    connectorAccounts: defineTable({
+        type: v.union(
+            v.literal("drive"),
+            v.literal("emailInbound"),
+            v.literal("whatsappImport")
+        ),
+        ownerUserId: v.string(),
+        status: v.union(
+            v.literal("connected"),
+            v.literal("disconnected"),
+            v.literal("error")
+        ),
+        auth: v.object({
+            // Encrypted token reference or similar
+            accessToken: v.optional(v.string()),
+            refreshToken: v.optional(v.string()),
+            expiryDate: v.optional(v.number()),
+            email: v.optional(v.string()),
+        }),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    }),
+
+    // 26. CONNECTOR WATCHES
+    connectorWatches: defineTable({
+        accountId: v.id("connectorAccounts"),
+        type: v.literal("driveFolder"),
+        projectId: v.id("projects"),
+        externalId: v.string(), // e.g. Drive Folder ID
+        name: v.string(),
+        enabled: v.boolean(),
+        cursorState: v.object({
+            pageToken: v.optional(v.string()),
+            lastSyncAt: v.optional(v.number()),
+        }),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+    .index("by_project", ["projectId"])
+    .index("by_account", ["accountId"]),
 
     // 12. ENRICHMENT PROFILES (configurable enhancer behavior)
     enrichmentProfiles: defineTable({

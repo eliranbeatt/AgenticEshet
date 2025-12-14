@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+// import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import ConvexClientProvider from "./ConvexClientProvider";
 import "./globals.css";
 
+/*
 const geistSans = Geist({
     subsets: ["latin"],
     variable: "--font-geist-sans",
@@ -13,6 +14,7 @@ const geistMono = Geist_Mono({
     subsets: ["latin"],
     variable: "--font-geist-mono",
 });
+*/
 
 export const metadata: Metadata = {
     title: "Magnetic Studio Console",
@@ -26,7 +28,7 @@ export default function RootLayout({
 }>) {
     return (
         <html lang="en">
-            <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+            <body className={`antialiased`}>
                 <ConvexClientProvider>
                     <div className="flex min-h-screen w-full bg-background text-foreground">
                         <aside className="w-64 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col">

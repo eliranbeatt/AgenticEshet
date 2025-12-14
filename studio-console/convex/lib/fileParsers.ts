@@ -12,19 +12,38 @@ const DOCX_MIME_TYPES = new Set([
     "application/msword",
 ]);
 
+const XLSX_MIME_TYPES = new Set([
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+]);
+
+const PPTX_MIME_TYPES = new Set([
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.ms-powerpoint",
+]);
+
 export async function extractTextFromFile(buffer: ArrayBuffer, mimeType: string, filename: string): Promise<string> {
     const normalizedMime = mimeType.toLowerCase();
+    const lowerFilename = filename.toLowerCase();
 
-    if (normalizedMime === "application/pdf" || filename.toLowerCase().endsWith(".pdf")) {
+    if (normalizedMime === "application/pdf" || lowerFilename.endsWith(".pdf")) {
         return extractPdfText(buffer);
     }
 
-    if (TEXT_MIME_TYPES.has(normalizedMime) || filename.toLowerCase().endsWith(".md") || filename.toLowerCase().endsWith(".txt")) {
+    if (TEXT_MIME_TYPES.has(normalizedMime) || lowerFilename.endsWith(".md") || lowerFilename.endsWith(".txt")) {
         return new TextDecoder().decode(buffer);
     }
 
-    if (DOCX_MIME_TYPES.has(normalizedMime) || filename.toLowerCase().endsWith(".docx")) {
+    if (DOCX_MIME_TYPES.has(normalizedMime) || lowerFilename.endsWith(".docx")) {
         return extractDocxText(buffer);
+    }
+
+    if (XLSX_MIME_TYPES.has(normalizedMime) || lowerFilename.endsWith(".xlsx")) {
+        return extractXlsxText(buffer);
+    }
+
+    if (PPTX_MIME_TYPES.has(normalizedMime) || lowerFilename.endsWith(".pptx")) {
+        return extractPptxText(buffer);
     }
 
     return new TextDecoder().decode(buffer);
@@ -255,4 +274,102 @@ function decodeXmlEntities(value: string): string {
         };
         return named[entity] ?? match;
     });
+}
+
+function extractXlsxText(buffer: ArrayBuffer): string {
+    try {
+        const archive = unzipSync(new Uint8Array(buffer));
+        
+        // 1. Parse Shared Strings
+        const sharedStringsFile = archive["xl/sharedStrings.xml"];
+        const sharedStrings: string[] = [];
+        if (sharedStringsFile) {
+            const xml = strFromU8(sharedStringsFile);
+            const matches = xml.match(/<t[^>]*>([^<]*)<\/t>/g);
+            if (matches) {
+                for (const match of matches) {
+                    const content = match.replace(/<[^>]+>/g, "");
+                    sharedStrings.push(decodeXmlEntities(content));
+                }
+            }
+        }
+
+        // 2. Parse Sheets
+        let output = "";
+        const sheetFiles = Object.keys(archive).filter(k => k.match(/^xl\/worksheets\/sheet\d+\.xml$/));
+        sheetFiles.sort((a, b) => {
+            const numA = parseInt(a.match(/\d+/)![0]);
+            const numB = parseInt(b.match(/\d+/)![0]);
+            return numA - numB;
+        });
+
+        for (const filename of sheetFiles) {
+            const xml = strFromU8(archive[filename]);
+            const rows = xml.match(/<row[^>]*>[\s\S]*?<\/row>/g);
+            if (rows) {
+                output += `[Sheet ${filename.match(/\d+/)![0]}]\n`;
+                for (const row of rows) {
+                    const cells = row.match(/<c[^>]*>[\s\S]*?<\/c>/g);
+                    if (cells) {
+                        const rowValues = [];
+                        for (const cell of cells) {
+                            const isShared = cell.includes('t="s"');
+                            const valueMatch = cell.match(/<v>([^<]*)<\/v>/);
+                            if (valueMatch) {
+                                const val = valueMatch[1];
+                                if (isShared) {
+                                    const index = parseInt(val, 10);
+                                    if (sharedStrings[index]) {
+                                        rowValues.push(sharedStrings[index]);
+                                    }
+                                } else {
+                                    rowValues.push(val);
+                                }
+                            } else {
+                                const inlineMatch = cell.match(/<t>([^<]*)<\/t>/);
+                                if (inlineMatch) {
+                                    rowValues.push(decodeXmlEntities(inlineMatch[1]));
+                                }
+                            }
+                        }
+                        if (rowValues.length > 0) {
+                            output += rowValues.join("\t") + "\n";
+                        }
+                    }
+                }
+                output += "\n";
+            }
+        }
+        return output.trim();
+    } catch (e) {
+        console.error("XLSX parsing failed", e);
+        return "";
+    }
+}
+
+function extractPptxText(buffer: ArrayBuffer): string {
+    try {
+        const archive = unzipSync(new Uint8Array(buffer));
+        let output = "";
+        
+        const slideFiles = Object.keys(archive).filter(k => k.match(/^ppt\/slides\/slide\d+\.xml$/));
+        slideFiles.sort((a, b) => {
+            const numA = parseInt(a.match(/\d+/)![0]);
+            const numB = parseInt(b.match(/\d+/)![0]);
+            return numA - numB;
+        });
+
+        for (const filename of slideFiles) {
+            const xml = strFromU8(archive[filename]);
+            const matches = xml.match(/<a:t[^>]*>([^<]*)<\/a:t>/g);
+            if (matches) {
+                const slideText = matches.map(m => decodeXmlEntities(m.replace(/<[^>]+>/g, ""))).join(" ");
+                output += `[Slide ${filename.match(/\d+/)![0]}]\n${slideText}\n\n`;
+            }
+        }
+        return output.trim();
+    } catch (e) {
+        console.error("PPTX parsing failed", e);
+        return "";
+    }
 }

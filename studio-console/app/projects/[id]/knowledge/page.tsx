@@ -29,10 +29,13 @@ type KnowledgeSearchResult = {
 
 const jobStatusStyles: Record<Doc<"ingestionJobs">["status"], string> = {
     created: "bg-gray-100 text-gray-700",
+    queued: "bg-gray-200 text-gray-800",
+    running: "bg-yellow-100 text-yellow-800",
     processing: "bg-yellow-100 text-yellow-800",
     ready: "bg-blue-100 text-blue-700",
     committed: "bg-green-100 text-green-700",
     failed: "bg-red-100 text-red-700",
+    cancelled: "bg-gray-300 text-gray-600",
 };
 
 const parseJsonList = (value?: string) => {
@@ -95,6 +98,7 @@ export default function KnowledgePage() {
                 name: jobName.trim() || `Import ${new Date().toLocaleString()}`,
                 defaultContext: jobContext.trim() || undefined,
                 defaultTags: parsedTags,
+                sourceType: "upload",
             });
 
             for (const file of Array.from(files)) {

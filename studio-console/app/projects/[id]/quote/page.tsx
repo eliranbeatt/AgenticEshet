@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useAction } from "convex/react";
+import { useQuery, useAction, useMutation } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Id, type Doc } from "../../../../convex/_generated/dataModel";
 
@@ -19,8 +19,10 @@ export default function QuotePage() {
     
     const quotes = useQuery(api.agents.quote.listQuotes, { projectId });
     const runQuoteAgent = useAction(api.agents.quote.run);
+    const generateFromAccounting = useMutation(api.quotes.generateFromAccounting);
     
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isGeneratingFromAccounting, setIsGeneratingFromAccounting] = useState(false);
     const [instruction, setInstruction] = useState("");
     const [selectedQuoteId, setSelectedQuoteId] = useState<Id<"quotes"> | null>(null);
     
@@ -41,6 +43,19 @@ export default function QuotePage() {
             alert("Failed to generate quote: " + message);
         } finally {
             setIsGenerating(false);
+        }
+    };
+
+    const handleGenerateFromAccounting = async () => {
+        setIsGeneratingFromAccounting(true);
+        try {
+            await generateFromAccounting({ projectId });
+        } catch (error: unknown) {
+            console.error(error);
+            const message = error instanceof Error ? error.message : "Unknown error";
+            alert(message);
+        } finally {
+            setIsGeneratingFromAccounting(false);
         }
     };
 
@@ -95,16 +110,24 @@ export default function QuotePage() {
             {/* Left: Controls & History */}
             <div className="w-1/3 flex flex-col space-y-4">
                 <div className="bg-white p-4 rounded shadow-sm border">
-                    <h2 className="text-lg font-bold mb-4">Quote Agent</h2>
+                    <h2 className="text-lg font-bold mb-4">Quotes</h2>
                     <p className="text-sm text-gray-600 mb-4">
-                        Generate a cost estimate based on project tasks and details.
+                        Quotes are built from Accounting totals (cost + margins) and exported as a single line per item.
                     </p>
+
+                    <button
+                        onClick={handleGenerateFromAccounting}
+                        disabled={isGeneratingFromAccounting}
+                        className="w-full bg-blue-600 text-white px-4 py-2 rounded font-medium disabled:opacity-50 hover:bg-blue-700 mb-4"
+                    >
+                        {isGeneratingFromAccounting ? "Generating..." : "Generate from Accounting"}
+                    </button>
                     
                     <div className="space-y-2">
                         <textarea
                             className="w-full border rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                             rows={3}
-                            placeholder="E.g., 'Add 10% contingency' or 'Include travel costs'..."
+                            placeholder="Optional: ask the agent to generate a narrative or alternate structure..."
                             value={instruction}
                             onChange={(e) => setInstruction(e.target.value)}
                         />
@@ -113,7 +136,7 @@ export default function QuotePage() {
                             disabled={isGenerating}
                             className="w-full bg-green-600 text-white px-4 py-2 rounded font-medium disabled:opacity-50 hover:bg-green-700"
                         >
-                            {isGenerating ? "Calculating..." : "Generate Quote"}
+                            {isGenerating ? "Generating..." : "Generate with Agent"}
                         </button>
                     </div>
                 </div>

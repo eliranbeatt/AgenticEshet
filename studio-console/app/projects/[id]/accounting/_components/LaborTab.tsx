@@ -40,10 +40,10 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
       projectId,
       sectionId,
       workType: "studio",
-      role: "General Labor",
-      rateType: "day",
+      role: "Art worker",
+      rateType: "hour",
       plannedQuantity: 1,
-      plannedUnitCost: 0,
+      plannedUnitCost: 100,
       status: "planned"
     });
   };

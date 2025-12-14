@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
@@ -10,17 +10,23 @@ export default function PlanningPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
     
-    const project = useQuery(api.projects.getProject, { projectId });
     const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
     const plans = useQuery(api.projects.getPlans, { projectId });
     const transcript = useQuery(api.conversations.recentByPhase, { projectId, phase: "planning", limit: 10 });
+    const clarificationDoc = useQuery(api.clarificationDocs.getLatest, { projectId });
     const runPlanning = useAction(api.agents.planning.run);
     const setPlanActive = useMutation(api.projects.setPlanActive);
+    const createDraftFromAccounting = useMutation(api.costPlanDocs.createDraftFromAccounting);
+    const updateDraftMarkdown = useMutation(api.costPlanDocs.updateDraftMarkdown);
     
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [selection, setSelection] = useState<Id<"plans"> | null>(null);
     const [approvingPlanId, setApprovingPlanId] = useState<Id<"plans"> | null>(null);
+    const [isBuildingDraft, setIsBuildingDraft] = useState(false);
+    const [isEditingMarkdown, setIsEditingMarkdown] = useState(false);
+    const [markdownDraft, setMarkdownDraft] = useState("");
+    const [isSavingMarkdown, setIsSavingMarkdown] = useState(false);
     
     const activePlan = useMemo<Doc<"plans"> | null>(
         () => plans?.find((plan: Doc<"plans">) => plan.isActive) ?? null,
@@ -32,6 +38,12 @@ export default function PlanningPage() {
         if (!selection) return activePlan ?? plans[0];
         return plans.find((plan: Doc<"plans">) => plan._id === selection) ?? (activePlan ?? plans[0]);
     }, [plans, selection, activePlan]);
+
+    useEffect(() => {
+        if (!selectedPlan) return;
+        setMarkdownDraft(selectedPlan.contentMarkdown ?? "");
+        setIsEditingMarkdown(false);
+    }, [selectedPlan]);
 
     const handleGenerate = async () => {
         if (!input.trim()) return;
@@ -62,10 +74,37 @@ export default function PlanningPage() {
         }
     };
 
+    const handleBuildDraftFromAccounting = async () => {
+        setIsBuildingDraft(true);
+        try {
+            const planId = await createDraftFromAccounting({ projectId });
+            setSelection(planId);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to build draft plan";
+            alert(message);
+        } finally {
+            setIsBuildingDraft(false);
+        }
+    };
+
+    const handleSaveMarkdown = async () => {
+        if (!selectedPlan) return;
+        setIsSavingMarkdown(true);
+        try {
+            await updateDraftMarkdown({ planId: selectedPlan._id, contentMarkdown: markdownDraft });
+            setIsEditingMarkdown(false);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to save plan markdown";
+            alert(message);
+        } finally {
+            setIsSavingMarkdown(false);
+        }
+    };
+
     return (
         <div className="space-y-6">
             <PhaseBadges
-                clarificationReady={Boolean(project?.overviewSummary)}
+                clarificationReady={Boolean(clarificationDoc?.contentMarkdown?.trim())}
                 planningLabel={
                     activePlan
                         ? `Active plan v${activePlan.version}`
@@ -157,6 +196,13 @@ export default function PlanningPage() {
                     </div>
                     {selectedPlan && (
                         <div className="flex gap-2">
+                            <button
+                                onClick={handleBuildDraftFromAccounting}
+                                disabled={isBuildingDraft}
+                                className="border border-gray-300 bg-white text-gray-800 px-3 py-2 rounded text-sm font-medium disabled:opacity-50 hover:bg-gray-100"
+                            >
+                                {isBuildingDraft ? "Building..." : "Draft from Accounting"}
+                            </button>
                             {!selectedPlan.isActive && (
                                 <button
                                     onClick={() => handleApprove(selectedPlan._id)}
@@ -181,9 +227,47 @@ export default function PlanningPage() {
                                     <strong>Agent Reasoning:</strong> {selectedPlan.reasoning}
                                 </div>
                             )}
-                            <div className="whitespace-pre-wrap font-sans text-gray-800">
-                                {selectedPlan.contentMarkdown}
-                            </div>
+                            {selectedPlan.isDraft ? (
+                                <div className="space-y-3">
+                                    <div className="flex gap-2">
+                                        {!isEditingMarkdown ? (
+                                            <button
+                                                onClick={() => setIsEditingMarkdown(true)}
+                                                className="border border-gray-300 bg-white text-gray-800 px-3 py-1.5 rounded text-sm font-medium hover:bg-gray-100"
+                                            >
+                                                Edit Markdown
+                                            </button>
+                                        ) : (
+                                            <>
+                                                <button
+                                                    onClick={handleSaveMarkdown}
+                                                    disabled={isSavingMarkdown}
+                                                    className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm font-medium disabled:opacity-50"
+                                                >
+                                                    {isSavingMarkdown ? "Saving..." : "Save"}
+                                                </button>
+                                                <button
+                                                    onClick={() => setIsEditingMarkdown(false)}
+                                                    className="border border-gray-300 bg-white text-gray-800 px-3 py-1.5 rounded text-sm font-medium hover:bg-gray-100"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                    {isEditingMarkdown ? (
+                                        <textarea
+                                            className="w-full min-h-[520px] border rounded p-3 text-sm font-mono"
+                                            value={markdownDraft}
+                                            onChange={(e) => setMarkdownDraft(e.target.value)}
+                                        />
+                                    ) : (
+                                        <div className="whitespace-pre-wrap font-sans text-gray-800">{selectedPlan.contentMarkdown}</div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="whitespace-pre-wrap font-sans text-gray-800">{selectedPlan.contentMarkdown}</div>
+                            )}
                         </div>
                     ) : (
                         <div className="flex items-center justify-center h-full text-gray-400">

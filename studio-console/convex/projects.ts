@@ -34,6 +34,11 @@ export const createProject = mutation({
             details: args.details,
             createdAt: Date.now(),
             createdBy: "user", // TODO: auth
+
+            currency: "ILS",
+            overheadPercent: 0.15,
+            riskPercent: 0.10,
+            profitPercent: 0.30,
         });
         return projectId;
     },
@@ -53,6 +58,10 @@ export const updateProject = mutation({
                 v.literal("archived")
             )
         ),
+        currency: v.optional(v.string()),
+        overheadPercent: v.optional(v.number()),
+        riskPercent: v.optional(v.number()),
+        profitPercent: v.optional(v.number()),
         details: v.optional(
             v.object({
                 eventDate: v.optional(v.string()),

@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
 
@@ -22,15 +22,23 @@ export default function ClarificationPage() {
     const projectId = params.id as Id<"projects">;
     
     const runClarification = useAction(api.agents.clarification.run);
-    const project = useQuery(api.projects.getProject, { projectId });
+    const saveClarificationDoc = useMutation(api.clarificationDocs.save);
     const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
     const plans = useQuery(api.projects.getPlans, { projectId });
     const transcript = useQuery(api.conversations.recentByPhase, { projectId, phase: "clarification", limit: 10 });
+    const clarificationDoc = useQuery(api.clarificationDocs.getLatest, { projectId });
     
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [lastAnalysis, setLastAnalysis] = useState<AnalysisResult | null>(null);
+    const [clarificationMarkdown, setClarificationMarkdown] = useState("");
+    const [isSavingDoc, setIsSavingDoc] = useState(false);
+
+    useEffect(() => {
+        if (clarificationDoc === undefined) return;
+        setClarificationMarkdown(clarificationDoc?.contentMarkdown ?? "");
+    }, [clarificationDoc]);
 
     const activePlan = useMemo<Doc<"plans"> | null>(
         () => plans?.find((plan: Doc<"plans">) => plan.isActive) ?? null,
@@ -68,10 +76,25 @@ export default function ClarificationPage() {
         }
     };
 
+    const handleSaveDoc = async () => {
+        setIsSavingDoc(true);
+        try {
+            await saveClarificationDoc({
+                projectId,
+                contentMarkdown: clarificationMarkdown,
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to save clarification document";
+            alert(message);
+        } finally {
+            setIsSavingDoc(false);
+        }
+    };
+
     return (
         <div className="space-y-6">
             <PhaseBadges
-                projectReady={Boolean(project?.overviewSummary)}
+                projectReady={Boolean(clarificationDoc?.contentMarkdown?.trim())}
                 activePlanLabel={
                     planMeta?.activePlan ? `Active plan v${planMeta.activePlan.version}` : "Plan pending approval"
                 }
@@ -175,6 +198,37 @@ export default function ClarificationPage() {
                     </div>
 
                     <ActivePlanCard plan={activePlan} />
+                </div>
+
+                <div className="space-y-6">
+                    <div className="bg-white rounded shadow-sm border overflow-hidden flex flex-col h-[520px]">
+                        <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
+                            <div>
+                                <h2 className="text-sm font-bold uppercase text-gray-600">Clarification document (Markdown)</h2>
+                                <p className="text-xs text-gray-500">This is the editable source used by planning.</p>
+                            </div>
+                            <button
+                                onClick={handleSaveDoc}
+                                disabled={isSavingDoc}
+                                className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm font-medium disabled:opacity-50"
+                            >
+                                {isSavingDoc ? "Saving..." : "Save"}
+                            </button>
+                        </div>
+                        <div className="flex-1 p-4">
+                            <textarea
+                                className="w-full h-full border rounded p-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder={`# Clarifications\n\n## Goals\n- ...\n\n## Scope\n- In scope: ...\n- Out of scope: ...\n\n## Assumptions\n- ...\n\n## Open questions\n- ...\n`}
+                                value={clarificationMarkdown}
+                                onChange={(e) => setClarificationMarkdown(e.target.value)}
+                            />
+                        </div>
+                    </div>
+
+                    <TranscriptPanel
+                        conversations={transcript || []}
+                        emptyCopy="No clarification transcripts yet."
+                    />
                 </div>
             </div>
         </div>

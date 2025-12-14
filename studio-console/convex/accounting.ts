@@ -1,104 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { Doc, Id } from "./_generated/dataModel";
-
-// --------------------------------------------------------------------------
-// Types & Helpers
-// --------------------------------------------------------------------------
-
-type Money = number;
-
-export interface SectionCostSnapshot {
-  sectionId: Id<"sections">;
-  
-  // Planned
-  plannedMaterialsCostE: Money;
-  plannedWorkCostS: Money;
-  plannedDirectCost: Money;
-  plannedOverhead: Money;
-  plannedRisk: Money;
-  plannedProfit: Money;
-  plannedClientPrice: Money;
-
-  // Actual
-  actualMaterialsCostE: Money;
-  actualWorkCostS: Money;
-  actualDirectCost: Money;
-  actualOverhead: Money;
-  actualRisk: Money;
-  actualProfit: Money;
-  actualClientPrice: Money; // Theoretical
-
-  // Variances
-  varianceDirect: Money;
-}
-
-function calculateSectionSnapshot(
-  section: Doc<"sections">,
-  materials: Doc<"materialLines">[],
-  work: Doc<"workLines">[],
-  projectDefaults: { overhead: number; risk: number; profit: number }
-): SectionCostSnapshot {
-  // 1. Determine Effective Percentages
-  const overheadPct = section.overheadPercentOverride ?? projectDefaults.overhead;
-  const riskPct = section.riskPercentOverride ?? projectDefaults.risk;
-  const profitPct = section.profitPercentOverride ?? projectDefaults.profit;
-
-  // 2. Sum Planned Costs
-  const plannedMaterialsCostE = materials.reduce((sum, m) => sum + (m.plannedQuantity * m.plannedUnitCost), 0);
-  const plannedWorkCostS = work.reduce((sum, w) => {
-    const cost = w.rateType === "flat" ? w.plannedUnitCost : (w.plannedQuantity * w.plannedUnitCost);
-    return sum + cost;
-  }, 0);
-
-  const plannedDirectCost = plannedMaterialsCostE + plannedWorkCostS;
-  const plannedOverhead = plannedDirectCost * overheadPct;
-  const plannedRisk = plannedDirectCost * riskPct;
-  const plannedProfit = plannedDirectCost * profitPct;
-  const plannedClientPrice = plannedDirectCost + plannedOverhead + plannedRisk + plannedProfit;
-
-  // 3. Sum Actual Costs
-  const actualMaterialsCostE = materials.reduce((sum, m) => {
-    const q = m.actualQuantity ?? m.plannedQuantity;
-    const c = m.actualUnitCost ?? m.plannedUnitCost;
-    return sum + (q * c);
-  }, 0);
-
-  const actualWorkCostS = work.reduce((sum, w) => {
-    // If actuals exist, use them; else fallback to planned
-    const q = w.actualQuantity ?? w.plannedQuantity;
-    const c = w.actualUnitCost ?? w.plannedUnitCost;
-    const cost = w.rateType === "flat" ? c : (q * c);
-    return sum + cost;
-  }, 0);
-
-  const actualDirectCost = actualMaterialsCostE + actualWorkCostS;
-  const actualOverhead = actualDirectCost * overheadPct;
-  const actualRisk = actualDirectCost * riskPct;
-  // Profit is strictly what's left, but for "Actual Price" calculation we apply the target %
-  // Realized profit would be (Client Price - Actual Direct - Overhead - Risk)
-  const actualProfit = actualDirectCost * profitPct; 
-  const actualClientPrice = actualDirectCost + actualOverhead + actualRisk + actualProfit;
-
-  return {
-    sectionId: section._id,
-    plannedMaterialsCostE,
-    plannedWorkCostS,
-    plannedDirectCost,
-    plannedOverhead,
-    plannedRisk,
-    plannedProfit,
-    plannedClientPrice,
-    actualMaterialsCostE,
-    actualWorkCostS,
-    actualDirectCost,
-    actualOverhead,
-    actualRisk,
-    actualProfit,
-    actualClientPrice,
-    varianceDirect: actualDirectCost - plannedDirectCost
-  };
-}
+import { Doc } from "./_generated/dataModel";
+import { calculateSectionSnapshot, getProjectPricingDefaults } from "./lib/costing";
 
 // --------------------------------------------------------------------------
 // Queries
@@ -142,11 +45,7 @@ export const getProjectAccounting = query({
     }
 
     // Project Defaults
-    const defaults = {
-      overhead: project.overheadPercent ?? 0.15,
-      risk: project.riskPercent ?? 0.10,
-      profit: project.profitPercent ?? 0.30,
-    };
+    const defaults = getProjectPricingDefaults(project);
 
     // Build Result
     const sectionData = sections.map((s) => {

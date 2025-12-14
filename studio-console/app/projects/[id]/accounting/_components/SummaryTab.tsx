@@ -9,11 +9,23 @@ import { Plus, Wand2 } from "lucide-react";
 export default function SummaryTab({ data, projectId }: { data: any, projectId: Id<"projects"> }) {
   const addSection = useMutation(api.accounting.addSection);
   const estimateProject = useAction(api.agents.estimator.estimateProject);
+  const updateProject = useMutation(api.projects.updateProject);
 
   const [newSectionGroup, setNewSectionGroup] = useState("General");
   const [newSectionName, setNewSectionName] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [isEstimatingAll, setIsEstimatingAll] = useState(false);
+  const [isSavingPolicy, setIsSavingPolicy] = useState(false);
+
+  const [riskPercent, setRiskPercent] = useState<number>(() => (data.project.riskPercent ?? 0.10) * 100);
+  const [overheadPercent, setOverheadPercent] = useState<number>(() => (data.project.overheadPercent ?? 0.15) * 100);
+  const [profitPercent, setProfitPercent] = useState<number>(() => (data.project.profitPercent ?? 0.30) * 100);
+
+  const parsePercent = (value: number, fallback: number) => {
+    if (Number.isNaN(value)) return fallback;
+    if (value < 0) return 0;
+    return value / 100;
+  };
 
   const handleEstimateAll = async () => {
     if (!confirm("This will auto-estimate ALL sections in Hebrew/ILS based on the plan. This may take a minute. Continue?")) return;
@@ -25,6 +37,22 @@ export default function SummaryTab({ data, projectId }: { data: any, projectId: 
         alert("Estimation failed: " + e);
     } finally {
         setIsEstimatingAll(false);
+    }
+  };
+
+  const handleSavePolicy = async () => {
+    setIsSavingPolicy(true);
+    try {
+        await updateProject({
+            projectId,
+            riskPercent: parsePercent(riskPercent, data.project.riskPercent ?? 0.10),
+            overheadPercent: parsePercent(overheadPercent, data.project.overheadPercent ?? 0.15),
+            profitPercent: parsePercent(profitPercent, data.project.profitPercent ?? 0.30),
+        });
+    } catch (e) {
+        alert("Failed to save margins: " + e);
+    } finally {
+        setIsSavingPolicy(false);
     }
   };
 
@@ -68,6 +96,51 @@ export default function SummaryTab({ data, projectId }: { data: any, projectId: 
             >
                 <Plus className="w-4 h-4 mr-1" /> Add Section
             </button>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-lg p-4 flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">Margins (defaults per project)</h3>
+            <button
+                onClick={handleSavePolicy}
+                disabled={isSavingPolicy}
+                className="text-sm bg-gray-900 text-white px-3 py-1.5 rounded hover:bg-black disabled:opacity-50"
+            >
+                {isSavingPolicy ? "Saving..." : "Save"}
+            </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="text-sm">
+                <div className="text-xs font-medium text-gray-600 mb-1">Risk % (default 10)</div>
+                <input
+                    type="number"
+                    className="w-full border rounded px-2 py-1"
+                    value={riskPercent}
+                    onChange={(e) => setRiskPercent(Number(e.target.value))}
+                />
+            </label>
+            <label className="text-sm">
+                <div className="text-xs font-medium text-gray-600 mb-1">Overhead % (default 15)</div>
+                <input
+                    type="number"
+                    className="w-full border rounded px-2 py-1"
+                    value={overheadPercent}
+                    onChange={(e) => setOverheadPercent(Number(e.target.value))}
+                />
+            </label>
+            <label className="text-sm">
+                <div className="text-xs font-medium text-gray-600 mb-1">Profit % (default 30)</div>
+                <input
+                    type="number"
+                    className="w-full border rounded px-2 py-1"
+                    value={profitPercent}
+                    onChange={(e) => setProfitPercent(Number(e.target.value))}
+                />
+            </label>
+        </div>
+        <div className="text-xs text-gray-500">
+            Client price per item = Direct cost + Risk + Overhead + Profit (all computed from cost).
         </div>
       </div>
 

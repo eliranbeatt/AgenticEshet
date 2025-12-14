@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { z } from "zod";
-import { generateJsonWithGemini } from "../lib/gemini";
+import { callChatWithSchema } from "../lib/openai";
 import { Doc, Id } from "../_generated/dataModel";
 
 const AccountingFromPlanSchema = z.object({
@@ -10,32 +10,28 @@ const AccountingFromPlanSchema = z.object({
         z.object({
             group: z.string(),
             name: z.string(),
-            description: z.string().optional(),
-            materials: z
-                .array(
-                    z.object({
-                        category: z.string(),
-                        label: z.string(),
-                        unit: z.string(),
-                        quantity: z.number().nonnegative(),
-                        unitCost: z.number().nonnegative(),
-                        vendorName: z.string().optional(),
-                        description: z.string().optional(),
-                    }),
-                )
-                .optional(),
-            work: z
-                .array(
-                    z.object({
-                        workType: z.string(),
-                        role: z.enum(["Art worker", "Art manager"]),
-                        rateType: z.enum(["hour", "day", "flat"]),
-                        quantity: z.number().nonnegative(),
-                        unitCost: z.number().nonnegative(),
-                        description: z.string().optional(),
-                    }),
-                )
-                .optional(),
+            description: z.string().nullable(),
+            materials: z.array(
+                z.object({
+                    category: z.string(),
+                    label: z.string(),
+                    unit: z.string(),
+                    quantity: z.number().nonnegative(),
+                    unitCost: z.number().nonnegative(),
+                    vendorName: z.string().nullable(),
+                    description: z.string().nullable(),
+                }),
+            ),
+            work: z.array(
+                z.object({
+                    workType: z.string(),
+                    role: z.enum(["Art worker", "Art manager"]),
+                    rateType: z.enum(["hour", "day", "flat"]),
+                    quantity: z.number().nonnegative(),
+                    unitCost: z.number().nonnegative(),
+                    description: z.string().nullable(),
+                }),
+            ),
         }),
     ),
 });
@@ -47,56 +43,25 @@ function buildPrompt(args: {
     planMarkdown: string;
 }) {
     return [
-        "You are an operations planner for a creative studio.",
-        "Goal: convert the approved project plan (Markdown) into accounting sections + line items.",
+        `Project: ${args.project.name}`,
+        `Customer: ${args.project.clientName}`,
         "",
-        "Return STRICT JSON only (no markdown, no prose).",
+        "Convert the APPROVED plan Markdown into accounting Sections + line items.",
+        "",
         "Rules:",
-        "- Create a concise list of accounting SECTIONS (group + name). Each section must be a customer-facing deliverable item.",
-        "- For each section, include estimated MATERIALS lines (optional) and LABOR lines (optional).",
-        "- Use currency: ILS. All costs are COSTS (not sell price).",
-        "- Roles allowed: Art worker (100 ILS/hour), Art manager (200 ILS/hour). Map all labor into these roles.",
-        "- rateType: hour/day/flat. If day is used, assume quantity in days and unitCost is ILS/day (derive from hourly when needed).",
-        "- Keep section names short; keep groups like: General, Studio Elements, Logistics, Printing, Installation, etc.",
+        "- Output costs only (not sell price). Currency: ILS.",
+        "- Create accounting sections (group + name). Each section should be a customer-facing deliverable item.",
+        "- You MUST always include all keys required by the schema.",
+        "- If a section has no materials, set materials to an empty array [].",
+        "- If a section has no work, set work to an empty array [].",
+        "- If a description is unknown/empty, set description to null.",
+        "- Labor roles allowed: Art worker and Art manager only.",
+        "- Role cost rates (hourly cost): Art worker=100 ILS/hour, Art manager=200 ILS/hour.",
+        "- Use rateType hour/day/flat; for 'day' unitCost is ILS/day; for 'hour' unitCost is ILS/hour.",
+        "- Keep counts realistic and detailed enough for budgeting.",
         "",
         "Approved Plan Markdown:",
         args.planMarkdown,
-        "",
-        "Output JSON schema:",
-        JSON.stringify(
-            {
-                sections: [
-                    {
-                        group: "string",
-                        name: "string",
-                        description: "string",
-                        materials: [
-                            {
-                                category: "string",
-                                label: "string",
-                                unit: "string",
-                                quantity: 0,
-                                unitCost: 0,
-                                vendorName: "string",
-                                description: "string",
-                            },
-                        ],
-                        work: [
-                            {
-                                workType: "studio|field|management",
-                                role: "Art worker|Art manager",
-                                rateType: "hour|day|flat",
-                                quantity: 0,
-                                unitCost: 0,
-                                description: "string",
-                            },
-                        ],
-                    },
-                ],
-            },
-            null,
-            2,
-        ),
     ].join("\n");
 }
 
@@ -157,21 +122,21 @@ export const applyGeneratedAccounting = internalMutation({
                 projectId: args.projectId,
                 group: section.group,
                 name: section.name,
-                description: section.description,
+                description: section.description ?? undefined,
                 sortOrder,
                 pricingMode: "estimated",
             });
             createdSectionIds.push(sectionId);
             sortOrder += 1;
 
-            for (const material of section.materials ?? []) {
+            for (const material of section.materials) {
                 await ctx.db.insert("materialLines", {
                     projectId: args.projectId,
                     sectionId,
                     category: material.category,
                     label: material.label,
-                    description: material.description,
-                    vendorName: material.vendorName,
+                    description: material.description ?? undefined,
+                    vendorName: material.vendorName ?? undefined,
                     unit: material.unit,
                     plannedQuantity: material.quantity,
                     plannedUnitCost: material.unitCost,
@@ -179,7 +144,7 @@ export const applyGeneratedAccounting = internalMutation({
                 });
             }
 
-            for (const workLine of section.work ?? []) {
+            for (const workLine of section.work) {
                 await ctx.db.insert("workLines", {
                     projectId: args.projectId,
                     sectionId,
@@ -189,7 +154,7 @@ export const applyGeneratedAccounting = internalMutation({
                     plannedQuantity: workLine.rateType === "flat" ? 1 : workLine.quantity,
                     plannedUnitCost: workLine.unitCost,
                     status: "planned",
-                    description: workLine.description,
+                    description: workLine.description ?? undefined,
                 });
             }
         }
@@ -208,12 +173,14 @@ export const run: ReturnType<typeof action> = action({
             projectId: args.projectId,
         });
 
-        const prompt = buildPrompt({ project, planMarkdown: activePlan.contentMarkdown });
-        const payload = await generateJsonWithGemini({
-            schema: AccountingFromPlanSchema,
-            prompt,
-            model: "gemini-pro",
-            useGoogleSearch: false,
+        const systemPrompt =
+            "You are an expert cost estimator and production accountant for a creative studio. " +
+            "Return structured JSON only that matches the required schema.";
+
+        const payload = await callChatWithSchema(AccountingFromPlanSchema, {
+            systemPrompt,
+            userPrompt: buildPrompt({ project, planMarkdown: activePlan.contentMarkdown }),
+            temperature: 0.2,
         });
 
         await ctx.runMutation(internal.agents.accountingGenerator.applyGeneratedAccounting, {
@@ -225,4 +192,3 @@ export const run: ReturnType<typeof action> = action({
         return { sections: payload.sections.length };
     },
 });
-

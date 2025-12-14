@@ -16,20 +16,28 @@ import type * as agents_estimator from "../agents/estimator.js";
 import type * as agents_planning from "../agents/planning.js";
 import type * as agents_quote from "../agents/quote.js";
 import type * as backfill from "../backfill.js";
+import type * as buying from "../buying.js";
 import type * as conversations from "../conversations.js";
+import type * as drive from "../drive.js";
+import type * as http from "../http.js";
+import type * as inbox from "../inbox.js";
 import type * as ingestion from "../ingestion.js";
 import type * as knowledge from "../knowledge.js";
 import type * as lib_fileParsers from "../lib/fileParsers.js";
+import type * as lib_gemini from "../lib/gemini.js";
 import type * as lib_hash from "../lib/hash.js";
 import type * as lib_openai from "../lib/openai.js";
 import type * as lib_textChunker from "../lib/textChunker.js";
 import type * as lib_zodSchemas from "../lib/zodSchemas.js";
 import type * as management from "../management.js";
+import type * as prices from "../prices.js";
 import type * as projects from "../projects.js";
 import type * as quests from "../quests.js";
+import type * as research from "../research.js";
 import type * as seed from "../seed.js";
 import type * as tasks from "../tasks.js";
 import type * as trelloSync from "../trelloSync.js";
+import type * as whatsapp from "../whatsapp.js";
 
 import type {
   ApiFromModules,
@@ -46,20 +54,28 @@ declare const fullApi: ApiFromModules<{
   "agents/planning": typeof agents_planning;
   "agents/quote": typeof agents_quote;
   backfill: typeof backfill;
+  buying: typeof buying;
   conversations: typeof conversations;
+  drive: typeof drive;
+  http: typeof http;
+  inbox: typeof inbox;
   ingestion: typeof ingestion;
   knowledge: typeof knowledge;
   "lib/fileParsers": typeof lib_fileParsers;
+  "lib/gemini": typeof lib_gemini;
   "lib/hash": typeof lib_hash;
   "lib/openai": typeof lib_openai;
   "lib/textChunker": typeof lib_textChunker;
   "lib/zodSchemas": typeof lib_zodSchemas;
   management: typeof management;
+  prices: typeof prices;
   projects: typeof projects;
   quests: typeof quests;
+  research: typeof research;
   seed: typeof seed;
   tasks: typeof tasks;
   trelloSync: typeof trelloSync;
+  whatsapp: typeof whatsapp;
 }>;
 
 /**

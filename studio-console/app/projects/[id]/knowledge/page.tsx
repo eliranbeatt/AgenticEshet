@@ -57,10 +57,9 @@ export default function KnowledgePage() {
 
     const createJob = useMutation(api.ingestion.createJob);
     const generateUploadUrl = useMutation(api.ingestion.generateUploadUrl);
-    const registerFile = useMutation(api.ingestion.registerFile);
-    const runIngestionJob = useAction(api.ingestion.runIngestionJob);
-    const processFile = useAction(api.ingestion.processFile);
-    const commitIngestionJob = useAction(api.ingestion.commitIngestionJob);
+    const addFilesToJob = useMutation(api.ingestion.addFilesToJob);
+    const retryFile = useMutation(api.ingestion.retryFile);
+    const runJob = useAction(api.ingestion.runJob);
     const searchKnowledge = useAction(api.knowledge.dynamicSearch);
 
     const [activeTab, setActiveTab] = useState<"docs" | "upload" | "search">("docs");
@@ -101,6 +100,7 @@ export default function KnowledgePage() {
                 sourceType: "upload",
             });
 
+            const uploadedFiles: Array<{ storageId: string; name: string; mimeType: string; size: number }> = [];
             for (const file of Array.from(files)) {
                 const postUrl = await generateUploadUrl();
                 const result = await fetch(postUrl, {
@@ -110,15 +110,16 @@ export default function KnowledgePage() {
                 });
                 const { storageId } = await result.json();
 
-                await registerFile({
-                    jobId,
+                uploadedFiles.push({
                     storageId,
-                    filename: file.name,
+                    name: file.name,
                     mimeType: file.type || "application/octet-stream",
+                    size: file.size,
                 });
             }
 
-            await runIngestionJob({ jobId });
+            await addFilesToJob({ jobId, files: uploadedFiles });
+            await runJob({ jobId });
             alert("Files uploaded. The ingestion job is running now.");
         } catch (error: unknown) {
             console.error(error);
@@ -133,28 +134,20 @@ export default function KnowledgePage() {
 
     const handleRunJob = async (jobId: Id<"ingestionJobs">) => {
         try {
-            await runIngestionJob({ jobId });
+            await runJob({ jobId });
         } catch (error) {
             console.error(error);
             alert(error instanceof Error ? error.message : "Unable to run ingestion job");
         }
     };
 
-    const handleRetryFile = async (fileId: Id<"ingestionFiles">) => {
+    const handleRetryFile = async (jobId: Id<"ingestionJobs">, fileId: Id<"ingestionFiles">) => {
         try {
-            await processFile({ fileId });
+            await retryFile({ fileId });
+            await runJob({ jobId });
         } catch (error) {
             console.error(error);
             alert(error instanceof Error ? error.message : "Unable to reprocess file");
-        }
-    };
-
-    const handleCommitFiles = async (jobId: Id<"ingestionJobs">, fileIds: Id<"ingestionFiles">[]) => {
-        try {
-            await commitIngestionJob({ jobId, fileIds });
-        } catch (error) {
-            console.error(error);
-            alert(error instanceof Error ? error.message : "Commit failed");
         }
     };
 
@@ -324,7 +317,6 @@ export default function KnowledgePage() {
                                     job={job}
                                     onRunJob={handleRunJob}
                                     onRetryFile={handleRetryFile}
-                                    onCommitFiles={handleCommitFiles}
                                 />
                             ))}
                             {(!ingestionJobs || ingestionJobs.length === 0) && (
@@ -590,34 +582,18 @@ function DocDetailDrawer({ docId, onClose }: { docId: Id<"knowledgeDocs">; onClo
 type JobItemProps = {
     job: Doc<"ingestionJobs">;
     onRunJob: (jobId: Id<"ingestionJobs">) => Promise<void>;
-    onCommitFiles: (jobId: Id<"ingestionJobs">, fileIds: Id<"ingestionFiles">[]) => Promise<void>;
-    onRetryFile: (fileId: Id<"ingestionFiles">) => Promise<void>;
+    onRetryFile: (jobId: Id<"ingestionJobs">, fileId: Id<"ingestionFiles">) => Promise<void>;
 };
 
-function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
+function JobItem({ job, onRunJob, onRetryFile }: JobItemProps) {
     const files = useQuery(api.ingestion.listFiles, { jobId: job._id });
-    const [selectedIds, setSelectedIds] = useState<Id<"ingestionFiles">[]>([]);
     const [expandedId, setExpandedId] = useState<Id<"ingestionFiles"> | null>(null);
     const [isRunning, setIsRunning] = useState(false);
-    const [isCommitting, setIsCommitting] = useState(false);
     const [retryingId, setRetryingId] = useState<Id<"ingestionFiles"> | null>(null);
 
     useEffect(() => {
-        setSelectedIds([]);
         setExpandedId(null);
     }, [job._id]);
-
-    const readyIds = (files ?? [])
-        .filter((file: Doc<"ingestionFiles">) => file.status === "ready")
-        .map((file: Doc<"ingestionFiles">) => file._id);
-    const readySet = new Set(readyIds);
-    const selectableIds = selectedIds.filter((id) => readySet.has(id));
-
-    const toggleSelection = (fileId: Id<"ingestionFiles">) => {
-        setSelectedIds((prev) =>
-            prev.includes(fileId) ? prev.filter((id) => id !== fileId) : [...prev, fileId]
-        );
-    };
 
     const handleRun = async () => {
         setIsRunning(true);
@@ -628,21 +604,10 @@ function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
         }
     };
 
-    const handleCommit = async (fileIds: Id<"ingestionFiles">[]) => {
-        if (fileIds.length === 0) return;
-        setIsCommitting(true);
-        try {
-            await onCommitFiles(job._id, fileIds);
-            setSelectedIds([]);
-        } finally {
-            setIsCommitting(false);
-        }
-    };
-
     const handleRetry = async (fileId: Id<"ingestionFiles">) => {
         setRetryingId(fileId);
         try {
-            await onRetryFile(fileId);
+            await onRetryFile(job._id, fileId);
         } finally {
             setRetryingId(null);
         }
@@ -683,13 +648,6 @@ function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
                     >
                         {isRunning ? "Running..." : "Run enrichment"}
                     </button>
-                    <button
-                        onClick={() => handleCommit(readyIds)}
-                        disabled={isCommitting || readyIds.length === 0}
-                        className="text-xs bg-green-50 text-green-700 px-3 py-1 rounded border border-green-200 hover:bg-green-100 disabled:opacity-50"
-                    >
-                        Commit all ready
-                    </button>
                 </div>
             </div>
 
@@ -699,7 +657,6 @@ function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
                     const keyPoints = parseJsonList(file.keyPointsJson);
                     const keywords = parseJsonList(file.keywordsJson);
                     const suggestedTags = parseJsonList(file.suggestedTagsJson);
-                    const canSelect = file.status === "ready";
                     const isExpanded = expandedId === file._id;
 
                     return (
@@ -714,38 +671,19 @@ function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    {canSelect && (
-                                        <label className="flex items-center gap-1 text-xs text-gray-600 cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedIds.includes(file._id)}
-                                                onChange={() => toggleSelection(file._id)}
-                                            />
-                                            Ready to commit
-                                        </label>
-                                    )}
                                     <button
                                         onClick={() => setExpandedId(isExpanded ? null : file._id)}
                                         className="text-xs text-blue-600 underline"
                                     >
                                         {isExpanded ? "Hide details" : "Review"}
                                     </button>
-                                    {(file.status === "ready" || file.status === "failed") && (
+                                    {file.status === "failed" && (
                                         <button
                                             onClick={() => handleRetry(file._id)}
                                             disabled={retryingId === file._id}
                                             className="text-xs text-gray-600 underline disabled:opacity-50"
                                         >
                                             {retryingId === file._id ? "Re-running..." : "Re-run"}
-                                        </button>
-                                    )}
-                                    {file.status === "ready" && (
-                                        <button
-                                            onClick={() => handleCommit([file._id])}
-                                            disabled={isCommitting}
-                                            className="text-xs text-green-700 underline disabled:opacity-50"
-                                        >
-                                            Quick commit
                                         </button>
                                     )}
                                 </div>
@@ -797,20 +735,6 @@ function JobItem({ job, onRunJob, onCommitFiles, onRetryFile }: JobItemProps) {
                     );
                 })}
 
-                {files && files.length > 0 && (
-                    <div className="flex items-center justify-between pt-2 border-t mt-2">
-                        <div className="text-sm text-gray-600">
-                            Selected {selectableIds.length} of {readyIds.length} ready files
-                        </div>
-                        <button
-                            onClick={() => handleCommit(selectableIds)}
-                            disabled={selectableIds.length === 0 || isCommitting}
-                            className="text-xs bg-green-600 text-white px-4 py-2 rounded disabled:opacity-50"
-                        >
-                            {isCommitting ? "Committing..." : "Commit selected"}
-                        </button>
-                    </div>
-                )}
             </div>
         </div>
     );

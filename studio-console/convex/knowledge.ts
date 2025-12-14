@@ -219,11 +219,11 @@ export const search: ReturnType<typeof action> = action({
         if (chunkIds.length === 0) return [];
 
         const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: chunkIds });
-        const entryMap = new Map(chunkEntries.map((entry) => [entry.chunk._id, entry]));
+        const entryMap = new Map(chunkEntries.map((entry: any) => [entry.chunk._id, entry]));
 
         return results
             .map((result) => {
-                const entry = entryMap.get(result._id);
+                const entry = entryMap.get(result._id) as any;
                 if (!entry || entry.doc.processingStatus !== "ready") return null;
                 const docSourceType: SourceType = (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload";
                 return {
@@ -400,12 +400,12 @@ export const dynamicSearch: ReturnType<typeof action> = action({
         }
 
         const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: uniqueIds });
-        const entryMap = new Map(chunkEntries.map((entry) => [entry.chunk._id, entry]));
+        const entryMap = new Map(chunkEntries.map((entry: any) => [entry.chunk._id, entry]));
 
         type ChunkRow = { result: ChunkResult; entry: { chunk: Doc<"knowledgeChunks">; doc: Doc<"knowledgeDocs"> } };
         const filtered = chunkResults
             .map<ChunkRow | null>((result) => {
-                const entry = entryMap.get(result._id);
+                const entry = entryMap.get(result._id) as any;
                 if (!entry) return null;
                 if (entry.doc.processingStatus !== "ready") return null;
                 const docSourceType: SourceType = (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload";
@@ -431,8 +431,8 @@ export const dynamicSearch: ReturnType<typeof action> = action({
                     if (!entry.doc.phase || !args.phases.includes(entry.doc.phase)) return null;
                 }
                 if (args.topics && args.topics.length > 0) {
-                    const topicMatch = (entry.doc.topics || []).some((topic) =>
-                        args.topics?.some((filter) => topic.toLowerCase().includes(filter.toLowerCase()))
+                    const topicMatch = (entry.doc.topics || []).some((topic: string) =>
+                        args.topics?.some((filter: string) => topic.toLowerCase().includes(filter.toLowerCase()))
                     );
                     if (!topicMatch) return null;
                 }

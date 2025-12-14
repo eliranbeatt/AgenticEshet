@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { internalIngestPurchase } from "./prices";
 
 function cleanTags(tags?: string[]) {
     return tags?.map((tag) => tag.trim()).filter(Boolean) ?? [];
@@ -193,13 +194,15 @@ export const createPurchase = mutation({
         employeeId: v.optional(v.id("employees")),
         projectId: v.optional(v.id("projects")),
         amount: v.number(),
+        quantity: v.optional(v.number()),
+        unit: v.optional(v.string()),
         currency: v.optional(v.string()),
         status: v.optional(v.string()),
         tags: v.optional(v.array(v.string())),
         purchasedAt: v.optional(v.number()),
     },
     handler: async (ctx, args) => {
-        return await ctx.db.insert("purchases", {
+        const purchaseId = await ctx.db.insert("purchases", {
             itemName: args.itemName,
             description: args.description,
             vendorId: args.vendorId,
@@ -207,12 +210,19 @@ export const createPurchase = mutation({
             employeeId: args.employeeId,
             projectId: args.projectId,
             amount: args.amount,
+            quantity: args.quantity,
+            unit: args.unit,
             currency: args.currency ?? "ILS",
             status: args.status ?? "recorded",
             tags: cleanTags(args.tags),
             purchasedAt: args.purchasedAt ?? Date.now(),
             createdAt: Date.now(),
         });
+
+        // Ingest into Price Memory
+        await internalIngestPurchase(ctx, purchaseId);
+
+        return purchaseId;
     },
 });
 
@@ -227,6 +237,8 @@ export const updatePurchase = mutation({
             employeeId: v.optional(v.id("employees")),
             projectId: v.optional(v.id("projects")),
             amount: v.optional(v.number()),
+            quantity: v.optional(v.number()),
+            unit: v.optional(v.string()),
             currency: v.optional(v.string()),
             status: v.optional(v.string()),
             tags: v.optional(v.array(v.string())),
@@ -239,6 +251,9 @@ export const updatePurchase = mutation({
             ...args.updates,
             ...(tags ? { tags } : {}),
         });
+
+        // Re-ingest into Price Memory
+        await internalIngestPurchase(ctx, args.id);
     },
 });
 

@@ -61,7 +61,7 @@ export default function IngestionPage() {
                         </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                        {jobs?.map((job) => (
+                        {jobs?.map((job: any) => (
                             <tr key={job._id}>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <Link href={`/ingestion/${job._id}`} className="text-blue-600 hover:underline font-medium">

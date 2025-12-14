@@ -1,0 +1,349 @@
+This spec is designed for a small studio workflow: the online research is explicitly user-triggered, cached, and cost-controlled.
+
+Sources: Gemini Deep Research Agent docs , Interactions API docs (agent support + MCP + background mode) , Interactions API + Deep Research background execution example (dev blog) , “Deep Research can browse many sites” overview , enterprise note about allowlist depending on product path .
+
+Magnetic Studio Console — Group 4 Spec
+Supplier Price Memory + Buying Assistant + Online Search Agent (Gemini Deep Research)
+Status
+Scope: Group 4 only (price memory + suggestions + online research)
+Stack: Next.js App Router + Convex + Gemini API (Interactions API)
+Principles: “Owner-friendly”, low friction, transparent, audited, and cheap.
+1) Goals & Outcomes
+Goals
+Build a Supplier Price Memory that continuously learns from:
+purchases, vendor quotes, invoices/receipts, manual entries.
+Provide a Buying Assistant that, for any material/service line:
+suggests vendors you already use
+suggests expected price range + lead time
+suggests substitutes
+highlights “risk flags” (rush, low quality, missing specs).
+Add an explicit “Search online” Research Agent using Gemini Deep Research Agent to:
+scan the web for current pricing/availability/lead times
+return a concise, cited comparison (top options)
+save results for reuse (cache).
+Success criteria
+Given a materialLine, the system can produce:
+Local suggestions (history-based) in < 1s
+Online research report in background with citations and a structured “top options” list
+Results are stored, reusable, and shown in UI with confidence indicators.
+2) Non-goals (this phase)
+No automated purchasing / checkout.
+No enterprise RFQ workflow (multi-vendor bidding) beyond “compare options”.
+No always-on web crawling (only user-triggered).
+No deep inventory management (that’s Group 5).
+3) Product UX
+3.1 Where it appears
+Project → Materials / Quote builder
+On each materialLine: a panel “Buying Assistant”
+From history (instant)
+Search online (button)
+last saved research results (cached)
+Management → Vendors / Catalog
+Vendor price history per item
+Observations timeline (what you paid, when, in which project)
+Dashboard surface hooks
+Show “Items to buy this week” with “best known price” and “needs research” flag (uses Group 2 dashboard later, but Group 4 outputs must support it)
+3.2 Buying Assistant UI states
+No data yet: suggest “search online” + add manual observation
+History available: show range + last 3 purchases + vendor reliability notes (later)
+Research in progress: spinner + “view run” + “cancel”
+Research completed:
+Top options table (vendor/store, price, lead time, notes)
+Citations list (links + snippet)
+“Save as observation” action (store as priceObservation)
+4) Functional Requirements
+4.1 Supplier Price Memory (local)
+Inputs
+
+Purchases (existing purchases)
+Parsed invoices/quotes from ingestion (Group 1 produces structured lines or at minimum doc text)
+Manual quick add (owner)
+Outputs
+
+priceObservations: normalized, queryable facts
+itemCanonicalization: mapping raw strings (“PVC print 3mm…”) → canonical item (“PVC rigid print 3mm”)
+Behavior
+
+When a purchase is created/updated:
+create/update priceObservation
+When an invoice/quote is ingested:
+extract line items and create priceObservations with “source=invoice/quote”
+When user confirms a suggestion:
+store a new observation (manual truth).
+4.2 Buying Assistant (local recommendation engine)
+Given a materialLine (itemName, qty, unit, specs, due date, location):
+
+Match canonical item
+Retrieve observations filtered by:
+vendor (preferred vendors)
+recency (e.g., 12 months)
+geography (Israel, optionally city)
+Compute:
+price range (median + IQR, or min/max with outlier filtering)
+recommended vendor shortlist
+suggested substitutes (from historical “similar items” mapping)
+Return structured suggestions + confidence score.
+4.3 Online Research Agent (Gemini Deep Research Agent)
+Use Gemini Deep Research Agent via the Gemini Interactions API:
+
+It’s a built-in agent designed to plan/execute multi-step research and produce cited reports.
+Interactions API supports invoking built-in agents (e.g., agent="deep-research-pro-preview-12-2025") and supports background execution with polling by previous_interaction_id / interaction id.
+User-triggered flow
+
+User clicks “Search online”
+Backend starts a research run
+UI polls run status (Convex query)
+When completed, show results + citations
+Constraints (cost control)
+
+Limit scope to top N options (default 5)
+Max research time budget (e.g., 90–180 seconds)
+Region/currency preference: Israel / ILS (configurable)
+Cache results keyed by query signature to avoid repeats
+Fallback
+
+If Deep Research agent is unavailable (some API paths may be allowlisted depending on product), fall back to:
+Gemini model + Google Search tool grounding
+or “manual web search” disabled with message (Enterprise docs mention allowlist for some variants; plan for this explicitly.)
+5) Data Model (Convex schema)
+5.1 Core tables
+priceObservations
+_id
+canonicalItemId
+rawItemName
+vendorId?
+unit (e.g., “sqm”, “piece”, “sheet”)
+unitPrice (number)
+currency (default “ILS”)
+minQty?, qtyBreaks? (optional)
+leadTimeDays?
+locationTag? (e.g., “TLV”, “center”, “Eilat”)
+source: "purchase"|"invoice"|"quote"|"manual"|"research"
+sourceRef: {type, id} (purchaseId, docId, researchRunId)
+projectId?
+observedAt
+Indexes:
+
+canonicalItemId, observedAt
+vendorId, observedAt
+canonicalItems
+_id
+name (e.g., “PVC rigid print 3mm”)
+tags[] (print, wood, hardware…)
+defaultUnit
+synonyms[]
+itemNormalizationMap
+_id
+raw (string)
+canonicalItemId
+confidence
+updatedAt
+buyingSuggestions
+_id
+materialLineId OR {projectId, freeformQuery}
+canonicalItemId?
+source: "history"|"research"
+status: "ready"|"stale"
+summary
+options[]:
+{ vendorName, vendorUrl?, priceMin?, priceMax?, unit, leadTimeDays?, notes, confidence }
+citations[]: { title, url, snippet }
+createdAt
+expiresAt (cache TTL)
+Indexes:
+
+materialLineId, createdAt
+5.2 Research execution tables
+researchRuns
+_id
+request:
+{ queryText, canonicalItemId?, qty?, unit?, specs?, location?, urgencyDate?, currency, language }
+provider: "gemini_deep_research"
+status: "queued"|"running"|"completed"|"failed"|"cancelled"
+interactionId? (from Interactions API)
+result:
+{ reportMarkdown, options[], citations[] }
+error?
+startedAt, finishedAt
+cost: { inputTokens?, outputTokens?, estimatedUSD? } (best effort)
+createdBy
+linked: { materialLineId?, projectId? }
+Indexes:
+
+status, startedAt
+linked.materialLineId, createdAt
+6) Backend APIs (Convex)
+6.1 Price memory
+Mutations
+
+prices.addManualObservation({canonicalItemId|rawName, vendorId?, unit, unitPrice, currency, leadTimeDays?, locationTag?, notes?})
+prices.ingestFromPurchase({purchaseId}) (or hook directly in purchase mutation)
+prices.normalizeItemName({raw}) -> canonicalItemId (may call LLM or fuzzy matcher; keep deterministic fallback)
+Queries
+
+prices.getHistory({canonicalItemId, vendorId?, locationTag?, windowDays?})
+prices.getBestEstimate({canonicalItemId, locationTag?}) -> {range, median, confidence, lastSeenAt}
+6.2 Buying assistant
+Action
+
+buying.generateSuggestions({materialLineId}) -> buyingSuggestionsId
+runs matching + summarization
+stores buyingSuggestions(source="history")
+Query
+
+buying.getSuggestions({materialLineId})
+6.3 Online Research (Gemini Deep Research Agent)
+Actions
+
+research.startOnlineResearch({materialLineId | freeformQuery, constraints}) -> researchRunId
+research.pollOnlineResearch({researchRunId}) -> status
+research.cancelOnlineResearch({researchRunId})
+Queries
+
+research.getRun({researchRunId})
+research.listRuns({projectId?, materialLineId?})
+7) Gemini Deep Research Agent Integration Design
+7.1 API choice
+Use Gemini Interactions API:
+
+It supports both model calls and built-in agent calls, including the Deep Research agent.
+It supports background execution for long-running agent tasks.
+Deep Research agent guide describes the agent’s planning/executing/synthesizing behavior and that it produces cited research outputs.
+7.2 Invocation pattern (high level)
+Build a structured prompt:
+
+goal: “find price + lead time + vendor/store options for [item] in [Israel], in ILS”
+constraints: top 5 options, prefer reputable sources, cite sources, include shipping/lead-time if available
+output JSON schema: options + citations + summary
+Start interaction:
+
+call Interactions API with:
+agent = "deep-research-pro-preview-12-2025" (per docs/blog examples)
+background = true (so request returns quickly)
+Save interactionId to researchRuns
+
+Poll periodically:
+
+Interactions API “get interaction” until status completed
+Parse the agent output:
+
+validate JSON
+store researchRuns.result
+create/update buyingSuggestions(source="research")
+optionally convert options into priceObservations(source="research") only when user clicks “Save”
+7.3 Output schema (required)
+The agent must output strict JSON (in addition to optional narrative report):
+
+{
+  "summary": "string",
+  "options": [
+    {
+      "vendorName": "string",
+      "vendorUrl": "string",
+      "price": { "min": 0, "max": 0, "currency": "ILS", "unit": "string" },
+      "leadTimeDays": 0,
+      "location": "string",
+      "notes": "string",
+      "confidence": "low|medium|high"
+    }
+  ],
+  "citations": [
+    { "title": "string", "url": "string", "snippet": "string" }
+  ]
+}
+Validation:
+
+Require at least 2 citations
+Require URLs
+Cap options at 5 (or 8 max with config)
+7.4 Handling availability / allowlist
+Some Deep Research API variants are allowlisted in certain enterprise contexts.
+Implementation must:
+
+detect API error “not enabled / not allowlisted”
+fallback to “Gemini model + search tool” OR show “Research unavailable” + allow manual browsing (You can still use normal Gemini with built-in tools; Gemini API docs distinguish tools/agents usage.)
+8) Security, Safety, and Integrity
+Requirements
+Never execute purchases automatically.
+Store citations and show them to user (transparency).
+Store the full research output + timestamp (auditability).
+Rate-limit online research per user/day (e.g., 20 runs/day).
+Cache by query signature for TTL (e.g., 7–30 days).
+Data hygiene
+“Research” results are not treated as truth until user accepts/saves.
+Observations from research are tagged source="research" and can be excluded from default ranges unless explicitly enabled.
+9) Observability
+Must log
+Research run lifecycle (queued→running→completed/failed)
+Interaction IDs
+Prompt + constraints (server-side only)
+Token usage if provided
+Error category: auth, allowlist, timeout, parse failure
+UI
+“Research History” per project
+Show: status, createdAt, item, cost estimate, top option
+10) Testing Requirements
+Unit tests
+normalization mapping
+price range computation (outlier removal)
+JSON schema validation and parsing
+Integration tests
+Create materialLine → generate history suggestions
+Start research run → polling completes → results appear in UI
+Fallback path when agent unavailable
+11) Rollout Plan (safe + incremental)
+Milestone 1 — Price Memory
+canonicalItems, priceObservations
+Auto-ingest from purchases
+UI: “Price history” widget on vendor/material
+Milestone 2 — Buying Assistant (history)
+generate suggestions from history
+cache suggestions per materialLine
+Milestone 3 — Online Research (Gemini Deep Research)
+start/poll/cancel runs
+display results + citations
+manual “Save option as observation”
+Milestone 4 — Polish
+better normalization (synonyms)
+stronger caching
+confidence scoring improvements
+12) Implementation Tasks (ready to paste to Jira/Trello)
+Epic G4-1: Price Memory Core
+T1 Add schema: canonicalItems, itemNormalizationMap, priceObservations
+T2 Implement prices.normalizeItemName (deterministic first; optional LLM assist)
+T3 Hook purchase creation/update → prices.ingestFromPurchase
+T4 Build UI: vendor page “Price history”, material line “Price estimate”
+Epic G4-2: Buying Assistant (History)
+T5 Implement buying.generateSuggestions(materialLineId) action
+T6 Implement prices.getBestEstimate
+T7 UI: suggestions panel + “apply vendor/price to line” button
+T8 Cache & TTL for suggestions
+Epic G4-3: Gemini Deep Research Integration
+T9 Add schema: researchRuns, extend buyingSuggestions with citations
+T10 Implement research.startOnlineResearch (Interactions API call, background=true)
+T11 Implement research.pollOnlineResearch (retrieve interaction result)
+T12 Implement JSON validation + parsing + store results
+T13 UI: “Search online” button + progress + results table + citations
+T14 Implement fallback path when Deep Research not available (error handling)
+Epic G4-4: “Save as Observation” + Controls
+T15 Implement “Save option as price observation” (source=research)
+T16 Add rate limiting + caching by query signature
+T17 Add admin settings: enable/disable research, default TTL, max options
+Epic G4-5: QA & Observability
+T18 Unit tests for range computation and schema parsing
+T19 Integration test: research run lifecycle
+T20 Add debug panel for research errors and raw output (admin-only)
+13) Acceptance Criteria (Definition of Done)
+Price memory works
+Create purchase → observation appears in price history
+Best estimate range shows on materialLine
+Buying assistant works (history)
+For a known item, suggestions show top vendors + range + confidence
+Online research works
+Clicking “Search online” creates a researchRun
+Status updates to completed
+UI shows options + citations and a summary
+Safety + control
+Research does not auto-create purchases
+“Save as observation” is explicit user action
+Fallback behaves correctly if Deep Research is unavailable

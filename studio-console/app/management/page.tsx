@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id, type Doc } from "../../convex/_generated/dataModel";
 import { Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import { PriceHistoryTable } from "./_components/PriceHistoryTable";
 
 type VendorFormState = {
     name: string;
@@ -155,6 +156,10 @@ export default function ManagementPage() {
                     onUpdate={async (id, updates) => { await updatePurchase({ id, updates: updates as any }); }}
                     onDelete={async (id) => { await deletePurchase({ id }); }}
                 />
+            </div>
+
+            <div className="mt-8">
+                <PriceHistoryTable />
             </div>
         </div>
     );

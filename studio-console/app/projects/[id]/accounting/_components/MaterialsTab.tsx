@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
-import { Save, Plus, Wand2, Pencil, Trash2, X } from "lucide-react";
+import { Save, Plus, Wand2, Pencil, Trash2, X, ShoppingCart } from "lucide-react";
+import { BuyingAssistantPanel } from "../../quote/_components/BuyingAssistantPanel";
 
 export default function MaterialsTab({ data, projectId }: { data: any, projectId: Id<"projects"> }) {
   const addMaterialLine = useMutation(api.accounting.addMaterialLine);
@@ -160,6 +161,7 @@ function MaterialRow({
     onDelete: () => void;
 }) {
     const [isEditing, setIsEditing] = useState(false);
+    const [showAssistant, setShowAssistant] = useState(false);
     const [draft, setDraft] = useState({
         label: line.label,
         category: line.category,
@@ -213,14 +215,14 @@ function MaterialRow({
                 category: draft.category || "General",
                 vendorName: draft.vendorName || undefined,
                 unit: draft.unit || line.unit,
-            plannedQuantity: plannedQty,
-            plannedUnitCost: plannedCost,
-            actualQuantity: draft.actualQuantity ? parseNumber(draft.actualQuantity, line.plannedQuantity) : undefined,
-            actualUnitCost: draft.actualUnitCost ? parseNumber(draft.actualUnitCost, line.plannedUnitCost) : undefined,
-            status: draft.status || line.status,
-            description: draft.description || undefined,
-        },
-    });
+                plannedQuantity: plannedQty,
+                plannedUnitCost: plannedCost,
+                actualQuantity: draft.actualQuantity ? parseNumber(draft.actualQuantity, line.plannedQuantity) : undefined,
+                actualUnitCost: draft.actualUnitCost ? parseNumber(draft.actualUnitCost, line.plannedUnitCost) : undefined,
+                status: draft.status || line.status,
+                description: draft.description || undefined,
+            },
+        });
         setIsEditing(false);
     };
 
@@ -241,141 +243,159 @@ function MaterialRow({
     };
 
     return (
-        <tr className="hover:bg-gray-50">
-            <td className="px-3 py-2">
-                {isEditing ? (
-                    <div className="flex flex-col gap-1">
+        <>
+            <tr className="hover:bg-gray-50">
+                <td className="px-3 py-2">
+                    {isEditing ? (
+                        <div className="flex flex-col gap-1">
+                            <input
+                                className="w-full bg-transparent border px-2 py-1 rounded text-sm"
+                                value={draft.label}
+                                onChange={(e) => setDraft((prev) => ({ ...prev, label: e.target.value }))}
+                            />
+                            <input
+                                className="w-full bg-transparent border px-2 py-1 rounded text-xs"
+                                value={draft.category}
+                                onChange={(e) => setDraft((prev) => ({ ...prev, category: e.target.value }))}
+                                placeholder="Category"
+                            />
+                        </div>
+                    ) : (
+                        <>
+                            <div className="font-medium">{line.label}</div>
+                            <div className="text-xs text-gray-500">{line.category}</div>
+                            {line.description && <div className="text-xs text-gray-400">{line.description}</div>}
+                        </>
+                    )}
+                </td>
+                <td className="px-3 py-2">
+                    {isEditing ? (
                         <input
                             className="w-full bg-transparent border px-2 py-1 rounded text-sm"
-                            value={draft.label}
-                            onChange={(e) => setDraft((prev) => ({ ...prev, label: e.target.value }))}
+                            value={draft.vendorName}
+                            placeholder="Vendor..."
+                            onChange={(e) => setDraft((prev) => ({ ...prev, vendorName: e.target.value }))}
                         />
-                        <input
-                            className="w-full bg-transparent border px-2 py-1 rounded text-xs"
-                            value={draft.category}
-                            onChange={(e) => setDraft((prev) => ({ ...prev, category: e.target.value }))}
-                            placeholder="Category"
-                        />
-                    </div>
-                ) : (
-                    <>
-                        <div className="font-medium">{line.label}</div>
-                        <div className="text-xs text-gray-500">{line.category}</div>
-                        {line.description && <div className="text-xs text-gray-400">{line.description}</div>}
-                    </>
-                )}
-            </td>
-            <td className="px-3 py-2">
-                {isEditing ? (
-                    <input
-                        className="w-full bg-transparent border px-2 py-1 rounded text-sm"
-                        value={draft.vendorName}
-                        placeholder="Vendor..."
-                        onChange={(e) => setDraft((prev) => ({ ...prev, vendorName: e.target.value }))}
-                    />
-                ) : (
-                    <div className="text-sm text-gray-700">{line.vendorName || <span className="text-gray-400">-</span>}</div>
-                )}
-            </td>
-            <td className="px-3 py-2 text-right bg-blue-50/30">
-                {isEditing ? (
-                    <input
-                        type="number"
-                        className="w-16 text-right bg-transparent border px-2 py-1 rounded text-sm"
-                        value={draft.plannedQuantity}
-                        onChange={(e) => setDraft((prev) => ({ ...prev, plannedQuantity: e.target.value }))}
-                    />
-                ) : (
-                    plannedQty
-                )}
-            </td>
-            <td className="px-3 py-2 text-right bg-blue-50/30">
-                {isEditing ? (
-                    <input
-                        type="number"
-                        className="w-20 text-right bg-transparent border px-2 py-1 rounded text-sm"
-                        value={draft.plannedUnitCost}
-                        onChange={(e) => setDraft((prev) => ({ ...prev, plannedUnitCost: e.target.value }))}
-                    />
-                ) : (
-                    plannedCost.toFixed(2)
-                )}
-            </td>
-
-            <td className="px-3 py-2 text-right bg-green-50/30">
-                {isEditing ? (
-                    <input
-                        type="number"
-                        className="w-16 text-right bg-transparent border px-2 py-1 rounded text-sm"
-                        placeholder={line.plannedQuantity.toString()}
-                        value={draft.actualQuantity}
-                        onChange={(e) => setDraft((prev) => ({ ...prev, actualQuantity: e.target.value }))}
-                    />
-                ) : (
-                    actualQty ?? <span className="text-gray-400 text-xs">-</span>
-                )}
-            </td>
-            <td className="px-3 py-2 text-right bg-green-50/30">
-                {isEditing ? (
-                    <input
-                        type="number"
-                        className="w-20 text-right bg-transparent border px-2 py-1 rounded text-sm"
-                        placeholder={line.plannedUnitCost.toString()}
-                        value={draft.actualUnitCost}
-                        onChange={(e) => setDraft((prev) => ({ ...prev, actualUnitCost: e.target.value }))}
-                    />
-                ) : (
-                    actualCost?.toFixed(2) ?? <span className="text-gray-400 text-xs">-</span>
-                )}
-            </td>
-
-            <td className={`px-3 py-2 text-right font-medium ${isOverBudget ? "text-red-600" : "text-green-600"}`}>
-                {gap.toFixed(2)}
-            </td>
-            <td className="px-3 py-2">
-                <div className="flex items-center gap-2">
-                    {isEditing ? (
-                        <>
-                            <button
-                                onClick={handleSave}
-                                className="text-green-600 hover:text-green-700"
-                                title="Save changes"
-                            >
-                                <Save className="w-4 h-4" />
-                            </button>
-                            <button
-                                onClick={handleCancel}
-                                className="text-gray-500 hover:text-gray-700"
-                                title="Cancel"
-                            >
-                                <X className="w-4 h-4" />
-                            </button>
-                        </>
                     ) : (
-                        <button
-                            onClick={() => setIsEditing(true)}
-                            className="text-blue-600 hover:text-blue-700"
-                            title="Edit line"
-                        >
-                            <Pencil className="w-4 h-4" />
-                        </button>
+                        <div className="text-sm text-gray-700">{line.vendorName || <span className="text-gray-400">-</span>}</div>
                     )}
-                    <button
-                        onClick={onSaveCatalog}
-                        className="text-gray-500 hover:text-blue-600"
-                        title="Save to Catalog"
-                    >
-                        <Save className="w-4 h-4" />
-                    </button>
-                    <button
-                        onClick={onDelete}
-                        className="text-red-500 hover:text-red-600"
-                        title="Delete line"
-                    >
-                        <Trash2 className="w-4 h-4" />
-                    </button>
-                </div>
-            </td>
-        </tr>
+                </td>
+                <td className="px-3 py-2 text-right bg-blue-50/30">
+                    {isEditing ? (
+                        <input
+                            type="number"
+                            className="w-16 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                            value={draft.plannedQuantity}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, plannedQuantity: e.target.value }))}
+                        />
+                    ) : (
+                        plannedQty
+                    )}
+                </td>
+                <td className="px-3 py-2 text-right bg-blue-50/30">
+                    {isEditing ? (
+                        <input
+                            type="number"
+                            className="w-20 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                            value={draft.plannedUnitCost}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, plannedUnitCost: e.target.value }))}
+                        />
+                    ) : (
+                        plannedCost.toFixed(2)
+                    )}
+                </td>
+
+                <td className="px-3 py-2 text-right bg-green-50/30">
+                    {isEditing ? (
+                        <input
+                            type="number"
+                            className="w-16 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                            placeholder={line.plannedQuantity.toString()}
+                            value={draft.actualQuantity}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, actualQuantity: e.target.value }))}
+                        />
+                    ) : (
+                        actualQty ?? <span className="text-gray-400 text-xs">-</span>
+                    )}
+                </td>
+                <td className="px-3 py-2 text-right bg-green-50/30">
+                    {isEditing ? (
+                        <input
+                            type="number"
+                            className="w-20 text-right bg-transparent border px-2 py-1 rounded text-sm"
+                            placeholder={line.plannedUnitCost.toString()}
+                            value={draft.actualUnitCost}
+                            onChange={(e) => setDraft((prev) => ({ ...prev, actualUnitCost: e.target.value }))}
+                        />
+                    ) : (
+                        actualCost?.toFixed(2) ?? <span className="text-gray-400 text-xs">-</span>
+                    )}
+                </td>
+
+                <td className={`px-3 py-2 text-right font-medium ${isOverBudget ? "text-red-600" : "text-green-600"}`}>
+                    {gap.toFixed(2)}
+                </td>
+                <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                        {isEditing ? (
+                            <>
+                                <button
+                                    onClick={handleSave}
+                                    className="text-green-600 hover:text-green-700"
+                                    title="Save changes"
+                                >
+                                    <Save className="w-4 h-4" />
+                                </button>
+                                <button
+                                    onClick={handleCancel}
+                                    className="text-gray-500 hover:text-gray-700"
+                                    title="Cancel"
+                                >
+                                    <X className="w-4 h-4" />
+                                </button>
+                            </>
+                        ) : (
+                            <button
+                                onClick={() => setIsEditing(true)}
+                                className="text-blue-600 hover:text-blue-700"
+                                title="Edit line"
+                            >
+                                <Pencil className="w-4 h-4" />
+                            </button>
+                        )}
+                        <button
+                            onClick={() => setShowAssistant(!showAssistant)}
+                            className={`hover:text-blue-600 ${showAssistant ? "text-blue-600" : "text-gray-500"}`}
+                            title="Buying Assistant"
+                        >
+                            <ShoppingCart className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={onSaveCatalog}
+                            className="text-gray-500 hover:text-blue-600"
+                            title="Save to Catalog"
+                        >
+                            <Save className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={onDelete}
+                            className="text-red-500 hover:text-red-600"
+                            title="Delete line"
+                        >
+                            <Trash2 className="w-4 h-4" />
+                        </button>
+                    </div>
+                </td>
+            </tr>
+            {showAssistant && (
+                <tr>
+                    <td colSpan={8} className="bg-gray-50 p-0">
+                        <div className="p-4 border-b border-gray-200 shadow-inner">
+                            <BuyingAssistantPanel materialLineId={line._id} label={line.label} />
+                        </div>
+                    </td>
+                </tr>
+            )}
+        </>
     );
 }

@@ -12,10 +12,9 @@ const apiMock = vi.hoisted(() => ({
         listJobs: Symbol("listJobs"),
         createJob: Symbol("createJob"),
         generateUploadUrl: Symbol("generateUploadUrl"),
-        registerFile: Symbol("registerFile"),
-        runIngestionJob: Symbol("runIngestionJob"),
-        processFile: Symbol("processFile"),
-        commitIngestionJob: Symbol("commitIngestionJob"),
+        addFilesToJob: Symbol("addFilesToJob"),
+        retryFile: Symbol("retryFile"),
+        runJob: Symbol("runJob"),
     },
 }));
 
@@ -38,8 +37,8 @@ vi.mock("../../convex/_generated/api", () => ({ api: apiMock }));
 describe("KnowledgePage ingestion flow", () => {
     const createJob = vi.fn();
     const generateUploadUrl = vi.fn();
-    const registerFile = vi.fn();
-    const runIngestionJob = vi.fn();
+    const addFilesToJob = vi.fn();
+    const runJob = vi.fn();
 
     beforeEach(() => {
         mockUseQuery.mockImplementation((fn) => {
@@ -51,25 +50,25 @@ describe("KnowledgePage ingestion flow", () => {
         mockUseMutation.mockImplementation((fn) => {
             if (fn === apiMock.ingestion.createJob) return createJob;
             if (fn === apiMock.ingestion.generateUploadUrl) return generateUploadUrl;
-            if (fn === apiMock.ingestion.registerFile) return registerFile;
+            if (fn === apiMock.ingestion.addFilesToJob) return addFilesToJob;
             return vi.fn();
         });
 
         mockUseAction.mockImplementation((fn) => {
-            if (fn === apiMock.ingestion.runIngestionJob) return runIngestionJob;
+            if (fn === apiMock.ingestion.runJob) return runJob;
             if (fn === apiMock.knowledge.dynamicSearch) return vi.fn();
             return vi.fn();
         });
 
         createJob.mockReset();
         generateUploadUrl.mockReset();
-        registerFile.mockReset();
-        runIngestionJob.mockReset();
+        addFilesToJob.mockReset();
+        runJob.mockReset();
 
         createJob.mockResolvedValue("job_123");
         generateUploadUrl.mockResolvedValue("https://upload.example/post");
-        registerFile.mockResolvedValue(undefined);
-        runIngestionJob.mockResolvedValue(undefined);
+        addFilesToJob.mockResolvedValue(undefined);
+        runJob.mockResolvedValue(undefined);
 
         vi.spyOn(globalThis, "fetch").mockResolvedValue({
             json: async () => ({ storageId: "store_1" }),
@@ -102,6 +101,7 @@ describe("KnowledgePage ingestion flow", () => {
             name: "Rabbit brick ingestion",
             defaultContext: "Rabbits eating bricks in the garden.",
             defaultTags: ["rabbits", "bricks"],
+            sourceType: "upload",
         });
 
         expect(generateUploadUrl).toHaveBeenCalledTimes(1);
@@ -110,13 +110,18 @@ describe("KnowledgePage ingestion flow", () => {
             headers: { "Content-Type": "text/plain" },
             body: file,
         });
-        expect(registerFile).toHaveBeenCalledWith({
+        expect(addFilesToJob).toHaveBeenCalledWith({
             jobId: "job_123",
-            storageId: "store_1",
-            filename: "rabbits.txt",
-            mimeType: "text/plain",
+            files: [
+                {
+                    storageId: "store_1",
+                    name: "rabbits.txt",
+                    mimeType: "text/plain",
+                    size: file.size,
+                },
+            ],
         });
-        expect(runIngestionJob).toHaveBeenCalledWith({ jobId: "job_123" });
+        expect(runJob).toHaveBeenCalledWith({ jobId: "job_123" });
         expect(window.alert).toHaveBeenCalledWith("Files uploaded. The ingestion job is running now.");
     });
 });

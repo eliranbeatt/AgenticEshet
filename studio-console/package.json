@@ -13,6 +13,7 @@
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",
     "@dnd-kit/utilities": "^3.2.1",
+    "@google/generative-ai": "^0.24.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.30.0",

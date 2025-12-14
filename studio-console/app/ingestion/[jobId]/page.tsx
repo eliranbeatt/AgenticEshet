@@ -130,7 +130,7 @@ export default function JobDetailsPage() {
                         </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                        {files?.map((file) => (
+                        {files?.map((file: any) => (
                             <tr key={file._id}>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                                     {file.originalFilename}

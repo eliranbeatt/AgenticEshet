@@ -148,6 +148,8 @@ export default defineSchema({
         employeeId: v.optional(v.id("employees")),
         projectId: v.optional(v.id("projects")),
         amount: v.number(),
+        quantity: v.optional(v.number()), // Added for Price Memory
+        unit: v.optional(v.string()),     // Added for Price Memory
         currency: v.optional(v.string()),
         status: v.optional(v.string()),
         tags: v.optional(v.array(v.string())),
@@ -565,4 +567,124 @@ export default defineSchema({
         key: v.string(),          // "trello_api", etc.
         valueJson: v.string(),
     }).index("by_key", ["key"]),
+
+    // 27. PRICE OBSERVATIONS (Price Memory)
+    priceObservations: defineTable({
+        canonicalItemId: v.id("canonicalItems"),
+        rawItemName: v.string(),
+        vendorId: v.optional(v.id("vendors")),
+        unit: v.string(), // "sqm", "piece", "sheet"
+        unitPrice: v.number(),
+        currency: v.string(), // default "ILS"
+        minQty: v.optional(v.number()),
+        qtyBreaks: v.optional(v.string()), // JSON string for breaks if needed
+        leadTimeDays: v.optional(v.number()),
+        locationTag: v.optional(v.string()), // "TLV", "center", "Eilat"
+        source: v.union(
+            v.literal("purchase"),
+            v.literal("invoice"),
+            v.literal("quote"),
+            v.literal("manual"),
+            v.literal("research")
+        ),
+        sourceRef: v.object({
+            type: v.string(), // "purchaseId", "docId", "researchRunId"
+            id: v.string(),
+        }),
+        projectId: v.optional(v.id("projects")),
+        observedAt: v.number(),
+        notes: v.optional(v.string()),
+    })
+    .index("by_canonicalItem_observedAt", ["canonicalItemId", "observedAt"])
+    .index("by_vendor_observedAt", ["vendorId", "observedAt"]),
+
+    // 28. CANONICAL ITEMS (Normalized Master List)
+    canonicalItems: defineTable({
+        name: v.string(), // "PVC rigid print 3mm"
+        tags: v.array(v.string()), // ["print", "wood", "hardware"]
+        defaultUnit: v.string(),
+        synonyms: v.array(v.string()),
+    }).searchIndex("search_name", { searchField: "name" }),
+
+    // 29. ITEM NORMALIZATION MAP (Raw -> Canonical)
+    itemNormalizationMap: defineTable({
+        raw: v.string(),
+        canonicalItemId: v.id("canonicalItems"),
+        confidence: v.number(),
+        updatedAt: v.number(),
+    }).index("by_raw", ["raw"]),
+
+    // 30. BUYING SUGGESTIONS (Cache)
+    buyingSuggestions: defineTable({
+        materialLineId: v.optional(v.id("materialLines")),
+        projectId: v.optional(v.id("projects")), // For freeform queries
+        freeformQuery: v.optional(v.string()),
+        canonicalItemId: v.optional(v.id("canonicalItems")),
+        source: v.union(v.literal("history"), v.literal("research")),
+        status: v.union(v.literal("ready"), v.literal("stale")),
+        summary: v.string(),
+        options: v.array(v.object({
+            vendorName: v.string(),
+            vendorUrl: v.optional(v.string()),
+            priceMin: v.optional(v.number()),
+            priceMax: v.optional(v.number()),
+            unit: v.string(),
+            leadTimeDays: v.optional(v.number()),
+            notes: v.optional(v.string()),
+            confidence: v.string(), // "low"|"medium"|"high"
+        })),
+        citations: v.array(v.object({
+            title: v.string(),
+            url: v.string(),
+            snippet: v.string(),
+        })),
+        createdAt: v.number(),
+        expiresAt: v.number(),
+    })
+    .index("by_materialLine_createdAt", ["materialLineId", "createdAt"]),
+
+    // 31. RESEARCH RUNS (Gemini Deep Research)
+    researchRuns: defineTable({
+        request: v.object({
+            queryText: v.string(),
+            canonicalItemId: v.optional(v.id("canonicalItems")),
+            qty: v.optional(v.number()),
+            unit: v.optional(v.string()),
+            specs: v.optional(v.string()),
+            location: v.optional(v.string()),
+            urgencyDate: v.optional(v.string()),
+            currency: v.string(),
+            language: v.optional(v.string()),
+        }),
+        provider: v.literal("gemini_deep_research"),
+        status: v.union(
+            v.literal("queued"),
+            v.literal("running"),
+            v.literal("completed"),
+            v.literal("failed"),
+            v.literal("cancelled")
+        ),
+        interactionId: v.optional(v.string()), // from Interactions API
+        result: v.optional(v.object({
+            reportMarkdown: v.string(),
+            options: v.array(v.any()), // Using any for flexibility here, or match buyingSuggestions options
+            citations: v.array(v.any()),
+        })),
+        error: v.optional(v.string()),
+        startedAt: v.number(),
+        finishedAt: v.optional(v.number()),
+        cost: v.optional(v.object({
+            inputTokens: v.optional(v.number()),
+            outputTokens: v.optional(v.number()),
+            estimatedUSD: v.optional(v.number()),
+        })),
+        createdBy: v.string(),
+        linked: v.object({
+            materialLineId: v.optional(v.id("materialLines")),
+            projectId: v.optional(v.id("projects")),
+        }),
+    })
+    .index("by_status_startedAt", ["status", "startedAt"])
+    .index("by_linked_materialLine_createdAt", ["linked.materialLineId", "startedAt"])
+    .index("by_createdBy_startedAt", ["createdBy", "startedAt"]),
 });

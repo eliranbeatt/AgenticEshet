@@ -5,16 +5,21 @@ import { useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
 import { Plus, Wand2 } from "lucide-react";
+import { type ProjectAccountingData } from "./AccountingTypes";
 
-export default function SummaryTab({ data, projectId }: { data: any, projectId: Id<"projects"> }) {
+export default function SummaryTab({ data, projectId }: { data: ProjectAccountingData, projectId: Id<"projects"> }) {
   const addSection = useMutation(api.accounting.addSection);
   const estimateProject = useAction(api.agents.estimator.estimateProject);
+  const generateAccounting = useAction(api.agents.accountingGenerator.run);
+  const deepEstimateProject = useAction(api.agents.deepResearch.runProject);
   const updateProject = useMutation(api.projects.updateProject);
 
   const [newSectionGroup, setNewSectionGroup] = useState("General");
   const [newSectionName, setNewSectionName] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [isEstimatingAll, setIsEstimatingAll] = useState(false);
+  const [isGeneratingFromPlan, setIsGeneratingFromPlan] = useState(false);
+  const [isDeepEstimating, setIsDeepEstimating] = useState(false);
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
 
   const [riskPercent, setRiskPercent] = useState<number>(() => (data.project.riskPercent ?? 0.10) * 100);
@@ -40,6 +45,19 @@ export default function SummaryTab({ data, projectId }: { data: any, projectId: 
     }
   };
 
+  const handleGenerateFromPlan = async () => {
+    if (!confirm("This will replace current Accounting sections with items extracted from the APPROVED plan. Continue?")) return;
+    setIsGeneratingFromPlan(true);
+    try {
+        await generateAccounting({ projectId, replaceExisting: true });
+        alert("Accounting generated from plan.");
+    } catch (e) {
+        alert("Generation failed: " + e);
+    } finally {
+        setIsGeneratingFromPlan(false);
+    }
+  };
+
   const handleSavePolicy = async () => {
     setIsSavingPolicy(true);
     try {
@@ -53,6 +71,19 @@ export default function SummaryTab({ data, projectId }: { data: any, projectId: 
         alert("Failed to save margins: " + e);
     } finally {
         setIsSavingPolicy(false);
+    }
+  };
+
+  const handleDeepEstimate = async () => {
+    if (!confirm("This will run Gemini Deep Research on the entire approved plan and store results under the Deep-Research tab. Continue?")) return;
+    setIsDeepEstimating(true);
+    try {
+        await deepEstimateProject({ projectId });
+        alert("Deep research completed. Open the Deep-Research tab.");
+    } catch (e) {
+        alert("Deep research failed: " + e);
+    } finally {
+        setIsDeepEstimating(false);
     }
   };
 
@@ -82,13 +113,27 @@ export default function SummaryTab({ data, projectId }: { data: any, projectId: 
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-semibold">Cost Summary</h2>
         <div className="flex space-x-2">
+            <button
+                onClick={handleGenerateFromPlan}
+                disabled={isGeneratingFromPlan}
+                className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 flex items-center text-sm disabled:opacity-50"
+            >
+                {isGeneratingFromPlan ? "Generating..." : "Generate from Plan"}
+            </button>
+            <button
+                onClick={handleDeepEstimate}
+                disabled={isDeepEstimating}
+                className="bg-gray-900 text-white px-3 py-1 rounded hover:bg-black flex items-center text-sm disabled:opacity-50"
+            >
+                {isDeepEstimating ? "Researching..." : "Deep-Estimate Project"}
+            </button>
             <button 
                 onClick={handleEstimateAll}
                 disabled={isEstimatingAll}
                 className="bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700 flex items-center text-sm disabled:opacity-50"
             >
                 <Wand2 className={`w-4 h-4 mr-1 ${isEstimatingAll ? 'animate-spin' : ''}`} /> 
-                {isEstimatingAll ? "Estimating Project..." : "Auto-Estimate Project"}
+                {isEstimatingAll ? "Estimating..." : "Auto-Estimate Project"}
             </button>
             <button 
                 onClick={() => setIsAdding(!isAdding)}
@@ -183,7 +228,7 @@ export default function SummaryTab({ data, projectId }: { data: any, projectId: 
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {data.sections.map((item: any) => {
+            {data.sections.map((item) => {
                const { section, stats } = item;
                return (
                 <tr key={section._id} className="hover:bg-gray-50 group">
@@ -205,12 +250,12 @@ export default function SummaryTab({ data, projectId }: { data: any, projectId: 
             {/* Totals Row */}
             <tr className="bg-gray-100 font-bold border-t-2 border-gray-300">
               <td className="px-3 py-2" colSpan={2}>TOTALS</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((s:number, i:any) => s + i.stats.plannedMaterialsCostE, 0))}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((s:number, i:any) => s + i.stats.plannedWorkCostS, 0))}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedMaterialsCostE, 0))}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedWorkCostS, 0))}</td>
               <td className="px-3 py-2 text-right">{formatMoney(data.totals.plannedDirect)}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((s:number, i:any) => s + i.stats.plannedOverhead, 0))}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((s:number, i:any) => s + i.stats.plannedRisk, 0))}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((s:number, i:any) => s + i.stats.plannedProfit, 0))}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedOverhead, 0))}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedRisk, 0))}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedProfit, 0))}</td>
               <td className="px-3 py-2 text-right bg-yellow-100">{formatMoney(data.totals.plannedClientPrice)}</td>
             </tr>
           </tbody>

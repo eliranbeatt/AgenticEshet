@@ -11,20 +11,22 @@ type GeminiGenerateContentResponse = {
     content?: {
       parts?: Array<{ text?: string }>;
     };
+    groundingMetadata?: unknown;
   }>;
   promptFeedback?: { blockReason?: string };
   error?: { message?: string };
 };
 
-async function generateText(prompt: string): Promise<string> {
+async function generateText(params: { prompt: string; model: string; useGoogleSearch: boolean }): Promise<string> {
   if (!apiKey) throw new Error("GOOGLE_API_KEY is not set");
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts: [{ text: params.prompt }] }],
+      tools: params.useGoogleSearch ? [{ google_search: {} }] : undefined,
     }),
   });
 
@@ -140,7 +142,7 @@ export async function performResearch(params: {
     .filter(Boolean)
     .join("\n");
 
-  const text = await generateText(prompt);
+  const text = await generateText({ prompt, model: "gemini-pro", useGoogleSearch: false });
   const parsed = ResearchSchema.safeParse(extractJson(text));
   if (!parsed.success) {
     throw new Error(`Failed to validate research JSON: ${parsed.error.message}`);
@@ -167,4 +169,23 @@ export async function performResearch(params: {
     options: cappedOptions,
     reportMarkdown,
   };
+}
+
+export async function generateJsonWithGemini<TSchema extends z.ZodTypeAny>(params: {
+  schema: TSchema;
+  prompt: string;
+  model?: string;
+  useGoogleSearch?: boolean;
+}): Promise<z.infer<TSchema>> {
+  const text = await generateText({
+    prompt: params.prompt,
+    model: params.model ?? "gemini-pro",
+    useGoogleSearch: params.useGoogleSearch ?? false,
+  });
+
+  const parsed = params.schema.safeParse(extractJson(text));
+  if (!parsed.success) {
+    throw new Error(`Failed to validate Gemini JSON: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }

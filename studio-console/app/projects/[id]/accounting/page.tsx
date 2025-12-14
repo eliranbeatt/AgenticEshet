@@ -8,12 +8,13 @@ import { Id } from "../../../../convex/_generated/dataModel";
 import SummaryTab from "./_components/SummaryTab";
 import MaterialsTab from "./_components/MaterialsTab";
 import LaborTab from "./_components/LaborTab";
+import DeepResearchTab from "./_components/DeepResearchTab";
 
 export default function AccountingPage() {
   const params = useParams();
   const projectId = params.id as Id<"projects">;
   
-  const [activeTab, setActiveTab] = useState<"summary" | "materials" | "labor">("summary");
+  const [activeTab, setActiveTab] = useState<"summary" | "materials" | "labor" | "deep-research">("summary");
 
   const accountingData = useQuery(api.accounting.getProjectAccounting, { projectId });
 
@@ -39,12 +40,18 @@ export default function AccountingPage() {
           isActive={activeTab === "labor"} 
           onClick={() => setActiveTab("labor")} 
         />
+        <TabButton
+          label="Deep-Research"
+          isActive={activeTab === "deep-research"}
+          onClick={() => setActiveTab("deep-research")}
+        />
       </div>
 
       <div className="flex-1 overflow-auto bg-white rounded-lg shadow p-4">
         {activeTab === "summary" && <SummaryTab data={accountingData} projectId={projectId} />}
         {activeTab === "materials" && <MaterialsTab data={accountingData} projectId={projectId} />}
         {activeTab === "labor" && <LaborTab data={accountingData} projectId={projectId} />}
+        {activeTab === "deep-research" && <DeepResearchTab projectId={projectId} />}
       </div>
     </div>
   );

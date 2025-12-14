@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import { Plus, Wand2, Save, Pencil, Trash2, X } from "lucide-react";
+import { type ProjectAccountingData, type ProjectAccountingSection } from "./AccountingTypes";
 
-export default function LaborTab({ data, projectId }: { data: any, projectId: Id<"projects"> }) {
+export default function LaborTab({ data, projectId }: { data: ProjectAccountingData, projectId: Id<"projects"> }) {
   const addWorkLine = useMutation(api.accounting.addWorkLine);
   const updateWorkLine = useMutation(api.accounting.updateWorkLine);
   const deleteWorkLine = useMutation(api.accounting.deleteWorkLine);
@@ -33,7 +34,7 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
 
   const filteredSections = filterSection === "all" 
     ? data.sections 
-    : data.sections.filter((s: any) => s.section._id === filterSection);
+    : data.sections.filter((s: ProjectAccountingSection) => s.section._id === filterSection);
 
   const handleAddLine = async (sectionId: Id<"sections">) => {
     await addWorkLine({
@@ -64,7 +65,7 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
                 onChange={(e) => setFilterSection(e.target.value)}
             >
                 <option value="all">All Sections</option>
-                {data.sections.map((s: any) => (
+                {data.sections.map((s) => (
                     <option key={s.section._id} value={s.section._id}>{s.section.name}</option>
                 ))}
             </select>
@@ -72,7 +73,7 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
       </div>
 
       <div className="space-y-6">
-        {filteredSections.map((item: any) => {
+        {filteredSections.map((item) => {
             const { section, work } = item;
             return (
                 <div key={section._id} className="border rounded-lg overflow-hidden">
@@ -114,7 +115,7 @@ export default function LaborTab({ data, projectId }: { data: any, projectId: Id
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-200 bg-white">
-                                    {work.map((w: any) => (
+                                    {work.map((w) => (
                                         <WorkRow 
                                             key={w._id} 
                                             line={w} 
@@ -139,8 +140,21 @@ function WorkRow({
     update,
     onDelete,
 }: {
-    line: any;
-    update: any;
+    line: Doc<"workLines">;
+    update: (args: {
+        id: Id<"workLines">;
+        updates: {
+            workType?: string;
+            role?: string;
+            rateType?: string;
+            plannedQuantity?: number;
+            plannedUnitCost?: number;
+            actualQuantity?: number;
+            actualUnitCost?: number;
+            status?: string;
+            description?: string;
+        };
+    }) => Promise<void>;
     onDelete: () => void;
 }) {
     const [isEditing, setIsEditing] = useState(false);

@@ -16,14 +16,12 @@ export default function PlanningPage() {
     const clarificationDoc = useQuery(api.clarificationDocs.getLatest, { projectId });
     const runPlanning = useAction(api.agents.planning.run);
     const setPlanActive = useMutation(api.projects.setPlanActive);
-    const createDraftFromAccounting = useMutation(api.costPlanDocs.createDraftFromAccounting);
     const updateDraftMarkdown = useMutation(api.costPlanDocs.updateDraftMarkdown);
     
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [selection, setSelection] = useState<Id<"plans"> | null>(null);
     const [approvingPlanId, setApprovingPlanId] = useState<Id<"plans"> | null>(null);
-    const [isBuildingDraft, setIsBuildingDraft] = useState(false);
     const [isEditingMarkdown, setIsEditingMarkdown] = useState(false);
     const [markdownDraft, setMarkdownDraft] = useState("");
     const [isSavingMarkdown, setIsSavingMarkdown] = useState(false);
@@ -71,19 +69,6 @@ export default function PlanningPage() {
             alert(message);
         } finally {
             setApprovingPlanId(null);
-        }
-    };
-
-    const handleBuildDraftFromAccounting = async () => {
-        setIsBuildingDraft(true);
-        try {
-            const planId = await createDraftFromAccounting({ projectId });
-            setSelection(planId);
-        } catch (error) {
-            const message = error instanceof Error ? error.message : "Failed to build draft plan";
-            alert(message);
-        } finally {
-            setIsBuildingDraft(false);
         }
     };
 
@@ -196,13 +181,6 @@ export default function PlanningPage() {
                     </div>
                     {selectedPlan && (
                         <div className="flex gap-2">
-                            <button
-                                onClick={handleBuildDraftFromAccounting}
-                                disabled={isBuildingDraft}
-                                className="border border-gray-300 bg-white text-gray-800 px-3 py-2 rounded text-sm font-medium disabled:opacity-50 hover:bg-gray-100"
-                            >
-                                {isBuildingDraft ? "Building..." : "Draft from Accounting"}
-                            </button>
                             {!selectedPlan.isActive && (
                                 <button
                                     onClick={() => handleApprove(selectedPlan._id)}

@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import { Save, Plus, Wand2, Pencil, Trash2, X, ShoppingCart } from "lucide-react";
 import { BuyingAssistantPanel } from "../../quote/_components/BuyingAssistantPanel";
+import { type ProjectAccountingData, type ProjectAccountingSection } from "./AccountingTypes";
 
-export default function MaterialsTab({ data, projectId }: { data: any, projectId: Id<"projects"> }) {
+export default function MaterialsTab({ data, projectId }: { data: ProjectAccountingData, projectId: Id<"projects"> }) {
   const addMaterialLine = useMutation(api.accounting.addMaterialLine);
   const updateMaterialLine = useMutation(api.accounting.updateMaterialLine);
   const deleteMaterialLine = useMutation(api.accounting.deleteMaterialLine);
@@ -35,7 +36,7 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
 
   const filteredSections = filterSection === "all" 
     ? data.sections 
-    : data.sections.filter((s: any) => s.section._id === filterSection);
+    : data.sections.filter((s: ProjectAccountingSection) => s.section._id === filterSection);
 
   const handleAddLine = async (sectionId: Id<"sections">) => {
     await addMaterialLine({
@@ -55,7 +56,7 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
     await deleteMaterialLine({ id: lineId });
   };
 
-  const handleSaveToCatalog = async (line: any) => {
+  const handleSaveToCatalog = async (line: Doc<"materialLines">) => {
     await saveToCatalog({
       category: line.category,
       name: line.label,
@@ -77,7 +78,7 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
                 onChange={(e) => setFilterSection(e.target.value)}
             >
                 <option value="all">All Sections</option>
-                {data.sections.map((s: any) => (
+                {data.sections.map((s) => (
                     <option key={s.section._id} value={s.section._id}>{s.section.name}</option>
                 ))}
             </select>
@@ -85,7 +86,7 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
       </div>
 
       <div className="space-y-6">
-        {filteredSections.map((item: any) => {
+        {filteredSections.map((item) => {
             const { section, materials } = item;
             return (
                 <div key={section._id} className="border rounded-lg overflow-hidden">
@@ -128,7 +129,7 @@ export default function MaterialsTab({ data, projectId }: { data: any, projectId
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-200 bg-white">
-                                    {materials.map((m: any) => (
+                                    {materials.map((m) => (
                                         <MaterialRow 
                                             key={m._id} 
                                             line={m} 
@@ -155,8 +156,23 @@ function MaterialRow({
     onSaveCatalog,
     onDelete,
 }: {
-    line: any;
-    update: any;
+    line: Doc<"materialLines">;
+    update: (args: {
+        id: Id<"materialLines">;
+        updates: {
+            category?: string;
+            label?: string;
+            description?: string;
+            vendorName?: string;
+            unit?: string;
+            plannedQuantity?: number;
+            plannedUnitCost?: number;
+            actualQuantity?: number;
+            actualUnitCost?: number;
+            status?: string;
+            note?: string;
+        };
+    }) => Promise<void>;
     onSaveCatalog: () => void;
     onDelete: () => void;
 }) {

@@ -288,6 +288,20 @@ export default defineSchema({
         createdBy: v.string(),
     }).index("by_project", ["projectId"]),
 
+    // 7b. DEEP RESEARCH RUNS (Gemini Deep Research outputs)
+    deepResearchRuns: defineTable({
+        projectId: v.id("projects"),
+        planId: v.optional(v.id("plans")),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        status: v.union(v.literal("completed"), v.literal("failed")),
+        reportMarkdown: v.optional(v.string()),
+        reportJson: v.optional(v.string()),
+        error: v.optional(v.string()),
+    })
+        .index("by_project", ["projectId"])
+        .index("by_project_createdAt", ["projectId", "createdAt"]),
+
     // 8. CONVERSATIONS: for logging agent runs
     conversations: defineTable({
         projectId: v.id("projects"),

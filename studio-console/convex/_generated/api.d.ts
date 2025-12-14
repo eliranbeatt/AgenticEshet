@@ -10,8 +10,10 @@
 
 import type * as accounting from "../accounting.js";
 import type * as admin from "../admin.js";
+import type * as agents_accountingGenerator from "../agents/accountingGenerator.js";
 import type * as agents_architect from "../agents/architect.js";
 import type * as agents_clarification from "../agents/clarification.js";
+import type * as agents_deepResearch from "../agents/deepResearch.js";
 import type * as agents_estimator from "../agents/estimator.js";
 import type * as agents_planning from "../agents/planning.js";
 import type * as agents_quote from "../agents/quote.js";
@@ -20,6 +22,7 @@ import type * as buying from "../buying.js";
 import type * as clarificationDocs from "../clarificationDocs.js";
 import type * as conversations from "../conversations.js";
 import type * as costPlanDocs from "../costPlanDocs.js";
+import type * as deepResearch from "../deepResearch.js";
 import type * as drive from "../drive.js";
 import type * as http from "../http.js";
 import type * as inbox from "../inbox.js";
@@ -52,8 +55,10 @@ import type {
 declare const fullApi: ApiFromModules<{
   accounting: typeof accounting;
   admin: typeof admin;
+  "agents/accountingGenerator": typeof agents_accountingGenerator;
   "agents/architect": typeof agents_architect;
   "agents/clarification": typeof agents_clarification;
+  "agents/deepResearch": typeof agents_deepResearch;
   "agents/estimator": typeof agents_estimator;
   "agents/planning": typeof agents_planning;
   "agents/quote": typeof agents_quote;
@@ -62,6 +67,7 @@ declare const fullApi: ApiFromModules<{
   clarificationDocs: typeof clarificationDocs;
   conversations: typeof conversations;
   costPlanDocs: typeof costPlanDocs;
+  deepResearch: typeof deepResearch;
   drive: typeof drive;
   http: typeof http;
   inbox: typeof inbox;

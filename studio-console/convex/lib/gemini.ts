@@ -112,6 +112,7 @@ export async function performResearch(params: {
   const prompt = [
     "You are a buying assistant.",
     "Return STRICT JSON only (no markdown, no prose).",
+    "Language: Hebrew. All user-facing strings must be in Hebrew (summary, vendorName, unit, location, notes, citation title/snippet). Keep URLs as-is.",
     "Task: Provide a concise buying comparison for the item below.",
     `Item: ${params.queryText}`,
     `Preferred currency: ${params.currency}`,
@@ -150,17 +151,17 @@ export async function performResearch(params: {
 
   const cappedOptions = parsed.data.options.slice(0, params.maxOptions);
   const reportMarkdown = [
-    `## Summary\n${parsed.data.summary}`,
-    "\n## Options",
+    `## סיכום\n${parsed.data.summary}`,
+    "\n## אפשרויות",
     ...cappedOptions.map((o) => {
       const price = o.price
         ? `${o.price.min ?? "?"}-${o.price.max ?? "?"} ${o.price.currency}/${o.price.unit}`
-        : "(price unknown)";
-      const lead = o.leadTimeDays != null ? `${o.leadTimeDays} days` : "unknown";
+        : "(מחיר לא ידוע)";
+      const lead = o.leadTimeDays != null ? `${o.leadTimeDays} ימים` : "לא ידוע";
       const url = o.vendorUrl ? ` (${o.vendorUrl})` : "";
-      return `- **${o.vendorName}**${url}: ${price}, lead: ${lead}. ${o.notes ?? ""}`.trim();
+      return `- **${o.vendorName}**${url}: ${price}, זמן אספקה: ${lead}. ${o.notes ?? ""}`.trim();
     }),
-    "\n## Citations",
+    "\n## מקורות",
     ...parsed.data.citations.slice(0, 10).map((c) => `- [${c.title}](${c.url}) — ${c.snippet}`),
   ].join("\n");
 

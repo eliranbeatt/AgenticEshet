@@ -49,6 +49,7 @@ function buildPrompt(args: {
         "Convert the APPROVED plan Markdown into accounting Sections + line items.",
         "",
         "Rules:",
+        "- All user-facing labels (group, name, category, label, unit, description, vendorName, workType) must be in Hebrew.",
         "- Output costs only (not sell price). Currency: ILS.",
         "- Create accounting sections (group + name). Each section should be a customer-facing deliverable item.",
         "- You MUST always include all keys required by the schema.",

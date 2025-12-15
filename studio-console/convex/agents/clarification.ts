@@ -7,9 +7,9 @@ import { type Doc } from "../_generated/dataModel";
 
 function formatAssistantMessage(result: { openQuestions?: string[] }) {
     if (result.openQuestions && result.openQuestions.length > 0) {
-        return "**Follow-up Questions:**\n" + result.openQuestions.map((q) => `- ${q}`).join("\n");
+        return "**שאלות המשך:**\n" + result.openQuestions.map((q) => `- ${q}`).join("\n");
     }
-    return "Clarification complete! Check the summary.";
+    return "ההבהרה הושלמה. אפשר לעבור לסיכום.";
 }
 
 // 1. DATA ACCESS: Get context for the agent
@@ -98,15 +98,15 @@ export const saveResult = internalMutation({
         .collect();
 
     const summaryMarkdown = [
-        "## Clarification Summary",
+        "## סיכום הבהרות",
         args.response.briefSummary,
         "",
-        "## Open Questions",
+        "## שאלות פתוחות",
         args.response.openQuestions.length
             ? args.response.openQuestions.map((q: string) => `- ${q}`).join("\n")
-            : "- No open questions",
+            : "- אין שאלות פתוחות",
         "",
-        `Suggested next phase: ${args.response.suggestedNextPhase}`,
+        `שלב מומלץ הבא: ${args.response.suggestedNextPhase}`,
     ].join("\n");
 
     await ctx.db.insert("plans", {
@@ -240,7 +240,7 @@ export const run: ReturnType<typeof action> = action({
         projectId: args.projectId,
         phase: "clarification",
         agentRole: "clarification_agent",
-        messages: [...args.chatHistory, { role: "assistant", content: "Running…" }],
+        messages: [...args.chatHistory, { role: "assistant", content: "מריץ…" }],
         createdAt,
     });
 

@@ -16,6 +16,18 @@ type ChatParams = {
     retryDelayMs?: number;
 };
 
+type ResponseTextFormat =
+    | { type: "text" }
+    | { type: "json_object" }
+    | { type: "json_schema"; name: string; schema: unknown; strict: true };
+
+const GLOBAL_LANGUAGE_INSTRUCTIONS = [
+    "Language requirement:",
+    "- All user-facing text must be in Hebrew (עברית).",
+    "- If returning JSON, keep keys exactly as required by the schema; do not translate keys.",
+    "- Keep code identifiers/tool names in English when necessary, but explain them in Hebrew.",
+].join("\n");
+
 const apiKey = process.env.OPENAI_API_KEY;
 export const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-5.2";
 // Default to a 1536-d model to match the vector index. Larger models are down-projected.
@@ -60,7 +72,7 @@ function buildJsonSchemaFormat(schema: z.ZodSchema<unknown>, name: string) {
         name,
         schema: z.toJSONSchema(schema),
         strict: true,
-    };
+    } satisfies ResponseTextFormat;
 }
 
 function shouldFallbackFromJsonSchema(error: unknown): boolean {
@@ -98,6 +110,7 @@ export async function callChatWithSchema<T>(
         ...additionalMessages
             .filter((message) => message.role === "system")
             .map((message) => message.content),
+        GLOBAL_LANGUAGE_INSTRUCTIONS,
     ]
         .filter(Boolean)
         .join("\n\n");
@@ -110,7 +123,7 @@ export async function callChatWithSchema<T>(
     let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-            const createResponse = async (format: { type: string } & Record<string, unknown>) => {
+            const createResponse = async (format: ResponseTextFormat) => {
                 const jsonHint =
                     format.type === "json_object" || format.type === "json_schema"
                         ? "\n\nReturn valid JSON only."
@@ -124,7 +137,7 @@ export async function callChatWithSchema<T>(
                     instructions: `${systemInstructions}${jsonHint}`,
                     input: `${formatConversation(transcriptMessages)}${jsonHintInput}`,
                     ...(supportsTemperature(model) ? { temperature: params.temperature ?? 0 } : {}),
-                    text: { format: format as any, verbosity: "medium" },
+                    text: { format, verbosity: "medium" },
                     parallel_tool_calls: true,
                 });
             };

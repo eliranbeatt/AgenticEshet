@@ -39,7 +39,7 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
     setIsEstimatingAll(true);
     try {
         await estimateProject({ projectId });
-        alert("Full project estimation complete!");
+        alert("Full project estimation started in the background. You can navigate away; results will appear as sections update.");
     } catch (e) {
         alert("Estimation failed: " + e);
     } finally {
@@ -52,7 +52,7 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
     setIsGeneratingFromPlan(true);
     try {
         await generateAccounting({ projectId, replaceExisting: true });
-        alert("Accounting generated from plan.");
+        alert("Accounting generation started in the background. Refresh sections in a moment.");
     } catch (e) {
         alert("Generation failed: " + e);
     } finally {

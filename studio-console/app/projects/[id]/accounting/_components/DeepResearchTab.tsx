@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useAction, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Id, type Doc } from "../../../../../convex/_generated/dataModel";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export default function DeepResearchTab({ projectId }: { projectId: Id<"projects"> }) {
     const runs = useQuery(api.deepResearch.listByProject, { projectId });
@@ -46,7 +48,7 @@ export default function DeepResearchTab({ projectId }: { projectId: Id<"projects
             <div className="w-80 border rounded-lg overflow-hidden bg-white flex flex-col">
                 <div className="px-4 py-3 border-b bg-gray-50">
                     <h3 className="text-sm font-semibold text-gray-700">Runs</h3>
-                    <p className="text-xs text-gray-500">Newest first{isPolling ? " • polling..." : ""}</p>
+                    <p className="text-xs text-gray-500">Newest first{isPolling ? " - polling..." : ""}</p>
                 </div>
                 <div className="flex-1 overflow-auto">
                     {runs.length === 0 ? (
@@ -92,7 +94,7 @@ export default function DeepResearchTab({ projectId }: { projectId: Id<"projects
                     <h3 className="text-sm font-semibold text-gray-700">Deep-Research Output</h3>
                     <p className="text-xs text-gray-500">Markdown with links and citations</p>
                 </div>
-                <div className="flex-1 overflow-auto p-6 prose prose-sm max-w-none">
+                <div className="flex-1 overflow-auto p-6 prose prose-sm max-w-none" dir="rtl" lang="he">
                     {!selected ? (
                         <div className="text-sm text-gray-500">Select a run.</div>
                     ) : selected.status === "in_progress" ? (
@@ -102,7 +104,17 @@ export default function DeepResearchTab({ projectId }: { projectId: Id<"projects
                     ) : selected.status === "failed" ? (
                         <div className="text-sm text-red-700 whitespace-pre-wrap">{selected.error ?? "Failed."}</div>
                     ) : (
-                        <div className="whitespace-pre-wrap text-gray-900">{selected.reportMarkdown ?? "(empty)"}</div>
+                        <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                                a: ({ node, ...props }) => {
+                                    void node;
+                                    return <a {...props} target="_blank" rel="noreferrer" />;
+                                },
+                            }}
+                        >
+                            {selected.reportMarkdown ?? "(empty)"}
+                        </ReactMarkdown>
                     )}
                 </div>
             </div>

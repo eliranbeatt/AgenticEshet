@@ -31,6 +31,7 @@ export default function ClarificationPage() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
+    const [activeConversationId, setActiveConversationId] = useState<Id<"conversations"> | null>(null);
     const [lastAnalysis, setLastAnalysis] = useState<AnalysisResult | null>(null);
     const [clarificationMarkdown, setClarificationMarkdown] = useState("");
     const [isSavingDoc, setIsSavingDoc] = useState(false);
@@ -45,34 +46,52 @@ export default function ClarificationPage() {
         [plans],
     );
 
+    useEffect(() => {
+        if (!transcript || transcript.length === 0) return;
+        const conversation = activeConversationId
+            ? transcript.find((item) => item._id === activeConversationId) ?? null
+            : transcript[0];
+        if (!conversation) return;
+
+        const parsed = parseMessages(conversation.messagesJson);
+        if (parsed.length > 0) {
+            setMessages(parsed.filter((msg) => !isAnalysisMessage(msg)));
+        }
+
+        const analysis = extractAnalysis(parsed);
+        if (analysis) {
+            setLastAnalysis(analysis);
+            setIsLoading(false);
+        } else if (activeConversationId && conversation._id === activeConversationId) {
+            setIsLoading(true);
+        }
+
+        if (!activeConversationId) {
+            setActiveConversationId(conversation._id);
+        }
+    }, [transcript, activeConversationId]);
+
     const handleSend = async () => {
         if (!input.trim()) return;
 
-        const newMessages: Message[] = [...messages, { role: "user", content: input }];
+        const baseMessages = messages.filter((msg) => !isAnalysisMessage(msg));
+        const newMessages: Message[] = [...baseMessages, { role: "user", content: input }];
         setMessages(newMessages);
         setInput("");
         setIsLoading(true);
 
         try {
-            const result = await runClarification({
+            const response = await runClarification({
                 projectId,
                 chatHistory: newMessages,
             });
-
-            let replyContent = "";
-            if (result.openQuestions && result.openQuestions.length > 0) {
-                replyContent += "**Follow-up Questions:**\n" + result.openQuestions.map((q: string) => `- ${q}`).join("\n");
-            } else {
-                replyContent += "Clarification complete! Check the summary.";
-            }
-
-            setMessages((prev) => [...prev, { role: "assistant", content: replyContent }]);
-            setLastAnalysis(result as AnalysisResult);
+            setActiveConversationId((response as { conversationId?: Id<"conversations"> }).conversationId ?? null);
         } catch (err) {
             console.error(err);
             setMessages((prev) => [...prev, { role: "system", content: "Error running agent. Please try again." }]);
-        } finally {
             setIsLoading(false);
+        } finally {
+            // completion is driven by transcript updates
         }
     };
 
@@ -109,6 +128,7 @@ export default function ClarificationPage() {
                                 </div>
                             )}
                             {messages.map((msg, i) => (
+                                isAnalysisMessage(msg) ? null : (
                                 <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                                     <div className={`max-w-[80%] rounded-lg p-3 ${
                                         msg.role === "user" 
@@ -118,6 +138,7 @@ export default function ClarificationPage() {
                                         <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
                                     </div>
                                 </div>
+                                )
                             ))}
                             {isLoading && (
                                 <div className="flex justify-start">
@@ -233,6 +254,31 @@ export default function ClarificationPage() {
             </div>
         </div>
     );
+}
+
+function parseMessages(messagesJson: string): Message[] {
+    try {
+        const parsed = JSON.parse(messagesJson);
+        return Array.isArray(parsed) ? (parsed as Message[]) : [];
+    } catch {
+        return [];
+    }
+}
+
+function isAnalysisMessage(message: Message) {
+    return message.role === "system" && message.content.startsWith("ANALYSIS_JSON:");
+}
+
+function extractAnalysis(messages: Message[]): AnalysisResult | null {
+    const raw = messages.find((msg) => isAnalysisMessage(msg))?.content;
+    if (!raw) return null;
+    try {
+        const json = JSON.parse(raw.slice("ANALYSIS_JSON:".length));
+        if (!json || typeof json !== "object") return null;
+        return json as AnalysisResult;
+    } catch {
+        return null;
+    }
 }
 
 function PhaseBadges({ projectReady, activePlanLabel }: { projectReady: boolean; activePlanLabel: string }) {

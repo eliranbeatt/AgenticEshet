@@ -1,91 +1,16 @@
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery } from "../_generated/server";
-import { internal, api } from "../_generated/api";
+import { action, internalAction, internalMutation, internalQuery } from "../_generated/server";
+import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { EstimationSchema } from "../lib/zodSchemas";
 
-// 1. DATA ACCESS
-export const getContext = internalQuery({
-  args: { 
-    projectId: v.id("projects"),
-    sectionId: v.id("sections") 
-  },
-  handler: async (ctx, args) => {
-    const project = await ctx.db.get(args.projectId);
-    const section = await ctx.db.get(args.sectionId);
-    if (!project || !section) throw new Error("Project or Section not found");
-
-    // Retrieve some catalog items that might be relevant (naive search for now)
-    // In a real app, we'd use vector search on the section name.
-    const catalogItems = await ctx.db
-        .query("materialCatalog")
-        .withSearchIndex("search_material", q => q.search("name", section.name))
-        .take(5);
-
-    return {
-      project,
-      section,
-      catalogItems,
-      systemPrompt: "You are an expert Production Estimator for an events and creative studio. Your goal is to break down a high-level element (Section) into detailed Bill of Materials and Labor tasks.",
-    };
-  },
-});
-
-export const saveEstimation = internalMutation({
-  args: {
-    projectId: v.id("projects"),
-    sectionId: v.id("sections"),
-    estimation: v.any(), // EstimationSchema
-  },
-  handler: async (ctx, args) => {
-    const data = args.estimation;
-
-    // Insert Materials
-    for (const m of data.materials) {
-        await ctx.db.insert("materialLines", {
-            projectId: args.projectId,
-            sectionId: args.sectionId,
-            category: m.category,
-            label: m.label,
-            description: m.description ?? undefined,
-            vendorName: m.vendor ?? undefined,
-            unit: m.unit,
-            plannedQuantity: m.quantity,
-            plannedUnitCost: m.unitCost,
-            status: "planned"
-        });
-    }
-
-    // Insert Work
-    for (const w of data.work) {
-        await ctx.db.insert("workLines", {
-            projectId: args.projectId,
-            sectionId: args.sectionId,
-            workType: w.workType as any,
-            role: w.role,
-            rateType: w.rateType,
-            plannedQuantity: w.quantity,
-            plannedUnitCost: w.unitCost,
-            status: "planned",
-            description: w.description ?? undefined,
-        });
-    }
-  },
-});
-
-// 2. AGENT ACTION
-export const run: ReturnType<typeof action> = action({
-  args: {
-    projectId: v.id("projects"),
-    sectionId: v.id("sections"),
-  },
-  handler: async (ctx, args) => {
+async function estimateSectionImpl(ctx: any, args: { projectId: any; sectionId: any }) {
     const { project, section, catalogItems, systemPrompt } = await ctx.runQuery(internal.agents.estimator.getContext, {
-      projectId: args.projectId,
-      sectionId: args.sectionId,
+        projectId: args.projectId,
+        sectionId: args.sectionId,
     });
 
-    const catalogContext = catalogItems.length > 0 
+    const catalogContext = catalogItems.length > 0
         ? "Historical Prices from Catalog:\n" + catalogItems.map((c: any) => `- ${c.name}: ${c.lastPrice} per ${c.defaultUnit}`).join("\n")
         : "No specific catalog matches found.";
 
@@ -103,45 +28,126 @@ Please estimate the required materials and labor to execute this section.
 - **CURRENCY: ILS** (Shekels).
 - **UNITS: Metric/Israeli** (m, sqm, kg, units).
 - Be realistic with quantities and costs in the Israeli market.
-- Break down labor into specific roles (e.g. "נגר", "מתקין", "מנהל פרויקט").
+- Break down labor into specific roles (e.g. "xÿx'x"", "xzx¦xxTxY", "xzxÿx"xo xx"xxTxx~").
 `;
 
     const result = await callChatWithSchema(EstimationSchema, {
-      systemPrompt,
-      userPrompt,
+        systemPrompt,
+        userPrompt,
     });
 
     await ctx.runMutation(internal.agents.estimator.saveEstimation, {
-      projectId: args.projectId,
-      sectionId: args.sectionId,
-      estimation: result,
+        projectId: args.projectId,
+        sectionId: args.sectionId,
+        estimation: result,
     });
+}
 
-    return result;
-  },
+export const getContext = internalQuery({
+    args: {
+        projectId: v.id("projects"),
+        sectionId: v.id("sections"),
+    },
+    handler: async (ctx, args) => {
+        const project = await ctx.db.get(args.projectId);
+        const section = await ctx.db.get(args.sectionId);
+        if (!project || !section) throw new Error("Project or Section not found");
+
+        const catalogItems = await ctx.db
+            .query("materialCatalog")
+            .withSearchIndex("search_material", (q) => q.search("name", section.name))
+            .take(5);
+
+        return {
+            project,
+            section,
+            catalogItems,
+            systemPrompt: "You are an expert Production Estimator for an events and creative studio. Your goal is to break down a high-level element (Section) into detailed Bill of Materials and Labor tasks.",
+        };
+    },
+});
+
+export const saveEstimation = internalMutation({
+    args: {
+        projectId: v.id("projects"),
+        sectionId: v.id("sections"),
+        estimation: v.any(),
+    },
+    handler: async (ctx, args) => {
+        const data = args.estimation;
+
+        for (const material of data.materials) {
+            await ctx.db.insert("materialLines", {
+                projectId: args.projectId,
+                sectionId: args.sectionId,
+                category: material.category,
+                label: material.label,
+                description: material.description ?? undefined,
+                vendorName: material.vendor ?? undefined,
+                unit: material.unit,
+                plannedQuantity: material.quantity,
+                plannedUnitCost: material.unitCost,
+                status: "planned",
+            });
+        }
+
+        for (const work of data.work) {
+            await ctx.db.insert("workLines", {
+                projectId: args.projectId,
+                sectionId: args.sectionId,
+                workType: work.workType as any,
+                role: work.role,
+                rateType: work.rateType,
+                plannedQuantity: work.quantity,
+                plannedUnitCost: work.unitCost,
+                status: "planned",
+                description: work.description ?? undefined,
+            });
+        }
+    },
+});
+
+export const runInBackground = internalAction({
+    args: {
+        projectId: v.id("projects"),
+        sectionId: v.id("sections"),
+    },
+    handler: async (ctx, args) => {
+        await estimateSectionImpl(ctx, args);
+    },
+});
+
+export const estimateProjectInBackground = internalAction({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const accounting = await ctx.runQuery(api.accounting.getProjectAccounting, { projectId: args.projectId });
+        for (const sectionEntry of accounting.sections) {
+            await estimateSectionImpl(ctx, { projectId: args.projectId, sectionId: sectionEntry.section._id });
+        }
+        return { count: accounting.sections.length };
+    },
+});
+
+export const run: ReturnType<typeof action> = action({
+    args: {
+        projectId: v.id("projects"),
+        sectionId: v.id("sections"),
+    },
+    handler: async (ctx, args) => {
+        await ctx.scheduler.runAfter(0, internal.agents.estimator.runInBackground, {
+            projectId: args.projectId,
+            sectionId: args.sectionId,
+        });
+        return { queued: true };
+    },
 });
 
 export const estimateProject: ReturnType<typeof action> = action({
-  args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    // 1. Validate Approved Plan (check Plan phase)
-    // We can check if there's any active plan in 'planning' phase
-    // For now, we'll just check if there are sections. If not, we SHOULD create them, 
-    // but the user requirement said "break down the entire project". 
-    // Since we don't have a "Plan -> Sections" parser ready, we'll iterate existing sections for now.
-    // Ideally, we'd add a "PlanParsing" step here.
-    
-    // Fetch all sections
-    const accounting = await ctx.runQuery(api.accounting.getProjectAccounting, { projectId: args.projectId });
-    
-    // Estimate each section
-    for (const s of accounting.sections) {
-        await ctx.runAction(api.agents.estimator.run, {
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        await ctx.scheduler.runAfter(0, internal.agents.estimator.estimateProjectInBackground, {
             projectId: args.projectId,
-            sectionId: s.section._id,
         });
-    }
-    
-    return { count: accounting.sections.length };
-  }
+        return { queued: true };
+    },
 });

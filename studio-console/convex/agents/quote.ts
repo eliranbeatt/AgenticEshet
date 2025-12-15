@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery, query } from "../_generated/server";
+import { action, internalAction, internalMutation, internalQuery, query } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { QuoteSchema } from "../lib/zodSchemas";
@@ -115,11 +115,10 @@ export const listQuotes = query({
     }
 });
 
-// 2. AGENT ACTION
-export const run: ReturnType<typeof action> = action({
+export const runInBackground = internalAction({
   args: {
     projectId: v.id("projects"),
-    instructions: v.optional(v.string()), // e.g. "Add travel expenses"
+    instructions: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { project, tasks, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
@@ -169,5 +168,21 @@ Always include a currency field (ILS by default) and ensure the internal breakdo
     });
 
     return result;
+  },
+});
+
+// 2. AGENT ACTION
+export const run: ReturnType<typeof action> = action({
+  args: {
+    projectId: v.id("projects"),
+    instructions: v.optional(v.string()), // e.g. "Add travel expenses"
+  },
+  handler: async (ctx, args) => {
+    await ctx.scheduler.runAfter(0, internal.agents.quote.runInBackground, {
+        projectId: args.projectId,
+        instructions: args.instructions,
+    });
+
+    return { queued: true };
   },
 });

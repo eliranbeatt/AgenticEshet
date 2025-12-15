@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export default function PlanningPage() {
     const params = useParams();
@@ -52,6 +54,7 @@ export default function PlanningPage() {
                 userRequest: input,
             });
             setInput("");
+            alert("Planning started in the background. A new plan will appear shortly.");
         } catch (err) {
             console.error(err);
             alert("Failed to generate plan");
@@ -240,11 +243,11 @@ export default function PlanningPage() {
                                             onChange={(e) => setMarkdownDraft(e.target.value)}
                                         />
                                     ) : (
-                                        <div className="whitespace-pre-wrap font-sans text-gray-800">{selectedPlan.contentMarkdown}</div>
+                                        <PlanMarkdown markdown={selectedPlan.contentMarkdown ?? ""} />
                                     )}
                                 </div>
                             ) : (
-                                <div className="whitespace-pre-wrap font-sans text-gray-800">{selectedPlan.contentMarkdown}</div>
+                                <PlanMarkdown markdown={selectedPlan.contentMarkdown ?? ""} />
                             )}
                         </div>
                     ) : (
@@ -255,6 +258,28 @@ export default function PlanningPage() {
                 </div>
                 </div>
             </div>
+        </div>
+    );
+}
+
+function PlanMarkdown({ markdown }: { markdown: string }) {
+    if (!markdown.trim()) {
+        return <div className="text-sm text-gray-500">(empty)</div>;
+    }
+
+    return (
+        <div dir="rtl" lang="he" className="text-right">
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                    a: ({ node, ...props }) => {
+                        void node;
+                        return <a {...props} target="_blank" rel="noreferrer" />;
+                    },
+                }}
+            >
+                {markdown}
+            </ReactMarkdown>
         </div>
     );
 }

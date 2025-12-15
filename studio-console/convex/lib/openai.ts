@@ -1,6 +1,5 @@
 import OpenAI from "openai";
 import { z } from "zod";
-import { zodResponseFormat } from "openai/helpers/zod";
 
 type ChatMessage = {
     role: "system" | "user" | "assistant";
@@ -18,7 +17,7 @@ type ChatParams = {
 };
 
 const apiKey = process.env.OPENAI_API_KEY;
-export const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-4o-2024-08-06";
+export const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-5.2";
 // Default to a 1536-d model to match the vector index. Larger models are down-projected.
 export const DEFAULT_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || "text-embedding-3-small";
 
@@ -29,7 +28,58 @@ if (!apiKey) {
 const openai = new OpenAI({
     apiKey: apiKey || "dummy",
 });
-const openaiClient = openai as any;
+
+function extractJson(text: string): unknown {
+    const firstBrace = text.indexOf("{");
+    const lastBrace = text.lastIndexOf("}");
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+        throw new Error("OpenAI response did not contain JSON");
+    }
+
+    const candidate = text.slice(firstBrace, lastBrace + 1);
+    try {
+        return JSON.parse(candidate);
+    } catch {
+        const stripped = candidate
+            .replace(/^```json\s*/i, "")
+            .replace(/^```\s*/i, "")
+            .replace(/```\s*$/i, "");
+        return JSON.parse(stripped);
+    }
+}
+
+function formatConversation(messages: ChatMessage[]): string {
+    return messages
+        .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+        .join("\n");
+}
+
+function buildJsonSchemaFormat(schema: z.ZodSchema<unknown>, name: string) {
+    return {
+        type: "json_schema" as const,
+        name,
+        schema: z.toJSONSchema(schema),
+        strict: true,
+    };
+}
+
+function shouldFallbackFromJsonSchema(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const message = error.message.toLowerCase();
+    return (
+        message.includes("json_schema") ||
+        message.includes("response format") ||
+        message.includes("invalid schema") ||
+        message.includes("unsupported") ||
+        message.includes("strict schema")
+    );
+}
+
+function supportsTemperature(model: string): boolean {
+    // gpt-5 reasoning models currently reject the temperature parameter.
+    if (model.toLowerCase().startsWith("gpt-5")) return false;
+    return true;
+}
 
 export async function callChatWithSchema<T>(
     schema: z.ZodSchema<T>,
@@ -41,58 +91,66 @@ export async function callChatWithSchema<T>(
     const maxRetries = params.maxRetries ?? 3;
     const retryDelayMs = params.retryDelayMs ?? 500;
 
-    const messages: ChatMessage[] = [
-        { role: "system", content: params.systemPrompt },
-        ...(params.additionalMessages || []),
+    const additionalMessages = params.additionalMessages || [];
+
+    const systemInstructions = [
+        params.systemPrompt,
+        ...additionalMessages
+            .filter((message) => message.role === "system")
+            .map((message) => message.content),
+    ]
+        .filter(Boolean)
+        .join("\n\n");
+
+    const transcriptMessages: ChatMessage[] = [
+        ...additionalMessages.filter((message) => message.role !== "system"),
         { role: "user", content: params.userPrompt },
     ];
 
     let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-            // Prefer the structured parse API when available; otherwise fall back to JSON mode.
-            if (openaiClient.beta?.chat?.completions?.parse) {
-                const completion = await openaiClient.beta.chat.completions.parse({
+            const createResponse = async (format: { type: string } & Record<string, unknown>) => {
+                const jsonHint =
+                    format.type === "json_object" || format.type === "json_schema"
+                        ? "\n\nReturn valid JSON only."
+                        : "";
+                const jsonHintInput =
+                    format.type === "json_object" || format.type === "json_schema"
+                        ? "\n\nReturn valid JSON only."
+                        : "";
+                return await openai.responses.create({
                     model,
-                    temperature: params.temperature ?? 0,
-                    messages,
-                    response_format: zodResponseFormat(schema, "output"),
+                    instructions: `${systemInstructions}${jsonHint}`,
+                    input: `${formatConversation(transcriptMessages)}${jsonHintInput}`,
+                    ...(supportsTemperature(model) ? { temperature: params.temperature ?? 0 } : {}),
+                    text: { format: format as any, verbosity: "medium" },
+                    parallel_tool_calls: true,
                 });
+            };
 
-                const refusal = completion.choices?.[0]?.message?.refusal;
-                if (refusal) {
-                    throw new Error(`OpenAI refused request: ${refusal}`);
-                }
-
-                const result = completion.choices?.[0]?.message?.parsed;
-                if (!result) {
-                    throw new Error("OpenAI returned an empty response");
-                }
-                return result;
+            let response;
+            try {
+                response = await createResponse(buildJsonSchemaFormat(schema, "output"));
+            } catch (error) {
+                if (!shouldFallbackFromJsonSchema(error)) throw error;
+                response = await createResponse({ type: "json_object" });
             }
 
-            const completion = await openai.chat.completions.create({
-                model,
-                temperature: params.temperature ?? 0,
-                messages,
-                response_format: zodResponseFormat(schema, "output"),
-            });
-            const parsedChoice = (completion as unknown as {
-                choices?: Array<{ message?: { parsed?: T; content?: unknown } }>;
-            }).choices?.[0]?.message;
-
-            if (parsedChoice?.parsed) {
-                return parsedChoice.parsed;
+            if (response.error) {
+                throw new Error(`OpenAI response error: ${response.error.message ?? "Unknown error"}`);
             }
 
-            const raw = parsedChoice?.content;
-            if (!raw) {
+            const outputText = response.output_text ?? "";
+            if (!outputText.trim()) {
                 throw new Error("OpenAI returned an empty response");
             }
-            const content = Array.isArray(raw)
-                ? raw.map((part) => (typeof part === "string" ? part : (part as { text?: string }).text || "")).join("")
-                : raw;
-            return schema.parse(JSON.parse(content as string));
+
+            const parsed = schema.safeParse(extractJson(outputText));
+            if (!parsed.success) {
+                throw new Error(`Failed to validate OpenAI JSON: ${parsed.error.message}`);
+            }
+            return parsed.data;
         } catch (error) {
             lastError = error;
             if (attempt === maxRetries - 1) break;

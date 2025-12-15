@@ -23,6 +23,7 @@ export default function MaterialsTab({ data, projectId }: { data: ProjectAccount
     setEstimatingIds(prev => new Set(prev).add(sectionId));
     try {
         await estimateSection({ projectId, sectionId: sectionId as Id<"sections"> });
+        alert("Estimation started in the background. Lines will appear shortly.");
     } catch (e) {
         alert("Estimation failed: " + e);
     } finally {

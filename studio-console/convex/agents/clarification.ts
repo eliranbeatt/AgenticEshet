@@ -1,9 +1,16 @@
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery } from "../_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ClarificationSchema } from "../lib/zodSchemas";
 import { type Doc } from "../_generated/dataModel";
+
+function formatAssistantMessage(result: { openQuestions?: string[] }) {
+    if (result.openQuestions && result.openQuestions.length > 0) {
+        return "**Follow-up Questions:**\n" + result.openQuestions.map((q) => `- ${q}`).join("\n");
+    }
+    return "Clarification complete! Check the summary.";
+}
 
 // 1. DATA ACCESS: Get context for the agent
 export const getContext: ReturnType<typeof internalQuery> = internalQuery({
@@ -53,20 +60,29 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
 export const saveResult = internalMutation({
   args: {
     projectId: v.id("projects"),
+    conversationId: v.optional(v.id("conversations")),
     messages: v.array(v.object({ role: v.string(), content: v.string() })),
     response: v.any(), // ClarificationSchema result
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
 
-    // Log the conversation
-    const conversationId = await ctx.db.insert("conversations", {
-      projectId: args.projectId,
-      phase: "clarification",
-      agentRole: "clarification_agent",
-      messagesJson: JSON.stringify(args.messages),
-      createdAt: Date.now(),
-    });
+    const createdAt = Date.now();
+    const conversationId = args.conversationId
+        ? args.conversationId
+        : await ctx.db.insert("conversations", {
+              projectId: args.projectId,
+              phase: "clarification",
+              agentRole: "clarification_agent",
+              messagesJson: JSON.stringify(args.messages),
+              createdAt,
+          });
+
+    if (args.conversationId) {
+        await ctx.db.patch(conversationId, {
+            messagesJson: JSON.stringify(args.messages),
+        });
+    }
 
     if (args.response.briefSummary) {
         await ctx.db.patch(args.projectId, {
@@ -125,13 +141,13 @@ export const saveResult = internalMutation({
 });
 
 // 3. AGENT ACTION: Main entry point
-export const run: ReturnType<typeof action> = action({
+export const runInBackground = internalAction({
   args: {
     projectId: v.id("projects"),
+    conversationId: v.id("conversations"),
     chatHistory: v.array(v.object({ role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")), content: v.string() })),
   },
   handler: async (ctx, args) => {
-    // 1. Get Context
     const { project, systemPrompt, activePlan, recentClarifications } = await ctx.runQuery(internal.agents.clarification.getContext, {
       projectId: args.projectId,
     });
@@ -187,26 +203,53 @@ export const run: ReturnType<typeof action> = action({
         "2. Identify what is MISSING to build a fully detailed Bill of Materials and Labor Estimation.",
         "3. Do NOT repeat questions that have been answered or are being discussed.",
         "4. Dig deeper: If the user says 'build a wall', ask about dimensions, materials, finish, location.",
-        "5. Reason step-by-step: 'I know X, but I need Y to estimate Z.'",
-        "6. If the plan is vague, ask for specific constraints (budget, timeline, quality level).",
+        "5. If the plan is vague, ask for specific constraints (budget, timeline, quality level).",
         "",
         "Live chat history from the user follows. Provide a structured clarification summary and list of smart, non-repetitive open questions.",
     ].join("\n");
 
-    // 3. Call AI
     const result = await callChatWithSchema(ClarificationSchema, {
       systemPrompt,
       userPrompt,
       additionalMessages: args.chatHistory,
     });
 
-    // 4. Save Result
     await ctx.runMutation(internal.agents.clarification.saveResult, {
       projectId: args.projectId,
-      messages: [...args.chatHistory, { role: "assistant", content: JSON.stringify(result) }],
+      conversationId: args.conversationId,
+      messages: [
+          ...args.chatHistory,
+          { role: "assistant", content: formatAssistantMessage(result) },
+          { role: "system", content: `ANALYSIS_JSON:${JSON.stringify(result)}` },
+      ],
       response: result,
     });
 
     return result;
+  },
+});
+
+export const run: ReturnType<typeof action> = action({
+  args: {
+    projectId: v.id("projects"),
+    chatHistory: v.array(v.object({ role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")), content: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    const createdAt = Date.now();
+    const conversationId = await ctx.runMutation(api.conversations.createPlaceholder, {
+        projectId: args.projectId,
+        phase: "clarification",
+        agentRole: "clarification_agent",
+        messages: [...args.chatHistory, { role: "assistant", content: "Running…" }],
+        createdAt,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.agents.clarification.runInBackground, {
+        projectId: args.projectId,
+        conversationId,
+        chatHistory: args.chatHistory,
+    });
+
+    return { queued: true, conversationId };
   },
 });

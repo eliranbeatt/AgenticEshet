@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery } from "../_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { z } from "zod";
 import { callChatWithSchema } from "../lib/openai";
@@ -163,7 +163,7 @@ export const applyGeneratedAccounting = internalMutation({
     },
 });
 
-export const run: ReturnType<typeof action> = action({
+export const runInBackground = internalAction({
     args: {
         projectId: v.id("projects"),
         replaceExisting: v.optional(v.boolean()),
@@ -190,5 +190,20 @@ export const run: ReturnType<typeof action> = action({
         });
 
         return { sections: payload.sections.length };
+    },
+});
+
+export const run: ReturnType<typeof action> = action({
+    args: {
+        projectId: v.id("projects"),
+        replaceExisting: v.optional(v.boolean()),
+    },
+    handler: async (ctx, args) => {
+        await ctx.scheduler.runAfter(0, internal.agents.accountingGenerator.runInBackground, {
+            projectId: args.projectId,
+            replaceExisting: args.replaceExisting,
+        });
+
+        return { queued: true };
     },
 });

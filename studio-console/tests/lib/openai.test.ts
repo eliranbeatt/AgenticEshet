@@ -1,26 +1,18 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { z } from "zod";
 
-const { parseMock } = vi.hoisted(() => ({
-    parseMock: vi.fn(),
+const { responsesCreateMock } = vi.hoisted(() => ({
+    responsesCreateMock: vi.fn(),
 }));
 
 vi.mock("openai", () => {
     class MockOpenAI {
-        beta = {
-            chat: {
-                completions: {
-                    parse: parseMock,
-                },
-            },
+        responses = {
+            create: responsesCreateMock,
         };
     }
     return { default: MockOpenAI };
 });
-
-vi.mock("openai/helpers/zod", () => ({
-    zodResponseFormat: () => ({}),
-}));
 
 import { callChatWithSchema } from "../../convex/lib/openai";
 
@@ -30,19 +22,13 @@ const schema = z.object({
 
 describe("callChatWithSchema", () => {
     beforeEach(() => {
-        parseMock.mockReset();
+        responsesCreateMock.mockReset();
     });
 
     it("returns parsed content from OpenAI", async () => {
-        parseMock.mockResolvedValueOnce({
-            choices: [
-                {
-                    message: {
-                        parsed: { summary: "All clear" },
-                        refusal: null,
-                    },
-                },
-            ],
+        responsesCreateMock.mockResolvedValueOnce({
+            output_text: JSON.stringify({ summary: "All clear" }),
+            error: null,
         });
 
         const result = await callChatWithSchema(schema, {
@@ -52,21 +38,15 @@ describe("callChatWithSchema", () => {
         });
 
         expect(result).toEqual({ summary: "All clear" });
-        expect(parseMock).toHaveBeenCalledTimes(1);
+        expect(responsesCreateMock).toHaveBeenCalledTimes(1);
     });
 
     it("retries on transient failures", async () => {
-        parseMock
+        responsesCreateMock
             .mockRejectedValueOnce(new Error("temporary"))
             .mockResolvedValueOnce({
-                choices: [
-                    {
-                        message: {
-                            parsed: { summary: "Recovered" },
-                            refusal: null,
-                        },
-                    },
-                ],
+                output_text: JSON.stringify({ summary: "Recovered" }),
+                error: null,
             });
 
         const result = await callChatWithSchema(schema, {
@@ -77,6 +57,6 @@ describe("callChatWithSchema", () => {
         });
 
         expect(result).toEqual({ summary: "Recovered" });
-        expect(parseMock).toHaveBeenCalledTimes(2);
+        expect(responsesCreateMock).toHaveBeenCalledTimes(2);
     });
 });

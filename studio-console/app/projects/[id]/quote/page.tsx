@@ -37,6 +37,7 @@ export default function QuotePage() {
         try {
             await runQuoteAgent({ projectId, instructions: instruction });
             setInstruction("");
+            alert("Quote generation started in the background. A new quote will appear shortly.");
         } catch (error: unknown) {
             console.error(error);
             const message = error instanceof Error ? error.message : "Unknown error";

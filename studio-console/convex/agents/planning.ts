@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery } from "../_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { PlanSchema } from "../lib/zodSchemas";
@@ -109,11 +109,10 @@ export const saveResult = internalMutation({
   },
 });
 
-// 3. AGENT ACTION
-export const run: ReturnType<typeof action> = action({
+export const runInBackground = internalAction({
   args: {
     projectId: v.id("projects"),
-    userRequest: v.string(), // e.g. "Create initial plan" or "Refine timeline"
+    userRequest: v.string(),
   },
   handler: async (ctx, args) => {
     const { project, systemPrompt, existingPlans, latestClarification } = await ctx.runQuery(internal.agents.planning.getContext, {
@@ -167,5 +166,21 @@ export const run: ReturnType<typeof action> = action({
     });
 
     return result;
+  },
+});
+
+// 3. AGENT ACTION
+export const run: ReturnType<typeof action> = action({
+  args: {
+    projectId: v.id("projects"),
+    userRequest: v.string(), // e.g. "Create initial plan" or "Refine timeline"
+  },
+  handler: async (ctx, args) => {
+    await ctx.scheduler.runAfter(0, internal.agents.planning.runInBackground, {
+        projectId: args.projectId,
+        userRequest: args.userRequest,
+    });
+
+    return { queued: true };
   },
 });

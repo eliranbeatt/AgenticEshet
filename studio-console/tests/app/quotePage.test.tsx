@@ -5,6 +5,7 @@ import QuotePage from "../../app/projects/[id]/quote/page";
 
 const mockUseQuery = vi.fn();
 const mockUseAction = vi.fn();
+const mockUseMutation = vi.fn();
 
 vi.mock("next/navigation", () => ({
     useParams: () => ({ id: "proj_123" }),
@@ -13,6 +14,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("convex/react", () => ({
     useQuery: (...args: unknown[]) => mockUseQuery(...args),
     useAction: (...args: unknown[]) => mockUseAction(...args),
+    useMutation: (...args: unknown[]) => mockUseMutation(...args),
 }));
 
 const quotes = [
@@ -44,9 +46,11 @@ describe("QuotePage", () => {
     beforeEach(() => {
         mockUseQuery.mockReset();
         mockUseAction.mockReset();
+        mockUseMutation.mockReset();
         runAgent.mockReset();
         mockUseQuery.mockReturnValue(quotes);
         mockUseAction.mockReturnValue(runAgent);
+        mockUseMutation.mockReturnValue(vi.fn());
         writeText.mockClear();
         alertSpy.mockClear();
 

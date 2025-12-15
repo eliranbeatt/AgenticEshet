@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery } from "../_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { TaskBreakdownSchema } from "../lib/zodSchemas";
@@ -140,7 +140,7 @@ export const saveTasks = internalMutation({
 });
 
 // 2. AGENT ACTION
-export const run: ReturnType<typeof action> = action({
+export const runInBackground = internalAction({
   args: {
     projectId: v.id("projects"),
   },
@@ -197,7 +197,6 @@ Task: Break down this plan into actionable, atomic tasks. Focus on the immediate
       userPrompt,
     });
 
-    // Normalize questName: Convex v.optional does not accept null, only undefined.
     const normalizedTasks = result.tasks.map((task) => {
         const questName = task.questName?.trim();
         return {
@@ -212,5 +211,18 @@ Task: Break down this plan into actionable, atomic tasks. Focus on the immediate
     });
 
     return result;
+  },
+});
+
+export const run: ReturnType<typeof action> = action({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.scheduler.runAfter(0, internal.agents.architect.runInBackground, {
+        projectId: args.projectId,
+    });
+
+    return { queued: true };
   },
 });

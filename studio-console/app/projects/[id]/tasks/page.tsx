@@ -108,6 +108,7 @@ export default function TasksPage() {
         setIsGenerating(true);
         try {
             await runArchitect({ projectId });
+            alert("Task generation started in the background. New tasks will appear shortly.");
         } catch (err) {
             console.error(err);
             alert("Failed to generate tasks. Make sure a plan exists.");

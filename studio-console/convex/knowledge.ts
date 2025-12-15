@@ -353,28 +353,45 @@ export const dynamicSearch: ReturnType<typeof action> = action({
         const limit = args.limit ?? 8;
         const minScore = args.minScore ?? -1;
         const requestedScope = args.scope ?? "project";
-        const effectiveScope = !args.projectId && requestedScope !== "global" ? "global" : requestedScope;
+        const hasProjectId = Boolean(args.projectId);
 
         const embedding = await embedText(args.query);
 
-        type ChunkResult = { _id: Doc<"knowledgeChunks">["_id"]; _score: number; scope: "project" | "global" };
+        type ChunkResult = {
+            _id: Doc<"knowledgeChunks">["_id"];
+            _score: number;
+            scopeHint: "project" | "global" | "unknown";
+        };
         const chunkResults: ChunkResult[] = [];
+
+        const maxVectorLimit = Math.min(256, Math.max(limit * 25, limit * 3));
 
         const searchVectors = async (scopeLabel: "project" | "global") => {
             const results = await ctx.vectorSearch("knowledgeChunks", "by_embedding", {
                 vector: embedding,
-                limit: limit * 3,
+                limit: scopeLabel === "global" ? maxVectorLimit : limit * 3,
                 filter: scopeLabel === "project" && args.projectId ? (q) => q.eq("projectId", args.projectId) : undefined,
             });
 
-            results.forEach((res) => chunkResults.push({ ...res, scope: scopeLabel }));
+            results.forEach((res) => chunkResults.push({ ...res, scopeHint: scopeLabel }));
         };
 
-        if (effectiveScope === "project" || effectiveScope === "both") {
-            await searchVectors("project");
-        }
-        if (effectiveScope === "global" || effectiveScope === "both") {
-            await searchVectors("global");
+        // If the caller didn't provide a projectId but asked for project/both,
+        // we can't apply a project filter. In this case, we search across all chunks
+        // and later classify results as project/global based on whether chunk.projectId exists.
+        if (!hasProjectId && requestedScope !== "global") {
+            const results = await ctx.vectorSearch("knowledgeChunks", "by_embedding", {
+                vector: embedding,
+                limit: maxVectorLimit,
+            });
+            results.forEach((res) => chunkResults.push({ ...res, scopeHint: "unknown" }));
+        } else {
+            if (requestedScope === "project" || requestedScope === "both") {
+                await searchVectors("project");
+            }
+            if (requestedScope === "global" || requestedScope === "both") {
+                await searchVectors("global");
+            }
         }
 
         const uniqueIds = Array.from(new Set(chunkResults.map((r) => r._id)));
@@ -390,7 +407,7 @@ export const dynamicSearch: ReturnType<typeof action> = action({
                 topics: args.topics ?? [],
                 phases: args.phases ?? [],
             }),
-            scope: effectiveScope,
+            scope: requestedScope,
             limit,
             minScore,
             resultCount: 0,
@@ -402,7 +419,11 @@ export const dynamicSearch: ReturnType<typeof action> = action({
         const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: uniqueIds });
         const entryMap = new Map(chunkEntries.map((entry: any) => [entry.chunk._id, entry]));
 
-        type ChunkRow = { result: ChunkResult; entry: { chunk: Doc<"knowledgeChunks">; doc: Doc<"knowledgeDocs"> } };
+        type ChunkRow = {
+            result: ChunkResult;
+            entry: { chunk: Doc<"knowledgeChunks">; doc: Doc<"knowledgeDocs"> };
+            scope: "project" | "global";
+        };
         const filtered = chunkResults
             .map<ChunkRow | null>((result) => {
                 const entry = entryMap.get(result._id) as any;
@@ -410,12 +431,19 @@ export const dynamicSearch: ReturnType<typeof action> = action({
                 if (entry.doc.processingStatus !== "ready") return null;
                 const docSourceType: SourceType = (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload";
 
-                // Scope filter for global-only requests
-                if (result.scope === "global" && entry.chunk.projectId) {
-                    return null;
+                const derivedScope: "project" | "global" = entry.chunk.projectId ? "project" : "global";
+
+                // Apply requested scope constraints.
+                if (requestedScope === "global" && derivedScope !== "global") return null;
+                if (requestedScope === "project") {
+                    if (args.projectId) {
+                        if (!entry.chunk.projectId || entry.chunk.projectId !== args.projectId) return null;
+                    } else {
+                        if (derivedScope !== "project") return null;
+                    }
                 }
-                if (result.scope === "project" && args.projectId && entry.chunk.projectId && entry.chunk.projectId !== args.projectId) {
-                    return null;
+                if (requestedScope === "both" && args.projectId && derivedScope === "project") {
+                    if (!entry.chunk.projectId || entry.chunk.projectId !== args.projectId) return null;
                 }
 
                 if (args.sourceTypes && args.sourceTypes.length > 0 && !args.sourceTypes.includes(docSourceType)) {
@@ -439,7 +467,7 @@ export const dynamicSearch: ReturnType<typeof action> = action({
 
                 if (result._score < minScore) return null;
 
-                return { result, entry };
+                return { result, entry, scope: derivedScope };
             })
             .filter((row): row is ChunkRow => row !== null);
 
@@ -459,19 +487,19 @@ export const dynamicSearch: ReturnType<typeof action> = action({
                 topics: args.topics ?? [],
                 phases: args.phases ?? [],
             }),
-            scope: effectiveScope,
+            scope: requestedScope,
             limit,
             minScore,
             resultCount: deduped.length,
             createdAt: Date.now(),
         });
 
-        return deduped.map(({ entry, result }) => ({
+        return deduped.map(({ entry, result, scope }) => ({
             chunkId: entry.chunk._id,
             docId: entry.chunk.docId,
                 score: result._score,
                 text: args.returnChunks === false ? undefined : entry.chunk.text,
-                scope: result.scope,
+                scope,
                 doc: {
                     _id: entry.doc._id,
                     title: entry.doc.title,

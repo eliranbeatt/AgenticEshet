@@ -10,6 +10,7 @@
 
 import type * as accounting from "../accounting.js";
 import type * as admin from "../admin.js";
+import type * as agents_accountingFromDeepResearch from "../agents/accountingFromDeepResearch.js";
 import type * as agents_accountingGenerator from "../agents/accountingGenerator.js";
 import type * as agents_architect from "../agents/architect.js";
 import type * as agents_clarification from "../agents/clarification.js";
@@ -56,6 +57,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   accounting: typeof accounting;
   admin: typeof admin;
+  "agents/accountingFromDeepResearch": typeof agents_accountingFromDeepResearch;
   "agents/accountingGenerator": typeof agents_accountingGenerator;
   "agents/architect": typeof agents_architect;
   "agents/clarification": typeof agents_clarification;

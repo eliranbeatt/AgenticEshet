@@ -102,8 +102,10 @@ function normalizeDeepResearchMarkdown(markdown: string): string {
 export default function DeepResearchTab({ projectId }: { projectId: Id<"projects"> }) {
     const runs = useQuery(api.deepResearch.listByProject, { projectId });
     const pollRun = useAction(api.agents.deepResearch.pollRun);
+    const applyToAccounting = useAction(api.agents.accountingFromDeepResearch.run);
     const [selectedId, setSelectedId] = useState<Id<"deepResearchRuns"> | null>(null);
     const [isPolling, setIsPolling] = useState(false);
+    const [isApplying, setIsApplying] = useState(false);
 
     const selected = useMemo<Doc<"deepResearchRuns"> | null>(() => {
         if (!runs || runs.length === 0) return null;
@@ -138,6 +140,25 @@ export default function DeepResearchTab({ projectId }: { projectId: Id<"projects
     if (runs === undefined) {
         return <div className="p-4 text-sm text-gray-500">Loading deep research...</div>;
     }
+
+    const canApply = Boolean(selected && selected.status === "completed" && (selected.reportMarkdown ?? "").trim());
+
+    const handleApply = async () => {
+        if (!selected) return;
+        if (!confirm("This will replace current Accounting sections, materials, and labor with items extracted from this Deep-Research report. Continue?")) {
+            return;
+        }
+
+        setIsApplying(true);
+        try {
+            await applyToAccounting({ projectId, runId: selected._id, replaceExisting: true });
+            alert("Accounting rebuild started in the background. Switch to Summary/Materials/Labor tabs in a moment.");
+        } catch (e) {
+            alert("Failed to rebuild accounting: " + e);
+        } finally {
+            setIsApplying(false);
+        }
+    };
 
     return (
         <div className="flex gap-4 h-full">
@@ -186,9 +207,23 @@ export default function DeepResearchTab({ projectId }: { projectId: Id<"projects
             </div>
 
             <div className="flex-1 border rounded-lg bg-white overflow-hidden flex flex-col">
-                <div className="px-4 py-3 border-b bg-gray-50">
-                    <h3 className="text-sm font-semibold text-gray-700">Deep-Research Output</h3>
-                    <p className="text-xs text-gray-500">Markdown with links and citations</p>
+                <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between gap-4">
+                    <div>
+                        <h3 className="text-sm font-semibold text-gray-700">Deep-Research Output</h3>
+                        <p className="text-xs text-gray-500">Markdown with links and citations</p>
+                    </div>
+                    <button
+                        onClick={handleApply}
+                        disabled={!canApply || isApplying}
+                        className={`px-3 py-2 text-xs font-semibold rounded-md border transition-colors ${
+                            canApply && !isApplying
+                                ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+                                : "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                        }`}
+                        title={!canApply ? "Select a completed run to apply" : "Apply this run to Accounting"}
+                    >
+                        {isApplying ? "Applying..." : "Apply to Accounting"}
+                    </button>
                 </div>
                 <div className="flex-1 overflow-auto p-6 prose prose-sm max-w-none" dir="rtl" lang="he">
                     {!selected ? (

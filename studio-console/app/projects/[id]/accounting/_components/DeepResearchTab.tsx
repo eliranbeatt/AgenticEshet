@@ -7,6 +7,98 @@ import { Id, type Doc } from "../../../../../convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+type ParsedCitation = { title: string; url: string; suffix: string };
+
+function parseCitationsSection(markdown: string): { before: string; citations: ParsedCitation[]; after: string } {
+    const headingRegex = /^#{1,6}\s*(citations|sources|מקורות)\s*$/gim;
+    const match = headingRegex.exec(markdown);
+    if (!match || match.index == null) return { before: markdown, citations: [], after: "" };
+
+    const headingStart = match.index;
+    const headingLineEnd = markdown.indexOf("\n", headingStart);
+    const contentStart = headingLineEnd === -1 ? markdown.length : headingLineEnd + 1;
+
+    const nextHeadingRegex = /^#{1,6}\s+/gim;
+    nextHeadingRegex.lastIndex = contentStart;
+    const next = nextHeadingRegex.exec(markdown);
+    const contentEnd = next?.index ?? markdown.length;
+
+    const before = markdown.slice(0, headingStart).trimEnd();
+    const content = markdown.slice(contentStart, contentEnd);
+    const after = markdown.slice(contentEnd).trimStart();
+
+    const lines = content.split(/\r?\n/);
+    const citations: ParsedCitation[] = [];
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
+        const linkMatch = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/.exec(line);
+        if (linkMatch) {
+            const [, title, url] = linkMatch;
+            const suffix = line.slice(linkMatch.index + linkMatch[0].length).trim();
+            citations.push({ title, url, suffix });
+            continue;
+        }
+
+        const urlMatch = /(https?:\/\/\S+)/.exec(line);
+        if (urlMatch) {
+            const url = urlMatch[1].replace(/[),.]+$/, "");
+            const title = url;
+            const suffix = line.replace(urlMatch[1], "").trim();
+            citations.push({ title, url, suffix });
+        }
+    }
+
+    return { before, citations, after };
+}
+
+function rewriteInlineCites(markdown: string, citationUrls: Map<number, string>): string {
+    return markdown.replace(/\[cite:\s*([0-9,\s]+)\]/gi, (_full, nums: string) => {
+        const parts = nums
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .map((s) => Number(s))
+            .filter((n) => Number.isFinite(n) && n > 0);
+
+        if (parts.length === 0) return "";
+
+        return parts
+            .map((n) => {
+                const url = citationUrls.get(n);
+                return url ? `[${n}](${url})` : `[${n}]`;
+            })
+            .join(", ");
+    });
+}
+
+function normalizeDeepResearchMarkdown(markdown: string): string {
+    const { before, citations, after } = parseCitationsSection(markdown);
+    if (citations.length === 0) return markdown;
+
+    const citationUrls = new Map<number, string>();
+    citations.forEach((c, idx) => {
+        citationUrls.set(idx + 1, c.url);
+    });
+
+    const rewrittenBody = rewriteInlineCites(before, citationUrls).trimEnd();
+    const sources = [
+        "## Sources",
+        "",
+        ...citations.map((c, idx) => {
+            const num = idx + 1;
+            const suffix = c.suffix ? ` — ${c.suffix.replace(/^[-–—:]\s*/, "")}` : "";
+            return `${num}. [${c.title}](${c.url})${suffix}`;
+        }),
+        "",
+    ].join("\n");
+
+    const rewrittenAfter = rewriteInlineCites(after, citationUrls).trimStart();
+    return [rewrittenBody, "", sources, rewrittenAfter].filter(Boolean).join("\n");
+}
+
 export default function DeepResearchTab({ projectId }: { projectId: Id<"projects"> }) {
     const runs = useQuery(api.deepResearch.listByProject, { projectId });
     const pollRun = useAction(api.agents.deepResearch.pollRun);
@@ -18,6 +110,10 @@ export default function DeepResearchTab({ projectId }: { projectId: Id<"projects
         if (!selectedId) return runs[0];
         return runs.find((r) => r._id === selectedId) ?? runs[0];
     }, [runs, selectedId]);
+
+    const renderedMarkdown = useMemo(() => {
+        return normalizeDeepResearchMarkdown(selected?.reportMarkdown ?? "");
+    }, [selected]);
 
     useEffect(() => {
         if (!selected || selected.status !== "in_progress") return;
@@ -113,7 +209,7 @@ export default function DeepResearchTab({ projectId }: { projectId: Id<"projects
                                 },
                             }}
                         >
-                            {selected.reportMarkdown ?? "(empty)"}
+                            {renderedMarkdown || "(empty)"}
                         </ReactMarkdown>
                     )}
                 </div>

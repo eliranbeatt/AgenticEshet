@@ -182,6 +182,9 @@ export default defineSchema({
         ),
         // Optional relationships
         questId: v.optional(v.id("quests")),
+        accountingSectionId: v.optional(v.id("sections")),
+        accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
+        accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
         // AI metadata
         source: v.union(v.literal("user"), v.literal("agent")),
         confidenceScore: v.optional(v.number()),

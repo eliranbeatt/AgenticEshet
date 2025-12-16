@@ -22,8 +22,18 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
     
     const latestPlan = plans.find((plan) => plan.isActive);
 
-    const quests = await ctx.db
-        .query("quests")
+    const sections = await ctx.db
+        .query("sections")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
+    const materialLines = await ctx.db
+        .query("materialLines")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
+    const workLines = await ctx.db
+        .query("workLines")
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
         .collect();
 
@@ -45,7 +55,9 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
     return {
       project,
       latestPlan,
-      quests,
+      sections,
+      materialLines,
+      workLines,
       existingTasks,
       knowledgeDocs,
       systemPrompt: skill?.content || "You are a Senior Solutions Architect.",
@@ -61,14 +73,18 @@ export const saveTasks = internalMutation({
         description: v.string(),
         category: v.union(v.literal("Logistics"), v.literal("Creative"), v.literal("Finance"), v.literal("Admin"), v.literal("Studio")),
         priority: v.union(v.literal("High"), v.literal("Medium"), v.literal("Low")),
-        questName: v.optional(v.union(v.string(), v.null())),
+        accountingSectionName: v.optional(v.union(v.string(), v.null())),
+        accountingItemLabel: v.optional(v.union(v.string(), v.null())),
+        accountingItemType: v.optional(v.union(v.literal("material"), v.literal("work"), v.null())),
     })),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
     const tasks = args.tasks.map((t) => ({
         ...t,
-        questName: t.questName ?? undefined,
+        accountingSectionName: t.accountingSectionName ?? undefined,
+        accountingItemLabel: t.accountingItemLabel ?? undefined,
+        accountingItemType: t.accountingItemType ?? undefined,
     }));
 
     const existingTasks = await ctx.db
@@ -79,15 +95,76 @@ export const saveTasks = internalMutation({
         existingTasks.map((task) => [task.title.trim().toLowerCase(), { id: task._id, source: task.source }])
     );
 
-    const quests = await ctx.db
-        .query("quests")
+    const sections = await ctx.db
+        .query("sections")
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
         .collect();
-    const questLookup = new Map(quests.map((quest) => [quest.title.trim().toLowerCase(), quest._id]));
+
+    const materialLines = await ctx.db
+        .query("materialLines")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
+    const workLines = await ctx.db
+        .query("workLines")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
+    const normalizeKey = (value: string) => value.trim().toLowerCase();
+
+    const sectionNameCounts = new Map<string, number>();
+    for (const section of sections) {
+        const nameKey = normalizeKey(section.name);
+        sectionNameCounts.set(nameKey, (sectionNameCounts.get(nameKey) ?? 0) + 1);
+    }
+
+    const sectionLookup = new Map<string, Id<"sections">>();
+    const sectionNameLookupUnique = new Map<string, Id<"sections">>();
+    for (const section of sections) {
+        const display = `[${section.group}] ${section.name}`;
+        sectionLookup.set(normalizeKey(display), section._id);
+        const nameKey = normalizeKey(section.name);
+        if ((sectionNameCounts.get(nameKey) ?? 0) === 1) {
+            sectionNameLookupUnique.set(nameKey, section._id);
+        }
+    }
+
+    const materialsBySection = new Map<Id<"sections">, Map<string, Id<"materialLines">>>();
+    for (const line of materialLines) {
+        const sectionId = line.sectionId as Id<"sections">;
+        if (!materialsBySection.has(sectionId)) materialsBySection.set(sectionId, new Map());
+        materialsBySection.get(sectionId)!.set(normalizeKey(line.label), line._id);
+    }
+
+    const workBySection = new Map<Id<"sections">, Map<string, Id<"workLines">>>();
+    for (const line of workLines) {
+        const sectionId = line.sectionId as Id<"sections">;
+        if (!workBySection.has(sectionId)) workBySection.set(sectionId, new Map());
+        workBySection.get(sectionId)!.set(normalizeKey(line.role), line._id);
+    }
+
+    const resolveSectionId = (raw?: string) => {
+        if (!raw) return undefined;
+        const key = normalizeKey(raw);
+        return sectionLookup.get(key) ?? sectionNameLookupUnique.get(key);
+    };
 
     for (const t of tasks) {
         const normalizedTitle = t.title.trim().toLowerCase();
-        const questId = t.questName ? questLookup.get(t.questName.trim().toLowerCase()) : undefined;
+        const sectionId = resolveSectionId(t.accountingSectionName);
+
+        let accountingLineType: "material" | "work" | undefined;
+        let accountingLineId: Id<"materialLines"> | Id<"workLines"> | undefined;
+        if (sectionId && t.accountingItemType && t.accountingItemLabel) {
+            const itemKey = normalizeKey(t.accountingItemLabel);
+            if (t.accountingItemType === "material") {
+                accountingLineId = materialsBySection.get(sectionId)?.get(itemKey);
+                accountingLineType = accountingLineId ? "material" : undefined;
+            } else if (t.accountingItemType === "work") {
+                accountingLineId = workBySection.get(sectionId)?.get(itemKey);
+                accountingLineType = accountingLineId ? "work" : undefined;
+            }
+        }
         const existingTask = existingByTitle.get(normalizedTitle);
 
         if (existingTask && existingTask.source === "agent") {
@@ -95,7 +172,9 @@ export const saveTasks = internalMutation({
                 description: t.description,
                 category: t.category,
                 priority: t.priority,
-                questId,
+                accountingSectionId: sectionId,
+                accountingLineType,
+                accountingLineId,
                 updatedAt: Date.now(),
             });
         } else if (!existingTask) {
@@ -105,7 +184,9 @@ export const saveTasks = internalMutation({
                 description: t.description,
                 category: t.category,
                 priority: t.priority,
-                questId,
+                accountingSectionId: sectionId,
+                accountingLineType,
+                accountingLineId,
                 status: "todo",
                 source: "agent",
                 createdAt: Date.now(),
@@ -124,7 +205,7 @@ export const saveTasks = internalMutation({
         .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority}) ${task.description || ""}`)
         .join("\n");
 
-    await ctx.scheduler.runAfter(0, (internal as any).knowledge.ingestArtifact, {
+    await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
         projectId: args.projectId,
         sourceType: "task",
         sourceRefId: `tasks-${Date.now()}`,
@@ -145,7 +226,7 @@ export const runInBackground = internalAction({
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
-    const { project, latestPlan, systemPrompt, quests, existingTasks } = await ctx.runQuery(internal.agents.architect.getContext, {
+    const { project, latestPlan, systemPrompt, sections, materialLines, workLines, existingTasks } = await ctx.runQuery(internal.agents.architect.getContext, {
       projectId: args.projectId,
     });
 
@@ -182,13 +263,41 @@ export const runInBackground = internalAction({
               .join("\n")
         : "- No relevant knowledge documents found.";
 
+    const materialBySection = new Map<string, string[]>();
+    for (const line of materialLines) {
+        const sectionId = line.sectionId;
+        if (!materialBySection.has(sectionId)) materialBySection.set(sectionId, []);
+        materialBySection.get(sectionId)!.push(line.label);
+    }
+
+    const workBySection = new Map<string, string[]>();
+    for (const line of workLines) {
+        const sectionId = line.sectionId;
+        if (!workBySection.has(sectionId)) workBySection.set(sectionId, []);
+        workBySection.get(sectionId)!.push(line.role);
+    }
+
+    const accountingSummary = sections.length
+        ? sections
+              .slice(0, 40)
+              .map((section: Doc<"sections">) => {
+                  const sectionLabel = `[${section.group}] ${section.name}`;
+                  const materials = materialBySection.get(section._id) ?? [];
+                  const work = workBySection.get(section._id) ?? [];
+                  const materialsText = materials.length ? `Materials: ${materials.slice(0, 6).join(", ")}` : "Materials: (none)";
+                  const workText = work.length ? `Work: ${work.slice(0, 6).join(", ")}` : "Work: (none)";
+                  return `- ${sectionLabel}\n  ${materialsText}\n  ${workText}`;
+              })
+              .join("\n")
+        : "- No accounting sections found. If a task cannot be linked, set accountingSectionName to null.";
+
     const userPrompt = `Project: ${project.name}
     
 Plan Content:
 ${latestPlan.contentMarkdown}
 
-Quests:
-${quests.length ? quests.map((quest: Doc<"quests">) => `- ${quest.title}: ${quest.description || "No description"}`).join("\n") : "No quests defined. If necessary, supply questName field to indicate proposed grouping."}
+Accounting Sections (use the section label exactly when linking tasks):
+${accountingSummary}
 
 Existing Tasks (for deduplication):
 ${existingTaskSummary}
@@ -196,7 +305,7 @@ ${existingTaskSummary}
 Knowledge Documents:
 ${knowledgeSummary}
 
-Task: Break down this plan into actionable, atomic tasks. Focus on the immediate next steps implied by the plan. When relevant, set the questName to one of the quests above so tasks can be grouped. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge.`;
+Task: Break down this plan into actionable, atomic tasks. Focus on the immediate next steps implied by the plan. When relevant, set accountingSectionName to one of the Accounting Sections above so tasks can be grouped and auto-linked. If a specific accounting item applies, set accountingItemType ("material" or "work") and accountingItemLabel exactly as shown in that section list; otherwise set them to null. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge.`;
 
     const result = await callChatWithSchema(TaskBreakdownSchema, {
       systemPrompt,
@@ -204,10 +313,13 @@ Task: Break down this plan into actionable, atomic tasks. Focus on the immediate
     });
 
     const normalizedTasks = result.tasks.map((task) => {
-        const questName = task.questName?.trim();
+        const accountingSectionName = task.accountingSectionName?.trim();
+        const accountingItemLabel = task.accountingItemLabel?.trim();
         return {
             ...task,
-            questName: questName && questName.length > 0 ? questName : undefined,
+            accountingSectionName: accountingSectionName && accountingSectionName.length > 0 ? accountingSectionName : undefined,
+            accountingItemLabel: accountingItemLabel && accountingItemLabel.length > 0 ? accountingItemLabel : undefined,
+            accountingItemType: task.accountingItemType ?? undefined,
         };
     });
 

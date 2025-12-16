@@ -35,6 +35,9 @@ export const createTask = mutation({
             v.literal("Low")
         ),
         questId: v.optional(v.id("quests")),
+        accountingSectionId: v.optional(v.id("sections")),
+        accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
+        accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
         source: v.optional(v.union(v.literal("user"), v.literal("agent"))),
     },
     handler: async (ctx, args) => {
@@ -46,6 +49,9 @@ export const createTask = mutation({
             category: args.category,
             priority: args.priority,
             questId: args.questId,
+            accountingSectionId: args.accountingSectionId,
+            accountingLineType: args.accountingLineType,
+            accountingLineId: args.accountingLineId,
             source: args.source ?? "user",
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -83,6 +89,9 @@ export const updateTask = mutation({
             )
         ),
         questId: v.optional(v.id("quests")),
+        accountingSectionId: v.optional(v.id("sections")),
+        accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
+        accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
     },
     handler: async (ctx, args) => {
         const { taskId, ...patches } = args;

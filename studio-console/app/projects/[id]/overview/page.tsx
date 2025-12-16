@@ -31,8 +31,6 @@ export default function ProjectOverviewPage() {
     const project = useQuery(api.projects.getProject, { projectId });
     const tasks = useQuery(api.tasks.listByProject, { projectId });
     const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
-    const quests = useQuery(api.quests.list, { projectId });
-    const questStats = useQuery(api.quests.getStats, { projectId });
     const recentDocUploads = useQuery(api.knowledge.listRecentDocs, {
         projectId,
         limit: 6,
@@ -94,20 +92,6 @@ export default function ProjectOverviewPage() {
             done: tasks.filter((t: Doc<"tasks">) => t.status === "done").length,
         };
     }, [tasks]);
-
-    const questProgress = useMemo(() => {
-        if (!quests || !questStats) return [];
-        return quests.map((quest: Doc<"quests">) => {
-            const stat = questStats.find((s: { questId: Id<"quests">; percent?: number; done?: number; total?: number }) => s.questId === quest._id);
-            return {
-                questId: quest._id,
-                title: quest.title,
-                percent: stat?.percent ?? 0,
-                done: stat?.done ?? 0,
-                total: stat?.total ?? 0,
-            };
-        });
-    }, [quests, questStats]);
 
     const latestQuote = quotes && quotes.length > 0 ? quotes[0] : null;
 
@@ -307,9 +291,6 @@ export default function ProjectOverviewPage() {
                         <MetricCard label="Done" value={metrics.done} accent="text-emerald-600" />
                     </div>
 
-                    {questProgress.length > 0 && (
-                        <QuestProgressChips quests={questProgress} />
-                    )}
                 </div>
 
                 <div className="bg-white p-6 rounded shadow-sm border">
@@ -590,34 +571,3 @@ function ConversationSnippet({ conversation }: { conversation: Doc<"conversation
     );
 }
 
-function QuestProgressChips({
-    quests,
-}: {
-    quests: {
-        questId: Id<"quests">;
-        title: string;
-        percent: number;
-        done: number;
-        total: number;
-    }[];
-}) {
-    return (
-        <div className="bg-white p-4 rounded shadow-sm border">
-            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3">Quest Progress</h3>
-            <div className="flex flex-wrap gap-3">
-                {quests.map((quest) => (
-                    <div key={quest.questId} className="border rounded-lg px-4 py-3 min-w-[180px]">
-                        <p className="text-sm font-semibold text-gray-800 mb-1">{quest.title}</p>
-                        <div className="flex justify-between text-xs text-gray-500 mb-2">
-                            <span>{quest.done}/{quest.total} done</span>
-                            <span>{quest.percent}%</span>
-                        </div>
-                        <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                            <div className="h-full bg-purple-600" style={{ width: `${quest.percent}%` }}></div>
-                        </div>
-                    </div>
-                ))}
-            </div>
-        </div>
-    );
-}

@@ -25,21 +25,23 @@ type UpdateTaskInput = {
     status?: Doc<"tasks">["status"];
     category?: Doc<"tasks">["category"];
     priority?: Doc<"tasks">["priority"];
-    questId?: Id<"quests">;
+    accountingSectionId?: Id<"sections">;
+    accountingLineType?: "material" | "work";
+    accountingLineId?: Id<"materialLines"> | Id<"workLines">;
 };
 
 type DeleteTaskInput = {
     taskId: Id<"tasks">;
 };
 
-type QuestFilter = "all" | "unassigned" | Id<"quests">;
+type FilterField = "none" | "section" | "priority" | "category" | "status" | "source";
+type SortField = "updatedAt" | "createdAt" | "priority" | "title" | "category" | "section";
+type SortOrder = "asc" | "desc";
 
-type QuestProgress = {
-    questId: Id<"quests">;
-    title: string;
-    percent: number;
-    done: number;
-    total: number;
+type AccountingSectionRow = {
+    section: Doc<"sections">;
+    materials: Doc<"materialLines">[];
+    work: Doc<"workLines">[];
 };
 
 const columns: { id: Doc<"tasks">["status"]; title: string; color: string }[] = [
@@ -57,8 +59,7 @@ export default function TasksPage() {
     const projectId = params.id as Id<"projects">;
 
     const tasks = useQuery(api.tasks.listByProject, { projectId });
-    const quests = useQuery(api.quests.list, { projectId });
-    const questStats = useQuery(api.quests.getStats, { projectId });
+    const accountingData = useQuery(api.accounting.getProjectAccounting, { projectId });
     const runArchitect = useAction(api.agents.architect.run);
     const updateTask = useMutation(api.tasks.updateTask);
     const createTask = useMutation(api.tasks.createTask);
@@ -67,29 +68,82 @@ export default function TasksPage() {
     const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
     const [isGenerating, setIsGenerating] = useState(false);
     const [newTaskTitle, setNewTaskTitle] = useState("");
-    const [questFilter, setQuestFilter] = useState<QuestFilter>("all");
+    const [filterField, setFilterField] = useState<FilterField>("none");
+    const [filterValue, setFilterValue] = useState<string>("");
+    const [sortField, setSortField] = useState<SortField>("updatedAt");
+    const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
     const [activeTaskId, setActiveTaskId] = useState<Id<"tasks"> | null>(null);
 
-    const questProgress = useMemo<QuestProgress[]>(() => {
-        if (!quests || !questStats) return [];
-        return quests.map((quest: Doc<"quests">) => {
-            const stat = questStats.find((s: { questId: Id<"quests">; percent: number; done: number; total: number }) => s.questId === quest._id);
-            return {
-                questId: quest._id,
-                title: quest.title,
-                percent: stat?.percent ?? 0,
-                done: stat?.done ?? 0,
-                total: stat?.total ?? 0,
-            };
-        });
-    }, [quests, questStats]);
+    const accountingSections = useMemo<AccountingSectionRow[]>(() => {
+        if (!accountingData?.sections) return [];
+        return accountingData.sections as unknown as AccountingSectionRow[];
+    }, [accountingData?.sections]);
+
+    const sectionLabelById = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const row of accountingSections) {
+            map.set(row.section._id, `[${row.section.group}] ${row.section.name}`);
+        }
+        return map;
+    }, [accountingSections]);
+
+    const accountingItemById = useMemo(() => {
+        const map = new Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>();
+        for (const row of accountingSections) {
+            for (const material of row.materials) {
+                map.set(material._id, { label: material.label, type: "material", sectionId: row.section._id });
+            }
+            for (const work of row.work) {
+                map.set(work._id, { label: work.role, type: "work", sectionId: row.section._id });
+            }
+        }
+        return map;
+    }, [accountingSections]);
 
     const filteredTasks = useMemo(() => {
         if (!tasks) return null;
-        if (questFilter === "all") return tasks;
-        if (questFilter === "unassigned") return tasks.filter((task: Doc<"tasks">) => !task.questId);
-        return tasks.filter((task: Doc<"tasks">) => task.questId === questFilter);
-    }, [tasks, questFilter]);
+        if (filterField === "none" || !filterValue) return tasks;
+
+        if (filterField === "section") {
+            if (filterValue === "unassigned") return tasks.filter((task: Doc<"tasks">) => !task.accountingSectionId);
+            return tasks.filter((task: Doc<"tasks">) => task.accountingSectionId === filterValue);
+        }
+
+        if (filterField === "priority") return tasks.filter((task: Doc<"tasks">) => task.priority === filterValue);
+        if (filterField === "category") return tasks.filter((task: Doc<"tasks">) => task.category === filterValue);
+        if (filterField === "status") return tasks.filter((task: Doc<"tasks">) => task.status === filterValue);
+        if (filterField === "source") return tasks.filter((task: Doc<"tasks">) => task.source === filterValue);
+
+        return tasks;
+    }, [tasks, filterField, filterValue]);
+
+    const sortedTasks = useMemo(() => {
+        if (!filteredTasks) return null;
+
+        const priorityRank: Record<Doc<"tasks">["priority"], number> = {
+            High: 3,
+            Medium: 2,
+            Low: 1,
+        };
+
+        const factor = sortOrder === "asc" ? 1 : -1;
+        const sorted = [...filteredTasks];
+        sorted.sort((a, b) => {
+            if (sortField === "priority") return (priorityRank[a.priority] - priorityRank[b.priority]) * factor;
+            if (sortField === "title") return a.title.localeCompare(b.title) * factor;
+            if (sortField === "category") return a.category.localeCompare(b.category) * factor;
+            if (sortField === "createdAt") return ((a.createdAt ?? 0) - (b.createdAt ?? 0)) * factor;
+            if (sortField === "updatedAt") return (a.updatedAt - b.updatedAt) * factor;
+            if (sortField === "section") {
+                const aLabel = a.accountingSectionId ? (sectionLabelById.get(a.accountingSectionId) ?? "") : "";
+                const bLabel = b.accountingSectionId ? (sectionLabelById.get(b.accountingSectionId) ?? "") : "";
+                return aLabel.localeCompare(bLabel) * factor;
+            }
+            return 0;
+        });
+
+        return sorted;
+    }, [filteredTasks, sortField, sortOrder, sectionLabelById]);
 
     const tasksByStatus = useMemo(() => {
         const grouped: Record<Doc<"tasks">["status"], Doc<"tasks">[]> = {
@@ -98,11 +152,11 @@ export default function TasksPage() {
             blocked: [],
             done: [],
         };
-        (filteredTasks ?? []).forEach((task: Doc<"tasks">) => {
+        (sortedTasks ?? []).forEach((task: Doc<"tasks">) => {
             grouped[task.status].push(task);
         });
         return grouped;
-    }, [filteredTasks]);
+    }, [sortedTasks]);
 
     const handleAutoGenerate = async () => {
         setIsGenerating(true);
@@ -174,10 +228,19 @@ export default function TasksPage() {
                 </button>
             </div>
 
-            <QuestFilterBar
-                quests={questProgress}
-                selected={questFilter}
-                onSelect={setQuestFilter}
+            <TaskControlsBar
+                sections={accountingSections.map((row) => row.section)}
+                filterField={filterField}
+                filterValue={filterValue}
+                onChangeFilterField={(next) => {
+                    setFilterField(next);
+                    setFilterValue("");
+                }}
+                onChangeFilterValue={setFilterValue}
+                sortField={sortField}
+                sortOrder={sortOrder}
+                onChangeSortField={setSortField}
+                onChangeSortOrder={setSortOrder}
                 totalTasks={tasks?.length ?? 0}
             />
 
@@ -196,14 +259,20 @@ export default function TasksPage() {
                                 onDelete={async (input) => {
                                     await deleteTask(input);
                                 }}
-                                quests={quests ?? []}
+                                sections={accountingSections}
+                                sectionLabelById={sectionLabelById}
+                                accountingItemById={accountingItemById}
                             />
                         ))}
                     </div>
                 </div>
             </DndContext>
 
-            <QuestTaskPanel quests={questProgress} tasks={tasks ?? []} />
+            <SectionTaskPanel
+                sections={accountingSections.map((row) => row.section)}
+                tasks={tasks ?? []}
+                sectionLabelById={sectionLabelById}
+            />
         </div>
     );
 }
@@ -213,14 +282,18 @@ function KanbanColumn({
     tasks,
     onUpdate,
     onDelete,
-    quests,
+    sections,
+    sectionLabelById,
+    accountingItemById,
     activeTaskId,
 }: {
     column: (typeof columns)[number];
     tasks: Doc<"tasks">[];
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
     onDelete: (input: DeleteTaskInput) => Promise<void>;
-    quests: Doc<"quests">[];
+    sections: AccountingSectionRow[];
+    sectionLabelById: Map<string, string>;
+    accountingItemById: Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>;
     activeTaskId: Id<"tasks"> | null;
 }) {
     const { setNodeRef, isOver } = useDroppable({ id: column.id });
@@ -238,7 +311,9 @@ function KanbanColumn({
                     <TaskCard
                         key={task._id}
                         task={task}
-                        quests={quests}
+                        sections={sections}
+                        sectionLabelById={sectionLabelById}
+                        accountingItemById={accountingItemById}
                         onUpdate={onUpdate}
                         onDelete={onDelete}
                         isDragging={activeTaskId === task._id}
@@ -251,13 +326,17 @@ function KanbanColumn({
 
 function TaskCard({
     task,
-    quests,
+    sections,
+    sectionLabelById,
+    accountingItemById,
     onUpdate,
     onDelete,
     isDragging,
 }: {
     task: Doc<"tasks">;
-    quests: Doc<"quests">[];
+    sections: AccountingSectionRow[];
+    sectionLabelById: Map<string, string>;
+    accountingItemById: Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>;
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
     onDelete: (input: DeleteTaskInput) => Promise<void>;
     isDragging: boolean;
@@ -271,7 +350,36 @@ function TaskCard({
         opacity: isDragging ? 0.5 : 1,
     };
 
-    const questLabel = task.questId ? quests.find((quest) => quest._id === task.questId)?.title : null;
+    const sectionLabel = task.accountingSectionId ? sectionLabelById.get(task.accountingSectionId) : null;
+    const accountingItem = task.accountingLineId ? accountingItemById.get(task.accountingLineId) : null;
+    const accountingChipLabel = (() => {
+        if (sectionLabel && accountingItem) return `Accounting: ${sectionLabel} / ${accountingItem.label}`;
+        if (sectionLabel) return `Accounting: ${sectionLabel}`;
+        return "Unassigned";
+    })();
+
+    const sectionOptions = (() => {
+        const options = sections.map((row) => ({ label: `[${row.section.group}] ${row.section.name}`, value: row.section._id }));
+        if (task.accountingSectionId && !options.some((option) => option.value === task.accountingSectionId)) {
+            options.unshift({ label: "(Unknown section)", value: task.accountingSectionId });
+        }
+        return options;
+    })();
+    const itemOptions = (() => {
+        if (!task.accountingSectionId) return [];
+        const row = sections.find((s) => s.section._id === task.accountingSectionId);
+        if (!row) return [];
+        const options: Array<{ label: string; value: string }> = [];
+        for (const material of row.materials) {
+            options.push({ label: `Material: ${material.label}`, value: `material:${material._id}` });
+        }
+        for (const work of row.work) {
+            options.push({ label: `Work: ${work.role}`, value: `work:${work._id}` });
+        }
+        return options;
+    })();
+
+    const itemValue = task.accountingLineId && task.accountingLineType ? `${task.accountingLineType}:${task.accountingLineId}` : "";
 
     return (
         <div ref={setNodeRef} style={style} className="bg-white p-3 rounded shadow-sm border hover:shadow-md transition group relative">
@@ -305,7 +413,7 @@ function TaskCard({
                 <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.priority} priority</span>
                 <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.source === "agent" ? "AI generated" : "User task"}</span>
                 <span className="px-2 py-0.5 rounded-full bg-gray-50">
-                    {questLabel ? `Quest: ${questLabel}` : "Unassigned"}
+                    {accountingChipLabel}
                 </span>
             </div>
 
@@ -323,16 +431,41 @@ function TaskCard({
                     onChange={(value) => onUpdate({ taskId: task._id, priority: value as Doc<"tasks">["priority"] })}
                 />
                 <InlineSelect
-                    label="Quest"
-                    value={task.questId ?? ""}
-                    options={quests.map((quest) => ({ label: quest.title, value: quest._id }))}
+                    label="Section"
+                    value={task.accountingSectionId ?? ""}
+                    options={sectionOptions}
                     includeUnassigned
                     onChange={(value) =>
                         onUpdate({
                             taskId: task._id,
-                            questId: value ? (value as Id<"quests">) : undefined,
+                            accountingSectionId: value ? (value as Id<"sections">) : undefined,
+                            accountingLineType: undefined,
+                            accountingLineId: undefined,
                         })
                     }
+                />
+                <InlineSelect
+                    label="Item"
+                    value={itemValue}
+                    options={itemOptions}
+                    includeUnassigned
+                    onChange={(value) => {
+                        if (!value) {
+                            onUpdate({
+                                taskId: task._id,
+                                accountingLineType: undefined,
+                                accountingLineId: undefined,
+                            });
+                            return;
+                        }
+                        const [type, id] = value.split(":");
+                        onUpdate({
+                            taskId: task._id,
+                            accountingSectionId: task.accountingSectionId,
+                            accountingLineType: type as "material" | "work",
+                            accountingLineId: id as Id<"materialLines"> | Id<"workLines">,
+                        });
+                    }}
                 />
                 <InlineSelect
                     label="Status"
@@ -397,90 +530,146 @@ function InlineSelect({
     );
 }
 
-function QuestFilterBar({
-    quests,
-    selected,
-    onSelect,
+function TaskControlsBar({
+    sections,
+    filterField,
+    filterValue,
+    onChangeFilterField,
+    onChangeFilterValue,
+    sortField,
+    sortOrder,
+    onChangeSortField,
+    onChangeSortOrder,
     totalTasks,
 }: {
-    quests: QuestProgress[];
-    selected: QuestFilter;
-    onSelect: (filter: QuestFilter) => void;
+    sections: Doc<"sections">[];
+    filterField: FilterField;
+    filterValue: string;
+    onChangeFilterField: (field: FilterField) => void;
+    onChangeFilterValue: (value: string) => void;
+    sortField: SortField;
+    sortOrder: SortOrder;
+    onChangeSortField: (field: SortField) => void;
+    onChangeSortOrder: (order: SortOrder) => void;
     totalTasks: number;
 }) {
-    if (totalTasks === 0 && quests.length === 0) {
-        return null;
-    }
+    const filterOptions = (() => {
+        if (filterField === "none") return [{ label: "All", value: "" }];
+        if (filterField === "section") {
+            return [
+                { label: "All", value: "" },
+                { label: "Unassigned", value: "unassigned" },
+                ...sections.map((section) => ({ label: `[${section.group}] ${section.name}`, value: section._id })),
+            ];
+        }
+        if (filterField === "priority") return [{ label: "All", value: "" }, ...priorityOptions.map((p) => ({ label: p, value: p }))];
+        if (filterField === "category") return [{ label: "All", value: "" }, ...categoryOptions.map((c) => ({ label: c, value: c }))];
+        if (filterField === "status") return [{ label: "All", value: "" }, ...columns.map((col) => ({ label: col.title, value: col.id }))];
+        if (filterField === "source") return [{ label: "All", value: "" }, { label: "AI generated", value: "agent" }, { label: "User task", value: "user" }];
+        return [];
+    })();
 
     return (
-        <div className="bg-white border rounded-lg p-4 space-y-3">
+        <div className="bg-white border rounded-lg p-4 flex flex-col gap-3">
             <div className="flex justify-between items-center text-sm text-gray-500">
-                <span>Filter board by quest</span>
+                <span>Filter & sort</span>
                 <span>{totalTasks} tasks</span>
             </div>
-            <div className="flex flex-wrap gap-2">
-                <FilterChip label="All tasks" active={selected === "all"} onClick={() => onSelect("all")} />
-                <FilterChip label="Unassigned" active={selected === "unassigned"} onClick={() => onSelect("unassigned")} />
-                {quests.map((quest) => (
-                    <FilterChip
-                        key={quest.questId}
-                        label={`${quest.title} (${quest.done}/${quest.total})`}
-                        active={selected === quest.questId}
-                        onClick={() => onSelect(quest.questId)}
+
+            <div className="grid gap-3 md:grid-cols-2">
+                <div className="flex gap-2 items-end">
+                    <InlineSelect
+                        label="Filter field"
+                        value={filterField}
+                        options={[
+                            { label: "None", value: "none" },
+                            { label: "Section", value: "section" },
+                            { label: "Priority", value: "priority" },
+                            { label: "Category", value: "category" },
+                            { label: "Status", value: "status" },
+                            { label: "Source", value: "source" },
+                        ]}
+                        onChange={(value) => onChangeFilterField(value as FilterField)}
                     />
-                ))}
+                    <InlineSelect
+                        label="Filter value"
+                        value={filterValue}
+                        options={filterOptions}
+                        onChange={(value) => onChangeFilterValue(value)}
+                    />
+                </div>
+
+                <div className="flex gap-2 items-end">
+                    <InlineSelect
+                        label="Sort field"
+                        value={sortField}
+                        options={[
+                            { label: "Updated", value: "updatedAt" },
+                            { label: "Created", value: "createdAt" },
+                            { label: "Priority", value: "priority" },
+                            { label: "Title", value: "title" },
+                            { label: "Category", value: "category" },
+                            { label: "Section", value: "section" },
+                        ]}
+                        onChange={(value) => onChangeSortField(value as SortField)}
+                    />
+                    <InlineSelect
+                        label="Order"
+                        value={sortOrder}
+                        options={[
+                            { label: "Descending", value: "desc" },
+                            { label: "Ascending", value: "asc" },
+                        ]}
+                        onChange={(value) => onChangeSortOrder(value as SortOrder)}
+                    />
+                </div>
             </div>
         </div>
     );
 }
 
-function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={`text-xs px-3 py-1.5 rounded-full border ${
-                active ? "bg-purple-600 text-white border-purple-600" : "border-gray-200 text-gray-600 hover:border-purple-300"
-            }`}
-        >
-            {label}
-        </button>
-    );
-}
-
-function QuestTaskPanel({ quests, tasks }: { quests: QuestProgress[]; tasks: Doc<"tasks">[] }) {
-    if (quests.length === 0 && tasks.length === 0) {
+function SectionTaskPanel({
+    sections,
+    tasks,
+    sectionLabelById,
+}: {
+    sections: Doc<"sections">[];
+    tasks: Doc<"tasks">[];
+    sectionLabelById: Map<string, string>;
+}) {
+    if (sections.length === 0 && tasks.length === 0) {
         return null;
     }
 
-    const unassignedTasks = tasks.filter((task) => !task.questId);
+    const unassignedTasks = tasks.filter((task) => !task.accountingSectionId);
 
     return (
         <div className="bg-white border rounded-lg p-6 space-y-4">
             <div>
-                <h2 className="text-lg font-semibold text-gray-800">Tasks by Quest</h2>
-                <p className="text-sm text-gray-500">Review how each quest is progressing and spot gaps quickly.</p>
+                <h2 className="text-lg font-semibold text-gray-800">Tasks by Accounting Section</h2>
+                <p className="text-sm text-gray-500">Group tasks by where they originated in Accounting.</p>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-                {quests.map((quest) => {
-                    const questTasks = tasks.filter((task) => task.questId === quest.questId);
+                {sections.map((section) => {
+                    const sectionTasks = tasks.filter((task) => task.accountingSectionId === section._id);
+                    const label = sectionLabelById.get(section._id) ?? section.name;
                     return (
-                        <div key={quest.questId} className="border rounded-lg p-4 space-y-3">
+                        <div key={section._id} className="border rounded-lg p-4 space-y-3">
                             <div className="flex justify-between items-center">
                                 <div>
-                                    <p className="font-semibold text-gray-800">{quest.title}</p>
-                                    <p className="text-xs text-gray-500">{questTasks.length} tasks</p>
+                                    <p className="font-semibold text-gray-800">{label}</p>
+                                    <p className="text-xs text-gray-500">{sectionTasks.length} tasks</p>
                                 </div>
-                                <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600">{quest.percent}%</span>
+                                <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600">Section</span>
                             </div>
                             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                                {questTasks.map((task) => (
-                                    <QuestTaskRow key={task._id} task={task} />
+                                {sectionTasks.map((task) => (
+                                    <SectionTaskRow key={task._id} task={task} />
                                 ))}
-                                {questTasks.length === 0 && (
+                                {sectionTasks.length === 0 && (
                                     <p className="text-xs text-gray-400 text-center border border-dashed rounded py-4">
-                                        No tasks assigned yet
+                                        No tasks linked yet
                                     </p>
                                 )}
                             </div>
@@ -498,11 +687,11 @@ function QuestTaskPanel({ quests, tasks }: { quests: QuestProgress[]; tasks: Doc
                     </div>
                     <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                         {unassignedTasks.map((task) => (
-                            <QuestTaskRow key={task._id} task={task} />
+                            <SectionTaskRow key={task._id} task={task} />
                         ))}
                         {unassignedTasks.length === 0 && (
                             <p className="text-xs text-gray-400 text-center border border-dashed rounded py-4">
-                                All tasks linked to quests
+                                All tasks linked to sections
                             </p>
                         )}
                     </div>
@@ -512,7 +701,7 @@ function QuestTaskPanel({ quests, tasks }: { quests: QuestProgress[]; tasks: Doc
     );
 }
 
-function QuestTaskRow({ task }: { task: Doc<"tasks"> }) {
+function SectionTaskRow({ task }: { task: Doc<"tasks"> }) {
     const statusColors: Record<Doc<"tasks">["status"], string> = {
         todo: "bg-gray-300",
         in_progress: "bg-blue-400",

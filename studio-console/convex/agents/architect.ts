@@ -76,6 +76,7 @@ export const saveTasks = internalMutation({
         accountingSectionName: v.optional(v.union(v.string(), v.null())),
         accountingItemLabel: v.optional(v.union(v.string(), v.null())),
         accountingItemType: v.optional(v.union(v.literal("material"), v.literal("work"), v.null())),
+        dependencies: v.optional(v.array(v.number())),
     })),
   },
   handler: async (ctx, args) => {
@@ -91,6 +92,13 @@ export const saveTasks = internalMutation({
         .query("tasks")
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
         .collect();
+    
+    let maxTaskNumber = 0;
+    for (const t of existingTasks) {
+        if (t.taskNumber && t.taskNumber > maxTaskNumber) maxTaskNumber = t.taskNumber;
+    }
+    let currentTaskNumber = maxTaskNumber;
+
     const existingByTitle = new Map<string, { id: Id<"tasks">; source: string }>(
         existingTasks.map((task) => [task.title.trim().toLowerCase(), { id: task._id, source: task.source }])
     );
@@ -149,7 +157,10 @@ export const saveTasks = internalMutation({
         return sectionLookup.get(key) ?? sectionNameLookupUnique.get(key);
     };
 
-    for (const t of tasks) {
+    const batchIndexToId = new Map<number, Id<"tasks">>();
+
+    for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
         const normalizedTitle = t.title.trim().toLowerCase();
         const sectionId = resolveSectionId(t.accountingSectionName);
 
@@ -166,9 +177,11 @@ export const saveTasks = internalMutation({
             }
         }
         const existingTask = existingByTitle.get(normalizedTitle);
+        let taskId: Id<"tasks">;
 
         if (existingTask && existingTask.source === "agent") {
-            await ctx.db.patch(existingTask.id, {
+            taskId = existingTask.id;
+            await ctx.db.patch(taskId, {
                 description: t.description,
                 category: t.category,
                 priority: t.priority,
@@ -177,8 +190,13 @@ export const saveTasks = internalMutation({
                 accountingLineId,
                 updatedAt: Date.now(),
             });
+            if (!existingTasks.find(et => et._id === taskId)?.taskNumber) {
+                 currentTaskNumber++;
+                 await ctx.db.patch(taskId, { taskNumber: currentTaskNumber });
+            }
         } else if (!existingTask) {
-            const newTaskId = await ctx.db.insert("tasks", {
+            currentTaskNumber++;
+            taskId = await ctx.db.insert("tasks", {
                 projectId: args.projectId,
                 title: t.title,
                 description: t.description,
@@ -189,10 +207,31 @@ export const saveTasks = internalMutation({
                 accountingLineId,
                 status: "todo",
                 source: "agent",
+                taskNumber: currentTaskNumber,
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
             });
-            existingByTitle.set(normalizedTitle, { id: newTaskId, source: "agent" });
+            existingByTitle.set(normalizedTitle, { id: taskId, source: "agent" });
+        } else {
+            taskId = existingTask.id;
+        }
+        batchIndexToId.set(i + 1, taskId);
+    }
+
+    for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
+        if (t.dependencies && t.dependencies.length > 0) {
+            const taskId = batchIndexToId.get(i + 1);
+            if (taskId) {
+                const depIds: Id<"tasks">[] = [];
+                for (const depIndex of t.dependencies) {
+                    const depId = batchIndexToId.get(depIndex);
+                    if (depId) depIds.push(depId);
+                }
+                if (depIds.length > 0) {
+                    await ctx.db.patch(taskId, { dependencies: depIds });
+                }
+            }
         }
     }
 
@@ -305,7 +344,20 @@ ${existingTaskSummary}
 Knowledge Documents:
 ${knowledgeSummary}
 
-Task: Break down this plan into actionable, atomic tasks. Focus on the immediate next steps implied by the plan. When relevant, set accountingSectionName to one of the Accounting Sections above so tasks can be grouped and auto-linked. If a specific accounting item applies, set accountingItemType ("material" or "work") and accountingItemLabel exactly as shown in that section list; otherwise set them to null. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge.`;
+Task: Break down this plan into actionable, atomic tasks. Focus on the immediate next steps implied by the plan.
+
+Dependencies (critical):
+- Assign dependencies for each task using the 1-based index of tasks in your own output list.
+- A dependency means: this task cannot start until the dependency task is DONE.
+- Only reference earlier tasks (dependencies must be < current task index). If you realize an ordering issue, reorder tasks so dependencies point backwards.
+- Use [] when a task can start immediately.
+
+Dependency test checklist (do this before answering):
+1) For each task, ask: does it require an approved plan, selected vendor, booked date/location, completed asset list, or delivered inputs from another task? If yes, add that prerequisite task index.
+2) Ensure there are no cycles and no forward references.
+3) Ensure at least some tasks have dependencies if the plan implies sequencing.
+
+When relevant, set accountingSectionName to one of the Accounting Sections above so tasks can be grouped and auto-linked. If a specific accounting item applies, set accountingItemType ("material" or "work") and accountingItemLabel exactly as shown in that section list; otherwise set them to null. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge.`;
 
     const result = await callChatWithSchema(TaskBreakdownSchema, {
       systemPrompt,

@@ -311,29 +311,34 @@ function extractXlsxText(buffer: ArrayBuffer): string {
                 for (const row of rows) {
                     const cells = row.match(/<c[^>]*>[\s\S]*?<\/c>/g);
                     if (cells) {
-                        const rowValues = [];
                         for (const cell of cells) {
+                            const rMatch = cell.match(/r="([^"]*)"/);
+                            const cellRef = rMatch ? rMatch[1] : "?";
+
                             const isShared = cell.includes('t="s"');
                             const valueMatch = cell.match(/<v>([^<]*)<\/v>/);
+                            let cellValue = "";
+
                             if (valueMatch) {
                                 const val = valueMatch[1];
                                 if (isShared) {
                                     const index = parseInt(val, 10);
                                     if (sharedStrings[index]) {
-                                        rowValues.push(sharedStrings[index]);
+                                        cellValue = sharedStrings[index];
                                     }
                                 } else {
-                                    rowValues.push(val);
+                                    cellValue = val;
                                 }
                             } else {
                                 const inlineMatch = cell.match(/<t>([^<]*)<\/t>/);
                                 if (inlineMatch) {
-                                    rowValues.push(decodeXmlEntities(inlineMatch[1]));
+                                    cellValue = decodeXmlEntities(inlineMatch[1]);
                                 }
                             }
-                        }
-                        if (rowValues.length > 0) {
-                            output += rowValues.join("\t") + "\n";
+
+                            if (cellValue) {
+                                output += `${cellRef}: ${cellValue}\n`;
+                            }
                         }
                     }
                 }

@@ -10,6 +10,7 @@ export const TaskBreakdownSchema = z.object({
         accountingSectionName: z.string().nullable().describe("Accounting section label to link this task to (null if none)"),
         accountingItemLabel: z.string().nullable().describe("Accounting item label/role within that section (null if none)"),
         accountingItemType: z.enum(["material", "work"]).nullable().describe("Accounting item type (null if none)"),
+        dependencies: z.array(z.number()).default([]).describe("List of task indices (1-based) that this task depends on. Only reference tasks from this list that appear BEFORE this task. Use [] if it can start immediately."),
     })),
 });
 

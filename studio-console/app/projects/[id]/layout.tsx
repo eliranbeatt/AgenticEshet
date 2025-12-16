@@ -71,6 +71,7 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
         { name: "Planning", href: "planning", phaseKey: "planning" as const },
         { name: "Accounting", href: "accounting" },
         { name: "Tasks", href: "tasks" },
+        { name: "Gantt", href: "gantt" },
         { name: "Quote", href: "quote" },
         { name: "Trello View", href: "trello-view" },
         { name: "Knowledge", href: "knowledge" },

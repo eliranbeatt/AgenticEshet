@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
@@ -64,6 +64,7 @@ export default function TasksPage() {
     const updateTask = useMutation(api.tasks.updateTask);
     const createTask = useMutation(api.tasks.createTask);
     const deleteTask = useMutation(api.tasks.deleteTask);
+    const ensureTaskNumbers = useMutation(api.tasks.ensureTaskNumbers);
 
     const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
     const [isGenerating, setIsGenerating] = useState(false);
@@ -73,6 +74,14 @@ export default function TasksPage() {
     const [sortField, setSortField] = useState<SortField>("updatedAt");
     const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
     const [activeTaskId, setActiveTaskId] = useState<Id<"tasks"> | null>(null);
+
+    useEffect(() => {
+        if (!tasks) return;
+        if (tasks.length === 0) return;
+        if (tasks.every((t: Doc<"tasks">) => !!t.taskNumber)) return;
+
+        void ensureTaskNumbers({ projectId });
+    }, [tasks, ensureTaskNumbers, projectId]);
 
     const accountingSections = useMemo<AccountingSectionRow[]>(() => {
         if (!accountingData?.sections) return [];
@@ -99,6 +108,16 @@ export default function TasksPage() {
         }
         return map;
     }, [accountingSections]);
+
+    const taskNumberById = useMemo(() => {
+        const map = new Map<Id<"tasks">, number>();
+        if (tasks) {
+            for (const t of tasks) {
+                if (t.taskNumber) map.set(t._id, t.taskNumber);
+            }
+        }
+        return map;
+    }, [tasks]);
 
     const filteredTasks = useMemo(() => {
         if (!tasks) return null;
@@ -262,6 +281,7 @@ export default function TasksPage() {
                                 sections={accountingSections}
                                 sectionLabelById={sectionLabelById}
                                 accountingItemById={accountingItemById}
+                                taskNumberById={taskNumberById}
                             />
                         ))}
                     </div>
@@ -286,6 +306,7 @@ function KanbanColumn({
     sectionLabelById,
     accountingItemById,
     activeTaskId,
+    taskNumberById,
 }: {
     column: (typeof columns)[number];
     tasks: Doc<"tasks">[];
@@ -295,6 +316,7 @@ function KanbanColumn({
     sectionLabelById: Map<string, string>;
     accountingItemById: Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>;
     activeTaskId: Id<"tasks"> | null;
+    taskNumberById: Map<Id<"tasks">, number>;
 }) {
     const { setNodeRef, isOver } = useDroppable({ id: column.id });
     return (
@@ -317,6 +339,7 @@ function KanbanColumn({
                         onUpdate={onUpdate}
                         onDelete={onDelete}
                         isDragging={activeTaskId === task._id}
+                        taskNumberById={taskNumberById}
                     />
                 ))}
             </div>
@@ -332,6 +355,7 @@ function TaskCard({
     onUpdate,
     onDelete,
     isDragging,
+    taskNumberById,
 }: {
     task: Doc<"tasks">;
     sections: AccountingSectionRow[];
@@ -340,6 +364,7 @@ function TaskCard({
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
     onDelete: (input: DeleteTaskInput) => Promise<void>;
     isDragging: boolean;
+    taskNumberById: Map<Id<"tasks">, number>;
 }) {
     const { attributes, listeners, setNodeRef, transform } = useDraggable({
         id: task._id,
@@ -381,20 +406,27 @@ function TaskCard({
 
     const itemValue = task.accountingLineId && task.accountingLineType ? `${task.accountingLineType}:${task.accountingLineId}` : "";
 
+    const dependencyText = task.dependencies && task.dependencies.length > 0
+        ? "Requires: " + task.dependencies.map(id => "#" + (taskNumberById.get(id) ?? "?")).join(", ")
+        : null;
+
     return (
         <div ref={setNodeRef} style={style} className="bg-white p-3 rounded shadow-sm border hover:shadow-md transition group relative">
             <div className="flex justify-between items-center mb-2">
-                <span
-                    className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${
-                        task.category === "Creative"
-                            ? "bg-pink-50 text-pink-700 border-pink-200"
-                            : task.category === "Logistics"
-                              ? "bg-yellow-50 text-yellow-700 border-yellow-200"
-                              : "bg-gray-50 text-gray-600 border-gray-200"
-                    }`}
-                >
-                    {task.category}
-                </span>
+                <div className="flex items-center gap-2">
+                    {task.taskNumber && <span className="text-xs font-mono text-gray-500">#{task.taskNumber}</span>}
+                    <span
+                        className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${
+                            task.category === "Creative"
+                                ? "bg-pink-50 text-pink-700 border-pink-200"
+                                : task.category === "Logistics"
+                                ? "bg-yellow-50 text-yellow-700 border-yellow-200"
+                                : "bg-gray-50 text-gray-600 border-gray-200"
+                        }`}
+                    >
+                        {task.category}
+                    </span>
+                </div>
                 <button
                     type="button"
                     className="text-gray-400 hover:text-gray-700"
@@ -408,6 +440,10 @@ function TaskCard({
 
             <p className="text-sm font-medium text-gray-800 mb-1">{task.title}</p>
             {task.description && <p className="text-xs text-gray-500 line-clamp-2 mb-2 whitespace-pre-line">{task.description}</p>}
+
+            {dependencyText && (
+                <p className="text-xs text-red-600 font-medium mb-2">{dependencyText}</p>
+            )}
 
             <div className="flex flex-wrap gap-2 text-[11px] text-gray-500 mb-2">
                 <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.priority} priority</span>

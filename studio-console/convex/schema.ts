@@ -194,6 +194,15 @@ export default defineSchema({
         accountingSectionId: v.optional(v.id("sections")),
         accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
+        // Dependencies
+        taskNumber: v.optional(v.number()),
+        dependencies: v.optional(v.array(v.id("tasks"))),
+        
+        // Gantt / Scheduling
+        startDate: v.optional(v.number()),
+        endDate: v.optional(v.number()),
+        estimatedDuration: v.optional(v.number()), // in milliseconds
+
         // AI metadata
         source: v.union(v.literal("user"), v.literal("agent")),
         confidenceScore: v.optional(v.number()),

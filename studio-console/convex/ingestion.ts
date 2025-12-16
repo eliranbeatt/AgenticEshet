@@ -339,18 +339,29 @@ async function processSingleFile(ctx: ActionCtx, file: Doc<"ingestionFiles">, jo
 
     // 2. ENRICH
     // ... (Logic similar to existing, but using new stages)
+    const isExcel = file.originalFilename.toLowerCase().endsWith(".xlsx") || file.originalFilename.toLowerCase().endsWith(".xls") || file.mimeType.includes("spreadsheet") || file.mimeType.includes("excel");
+
     const promptSections = [
         "You are a Knowledge Management Assistant. Normalize the document into concise text and metadata.",
         job.defaultContext ? `Additional context: ${job.defaultContext}` : null,
         `Filename: ${file.originalFilename}`,
         "Return normalizedText, summary, keyPoints, keywords, and suggestedTags.",
-        "Document content:",
-        file.rawText!.slice(0, 12000),
-    ].filter(Boolean);
+    ];
+
+    if (isExcel) {
+        promptSections.push("The document is an Excel file. Your task is to create a narrative description of the data.");
+        promptSections.push("Describe the tables, columns, and rows.");
+        promptSections.push("Then, for each cell in the table, generate a line stating the value, e.g., 'The income for the year 2025 was 1000'.");
+        promptSections.push("Use the cell coordinates (e.g. A1) provided in the text to help you understand the layout, but the narrative should be natural language.");
+        promptSections.push("The 'normalizedText' field should contain this full narrative.");
+    }
+
+    promptSections.push("Document content:");
+    promptSections.push(file.rawText!.slice(0, 12000));
 
     const enriched = await callChatWithSchema(EnhancerSchema, {
         systemPrompt: "Extract structured knowledge.",
-        userPrompt: promptSections.join("\n\n"),
+        userPrompt: promptSections.filter(Boolean).join("\n\n"),
     });
 
     await ctx.runMutation(internal.ingestion.updateFileStatus, {

@@ -452,12 +452,6 @@ function TaskCard({
                 <span className="px-2 py-0.5 rounded-full bg-gray-50">
                     {accountingChipLabel}
                 </span>
-            </div>lassName="flex flex-wrap gap-2 text-[11px] text-gray-500 mb-2">
-                <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.priority} priority</span>
-                <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.source === "agent" ? "AI generated" : "User task"}</span>
-                <span className="px-2 py-0.5 rounded-full bg-gray-50">
-                    {accountingChipLabel}
-                </span>
             </div>
 
             <div className="space-y-2 text-xs">

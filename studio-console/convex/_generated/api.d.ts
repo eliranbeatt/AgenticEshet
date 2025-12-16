@@ -46,6 +46,7 @@ import type * as quotes from "../quotes.js";
 import type * as research from "../research.js";
 import type * as seed from "../seed.js";
 import type * as tasks from "../tasks.js";
+import type * as test_architect from "../test_architect.js";
 import type * as trelloSync from "../trelloSync.js";
 import type * as whatsapp from "../whatsapp.js";
 
@@ -94,6 +95,7 @@ declare const fullApi: ApiFromModules<{
   research: typeof research;
   seed: typeof seed;
   tasks: typeof tasks;
+  test_architect: typeof test_architect;
   trelloSync: typeof trelloSync;
   whatsapp: typeof whatsapp;
 }>;

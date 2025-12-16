@@ -53,6 +53,15 @@ export default defineSchema({
         category: v.string(), // e.g., "PVC", "Paint"
         label: v.string(),
         description: v.optional(v.string()),
+
+        procurement: v.optional(
+            v.union(
+                v.literal("in_stock"),
+                v.literal("local"),
+                v.literal("abroad"),
+                v.literal("either")
+            )
+        ),
         
         // Vendor Link
         vendorId: v.optional(v.id("vendors")),

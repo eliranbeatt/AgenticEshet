@@ -118,16 +118,17 @@ export default function MaterialsTab({ data, projectId }: { data: ProjectAccount
                         <div className="overflow-x-auto">
                             <table className="min-w-full divide-y divide-gray-200 text-sm">
                                 <thead className="bg-white">
-                                    <tr>
-                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item</th>
-                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
-                                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-blue-50">Plan Qty</th>
-                                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-blue-50">Plan Cost</th>
-                                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Qty</th>
-                                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Cost</th>
-                                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Gap</th>
-                                        <th className="px-3 py-2 w-28 text-xs font-medium text-gray-500 uppercase">Actions</th>
-                                    </tr>
+                                     <tr>
+                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item</th>
+                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Procurement</th>
+                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-blue-50">Plan Qty</th>
+                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-blue-50">Plan Cost</th>
+                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Qty</th>
+                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Cost</th>
+                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Gap</th>
+                                         <th className="px-3 py-2 w-28 text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-200 bg-white">
                                     {materials.map((m) => (
@@ -164,6 +165,7 @@ function MaterialRow({
             category?: string;
             label?: string;
             description?: string;
+            procurement?: "in_stock" | "local" | "abroad" | "either";
             vendorName?: string;
             unit?: string;
             plannedQuantity?: number;
@@ -183,6 +185,7 @@ function MaterialRow({
         label: line.label,
         category: line.category,
         vendorName: line.vendorName ?? "",
+        procurement: line.procurement ?? "either",
         unit: line.unit,
         plannedQuantity: line.plannedQuantity.toString(),
         plannedUnitCost: line.plannedUnitCost.toString(),
@@ -198,6 +201,7 @@ function MaterialRow({
             label: line.label,
             category: line.category,
             vendorName: line.vendorName ?? "",
+            procurement: line.procurement ?? "either",
             unit: line.unit,
             plannedQuantity: line.plannedQuantity.toString(),
             plannedUnitCost: line.plannedUnitCost.toString(),
@@ -231,6 +235,7 @@ function MaterialRow({
                 label: draft.label || line.label,
                 category: draft.category || "General",
                 vendorName: draft.vendorName || undefined,
+                procurement: draft.procurement || line.procurement || "either",
                 unit: draft.unit || line.unit,
                 plannedQuantity: plannedQty,
                 plannedUnitCost: plannedCost,
@@ -248,6 +253,7 @@ function MaterialRow({
             label: line.label,
             category: line.category,
             vendorName: line.vendorName ?? "",
+            procurement: line.procurement ?? "either",
             unit: line.unit,
             plannedQuantity: line.plannedQuantity.toString(),
             plannedUnitCost: line.plannedUnitCost.toString(),
@@ -257,6 +263,16 @@ function MaterialRow({
             description: line.description ?? "",
         });
         setIsEditing(false);
+    };
+
+    const handleProcurementChange = async (next: "in_stock" | "local" | "abroad" | "either") => {
+        setDraft((prev) => ({ ...prev, procurement: next }));
+        if (!isEditing) {
+            await update({
+                id: line._id,
+                updates: { procurement: next },
+            });
+        }
     };
 
     return (
@@ -296,6 +312,22 @@ function MaterialRow({
                     ) : (
                         <div className="text-sm text-gray-700">{line.vendorName || <span className="text-gray-400">-</span>}</div>
                     )}
+                </td>
+                <td className="px-3 py-2">
+                    <select
+                        className="w-full bg-transparent border px-2 py-1 rounded text-sm"
+                        value={draft.procurement}
+                        onChange={(e) => {
+                            const next = e.target.value as "in_stock" | "local" | "abroad" | "either";
+                            void handleProcurementChange(next);
+                        }}
+                        title="Procurement mode"
+                    >
+                        <option value="in_stock">In stock</option>
+                        <option value="local">Buy locally (Israel)</option>
+                        <option value="abroad">Order abroad</option>
+                        <option value="either">Local or abroad</option>
+                    </select>
                 </td>
                 <td className="px-3 py-2 text-right bg-blue-50/30">
                     {isEditing ? (
@@ -406,7 +438,7 @@ function MaterialRow({
             </tr>
             {showAssistant && (
                 <tr>
-                    <td colSpan={8} className="bg-gray-50 p-0">
+                    <td colSpan={9} className="bg-gray-50 p-0">
                         <div className="p-4 border-b border-gray-200 shadow-inner">
                             <BuyingAssistantPanel materialLineId={line._id} label={line.label} />
                         </div>

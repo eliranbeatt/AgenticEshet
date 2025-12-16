@@ -108,16 +108,30 @@ export const startOnlineResearch: ReturnType<typeof action> = action({
         const createdBy = getCreatedBy();
         const currency = args.currency ?? "ILS";
 
+        const materialLine = args.materialLineId
+            ? await ctx.runQuery(api.buying.getMaterialLineContext, { materialLineId: args.materialLineId })
+            : null;
+
         const queryText = args.freeformQuery?.trim()
             ? args.freeformQuery.trim()
             : args.query?.trim()
                 ? args.query.trim()
                 : args.materialLineId
-                    ? (await ctx.runQuery(api.buying.getMaterialLineContext, { materialLineId: args.materialLineId }))
-                        ?.label
+                    ? materialLine?.label
                     : undefined;
 
         if (!queryText) throw new Error("Missing query");
+
+        const procurement = materialLine?.procurement;
+        const effectiveLocation =
+            args.location ??
+            (procurement === "local"
+                ? "Israel"
+                : procurement === "abroad"
+                    ? "International - ship to Israel"
+                    : procurement === "either"
+                        ? "Israel or international (ship to Israel)"
+                        : undefined);
 
         // Cache: reuse a completed run for this materialLine with same query/currency if still fresh.
         if (args.materialLineId) {
@@ -129,6 +143,7 @@ export const startOnlineResearch: ReturnType<typeof action> = action({
                 r.status === "completed" &&
                 r.request.queryText === queryText &&
                 r.request.currency === currency &&
+                (r.request.location ?? undefined) === (effectiveLocation ?? undefined) &&
                 (r.finishedAt ?? 0) > nowMs() - DEFAULT_TTL_MS
             );
             if (fresh) return { researchRunId: fresh._id, cached: true };
@@ -147,7 +162,6 @@ export const startOnlineResearch: ReturnType<typeof action> = action({
         let unit: string | undefined;
         let projectId: Id<"projects"> | undefined = args.projectId;
         if (args.materialLineId) {
-            const materialLine = await ctx.runQuery(api.buying.getMaterialLineContext, { materialLineId: args.materialLineId });
             unit = materialLine?.unit;
             projectId = materialLine?.projectId ?? projectId;
         }
@@ -159,7 +173,7 @@ export const startOnlineResearch: ReturnType<typeof action> = action({
             currency,
             unit,
             specs: undefined,
-            location: args.location,
+            location: effectiveLocation,
             language: args.language,
             createdBy,
         });
@@ -197,11 +211,17 @@ export const runResearch = internalAction({
         });
 
         try {
+            const linkedMaterialLine = run.linked.materialLineId
+                ? await ctx.runQuery(api.buying.getMaterialLineContext, { materialLineId: run.linked.materialLineId })
+                : null;
+            const procurement = linkedMaterialLine?.procurement;
+
             const research = await performResearch({
                 queryText: run.request.queryText,
                 currency: run.request.currency,
                 unit: run.request.unit,
                 location: run.request.location,
+                procurement,
                 maxOptions: 5,
             });
 

@@ -24,6 +24,7 @@ type SuggestionOption = {
 
 export function BuyingAssistantPanel({ materialLineId, label }: BuyingAssistantPanelProps) {
     const suggestions = useQuery(api.buying.getSuggestions, { materialLineId });
+    const materialLine = useQuery(api.buying.getMaterialLineContext, { materialLineId });
     const generateSuggestions = useAction(api.buying.generateSuggestions);
     const startResearch = useAction(api.research.startOnlineResearch);
     const cancelResearch = useAction(api.research.cancelOnlineResearch);
@@ -40,6 +41,14 @@ export function BuyingAssistantPanel({ materialLineId, label }: BuyingAssistantP
     );
 
     const researchStatus = useMemo(() => researchRun?.status, [researchRun]);
+    const procurement = useMemo(() => materialLine?.procurement ?? "either", [materialLine]);
+
+    const procurementLabel = useMemo(() => {
+        if (procurement === "in_stock") return "In stock";
+        if (procurement === "local") return "Buy locally (Israel)";
+        if (procurement === "abroad") return "Order abroad";
+        return "Local or abroad";
+    }, [procurement]);
 
     const handleGenerate = async () => {
         setIsLoading(true);
@@ -55,6 +64,7 @@ export function BuyingAssistantPanel({ materialLineId, label }: BuyingAssistantP
     const handleResearch = async () => {
         setIsResearching(true);
         try {
+            if (procurement === "in_stock") return;
             const result = await startResearch({ materialLineId, query: label });
             setResearchRunId(result.researchRunId);
         } catch (error) {
@@ -124,12 +134,24 @@ export function BuyingAssistantPanel({ materialLineId, label }: BuyingAssistantP
                         type="button"
                         className="h-7 rounded px-2 text-xs text-blue-600 hover:bg-blue-50 hover:text-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
                         onClick={handleResearch}
-                        disabled={isResearching || researchStatus === "queued" || researchStatus === "running"}
+                        disabled={
+                            procurement === "in_stock" ||
+                            isResearching ||
+                            researchStatus === "queued" ||
+                            researchStatus === "running"
+                        }
                     >
                         {isResearching ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Search className="w-3 h-3 mr-1" />}
                         Search Online
                     </button>
                 </div>
+            </div>
+
+            <div className="mb-2 text-[11px] text-gray-600">
+                Procurement: <span className="font-medium text-gray-700">{procurementLabel}</span>
+                {procurement === "in_stock" ? (
+                    <span className="text-gray-500"> - Online research disabled; use history for price estimate.</span>
+                ) : null}
             </div>
 
             {researchRun && (researchRun.status === "queued" || researchRun.status === "running") && (
@@ -201,7 +223,7 @@ export function BuyingAssistantPanel({ materialLineId, label }: BuyingAssistantP
                         <div className="mt-3">
                             <div className="text-xs font-medium text-gray-700 mb-1">Citations</div>
                             <ul className="space-y-1">
-                                {suggestions.citations.slice(0, 6).map((c: any, i: number) => (
+                                {suggestions.citations.slice(0, 6).map((c, i) => (
                                     <li key={i} className="text-xs text-gray-600">
                                         <a className="text-blue-700 hover:underline" href={c.url} target="_blank" rel="noreferrer">
                                             {c.title}

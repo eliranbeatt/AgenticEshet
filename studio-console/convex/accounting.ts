@@ -168,6 +168,14 @@ export const addMaterialLine = mutation({
     category: v.string(),
     label: v.string(),
     description: v.optional(v.string()),
+    procurement: v.optional(
+      v.union(
+        v.literal("in_stock"),
+        v.literal("local"),
+        v.literal("abroad"),
+        v.literal("either")
+      )
+    ),
     vendorId: v.optional(v.id("vendors")),
     vendorName: v.optional(v.string()),
     unit: v.string(),
@@ -177,7 +185,10 @@ export const addMaterialLine = mutation({
     status: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("materialLines", args);
+    return await ctx.db.insert("materialLines", {
+      ...args,
+      procurement: args.procurement ?? "either",
+    });
   },
 });
 
@@ -188,6 +199,14 @@ export const updateMaterialLine = mutation({
         category: v.optional(v.string()),
         label: v.optional(v.string()),
         description: v.optional(v.string()),
+        procurement: v.optional(
+          v.union(
+            v.literal("in_stock"),
+            v.literal("local"),
+            v.literal("abroad"),
+            v.literal("either")
+          )
+        ),
         vendorName: v.optional(v.string()),
         unit: v.optional(v.string()),
         plannedQuantity: v.optional(v.number()),

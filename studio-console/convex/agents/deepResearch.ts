@@ -32,7 +32,12 @@ function buildPromptHebrewMarkdown(args: {
         "",
         "Notes about the inputs below:",
         "- The existing planned costs/quantities are NOT ground truth; treat them as placeholders and use them to guide what to research.",
-        "- Prefer Israel-focused purchasing options when possible; currency: ILS.",
+        "- Currency: ILS.",
+        "- IMPORTANT: Use the Materials table's 'Procurement' column to decide purchasing research scope per line:",
+        "  - in_stock: do NOT search for purchase links; only estimate unit price (no vendor selection).",
+        "  - local: search ONLY Israel-local purchasing options (Israeli vendors/sites).",
+        "  - abroad: search ONLY international marketplaces (AliExpress/Amazon/Shein or similar) that ship to Israel; include shipping and total delivered price.",
+        "  - either: search both local+abroad; provide both options if possible and highlight the best fit for cost vs timeline.",
         "- Provide purchase links where available; if a price cannot be found, say so and provide a best-effort estimate with clear confidence.",
         "",
         "Requested report structure (use Hebrew headings):",
@@ -204,14 +209,15 @@ export const startProject: ReturnType<typeof action> = action({
         ].join("\n");
 
         const materialsPlanningMarkdown = [
-            "| Group | Item | Category | Label | Specs/Description | Qty | Unit | Planned unit cost | Planned total |",
-            "|---|---|---|---|---|---:|---|---:|---:|",
+            "| Group | Item | Category | Label | Procurement | Specs/Description | Qty | Unit | Planned unit cost | Planned total |",
+            "|---|---|---|---|---|---|---:|---|---:|---:|",
             ...sectionData.flatMap((s) => {
                 const group = escapeTableCell(s.section.group);
                 const item = escapeTableCell(s.section.name);
                 return s.materials.map((m) => {
                     const plannedTotal = m.plannedQuantity * m.plannedUnitCost;
-                    return `| ${group} | ${item} | ${escapeTableCell(m.category)} | ${escapeTableCell(m.label)} | ${escapeTableCell(m.description ?? "")} | ${m.plannedQuantity} | ${escapeTableCell(m.unit)} | ${Math.round(m.plannedUnitCost).toLocaleString("en-US")} ${currency} | ${Math.round(plannedTotal).toLocaleString("en-US")} ${currency} |`;
+                    const procurement = escapeTableCell(m.procurement ?? "either");
+                    return `| ${group} | ${item} | ${escapeTableCell(m.category)} | ${escapeTableCell(m.label)} | ${procurement} | ${escapeTableCell(m.description ?? "")} | ${m.plannedQuantity} | ${escapeTableCell(m.unit)} | ${Math.round(m.plannedUnitCost).toLocaleString("en-US")} ${currency} | ${Math.round(plannedTotal).toLocaleString("en-US")} ${currency} |`;
                 });
             }),
         ].join("\n");

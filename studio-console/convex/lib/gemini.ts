@@ -105,9 +105,35 @@ export async function performResearch(params: {
   currency: string;
   unit?: string;
   location?: string;
+  procurement?: "in_stock" | "local" | "abroad" | "either";
   maxOptions: number;
 }): Promise<ResearchResult> {
   if (!apiKey) throw new Error("GOOGLE_API_KEY is not set");
+
+  const procurementRules =
+    params.procurement === "in_stock"
+      ? [
+          "Procurement mode: IN STOCK.",
+          "Do not search for buying links. Only estimate an ILS unit price from common market knowledge; mark confidence as low unless strongly supported by citations.",
+          "If you cannot estimate, return an empty options array and explain in summary.",
+        ]
+      : params.procurement === "local"
+        ? [
+            "Procurement mode: BUY LOCALLY (ISRAEL ONLY).",
+            "Only include Israeli vendors / Israeli sites. Avoid AliExpress/Amazon/Shein or other international marketplaces.",
+            "Prefer prices already in ILS; if converting, state conversion assumptions in notes.",
+          ]
+        : params.procurement === "abroad"
+          ? [
+              "Procurement mode: ORDER ABROAD.",
+              "Focus on AliExpress, Amazon, Shein, or similar international marketplaces.",
+              "All options MUST ship to Israel. Price ranges must reflect total delivered price to Israel (item + shipping). If shipping is unknown, estimate and say so in notes.",
+            ]
+          : [
+              "Procurement mode: LOCAL OR ABROAD.",
+              "Include both: at least 1 Israel-local option and at least 1 international option (shipping to Israel) when possible.",
+              "Price ranges must reflect total delivered price to Israel (item + shipping) for international options; say what is included.",
+            ];
 
   const prompt = [
     "You are a buying assistant.",
@@ -118,6 +144,7 @@ export async function performResearch(params: {
     `Preferred currency: ${params.currency}`,
     params.location ? `Location/region: ${params.location}` : "",
     params.unit ? `Preferred unit: ${params.unit}` : "",
+    ...procurementRules,
     `Max options: ${params.maxOptions}`,
     "Output JSON schema:",
     JSON.stringify(
@@ -143,7 +170,7 @@ export async function performResearch(params: {
     .filter(Boolean)
     .join("\n");
 
-  const text = await generateText({ prompt, model: "gemini-1.5-flash", useGoogleSearch: false });
+  const text = await generateText({ prompt, model: "gemini-1.5-flash", useGoogleSearch: true });
   const parsed = ResearchSchema.safeParse(extractJson(text));
   if (!parsed.success) {
     throw new Error(`Failed to validate research JSON: ${parsed.error.message}`);

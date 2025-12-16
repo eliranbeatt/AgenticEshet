@@ -218,12 +218,15 @@ export const search: ReturnType<typeof action> = action({
         const chunkIds = results.map((r) => r._id);
         if (chunkIds.length === 0) return [];
 
-        const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: chunkIds });
-        const entryMap = new Map(chunkEntries.map((entry: any) => [entry.chunk._id, entry]));
+        const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: chunkIds }) as Array<{
+            chunk: Doc<"knowledgeChunks">;
+            doc: Doc<"knowledgeDocs">;
+        }>;
+        const entryMap = new Map(chunkEntries.map((entry) => [entry.chunk._id, entry] as const));
 
         return results
             .map((result) => {
-                const entry = entryMap.get(result._id) as any;
+                const entry = entryMap.get(result._id);
                 if (!entry || entry.doc.processingStatus !== "ready") return null;
                 const docSourceType: SourceType = (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload";
                 return {
@@ -416,8 +419,11 @@ export const dynamicSearch: ReturnType<typeof action> = action({
             return [];
         }
 
-        const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: uniqueIds });
-        const entryMap = new Map(chunkEntries.map((entry: any) => [entry.chunk._id, entry]));
+        const chunkEntries = await ctx.runQuery(internal.knowledge.getChunksWithDocs, { ids: uniqueIds }) as Array<{
+            chunk: Doc<"knowledgeChunks">;
+            doc: Doc<"knowledgeDocs">;
+        }>;
+        const entryMap = new Map(chunkEntries.map((entry) => [entry.chunk._id, entry] as const));
 
         type ChunkRow = {
             result: ChunkResult;
@@ -426,7 +432,7 @@ export const dynamicSearch: ReturnType<typeof action> = action({
         };
         const filtered = chunkResults
             .map<ChunkRow | null>((result) => {
-                const entry = entryMap.get(result._id) as any;
+                const entry = entryMap.get(result._id);
                 if (!entry) return null;
                 if (entry.doc.processingStatus !== "ready") return null;
                 const docSourceType: SourceType = (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload";

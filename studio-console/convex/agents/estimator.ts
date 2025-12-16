@@ -4,14 +4,41 @@ import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { EstimationSchema } from "../lib/zodSchemas";
 
-async function estimateSectionImpl(ctx: any, args: { projectId: any; sectionId: any }) {
+type MutationRunner = (ref: unknown, args: unknown) => Promise<unknown>;
+type QueryRunner = (ref: unknown, args: unknown) => Promise<unknown>;
+
+type EstimatorCtx = {
+    runQuery: QueryRunner;
+    runMutation: MutationRunner;
+};
+
+type EstimatorContext = {
+    project: { name: string };
+    section: { name: string; group: string; description?: string | null };
+    catalogItems: Array<{ name: string; lastPrice: number; defaultUnit: string }>;
+    systemPrompt: string;
+};
+
+async function estimateSectionImpl(ctx: EstimatorCtx, args: { projectId: unknown; sectionId: unknown; agentRunId?: unknown; label?: string }) {
+    const agentRunId = args.agentRunId;
+    const label = args.label ?? "Estimating section";
+
+    if (agentRunId) {
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId: agentRunId,
+            level: "info",
+            message: `${label}: loading context.`,
+            stage: "loading_context",
+        });
+    }
+
     const { project, section, catalogItems, systemPrompt } = await ctx.runQuery(internal.agents.estimator.getContext, {
         projectId: args.projectId,
         sectionId: args.sectionId,
-    });
+    }) as EstimatorContext;
 
     const catalogContext = catalogItems.length > 0
-        ? "Historical Prices from Catalog:\n" + catalogItems.map((c: any) => `- ${c.name}: ${c.lastPrice} per ${c.defaultUnit}`).join("\n")
+        ? "Historical Prices from Catalog:\n" + catalogItems.map((c) => `- ${c.name}: ${c.lastPrice} per ${c.defaultUnit}`).join("\n")
         : "No specific catalog matches found.";
 
     const userPrompt = `
@@ -35,6 +62,15 @@ Please estimate the required materials and labor to execute this section.
         systemPrompt,
         userPrompt,
     });
+
+    if (agentRunId) {
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId: agentRunId,
+            level: "info",
+            message: `${label}: saving materials and labor lines.`,
+            stage: "persisting",
+        });
+    }
 
     await ctx.runMutation(internal.agents.estimator.saveEstimation, {
         projectId: args.projectId,
@@ -95,7 +131,7 @@ export const saveEstimation = internalMutation({
             await ctx.db.insert("workLines", {
                 projectId: args.projectId,
                 sectionId: args.sectionId,
-                workType: work.workType as any,
+                workType: work.workType,
                 role: work.role,
                 rateType: work.rateType,
                 plannedQuantity: work.quantity,
@@ -111,20 +147,110 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
     args: {
         projectId: v.id("projects"),
         sectionId: v.id("sections"),
+        agentRunId: v.optional(v.id("agentRuns")),
     },
     handler: async (ctx, args) => {
-        await estimateSectionImpl(ctx, args);
+        const agentRunId = args.agentRunId;
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "running",
+                stage: "llm_call",
+            });
+        }
+
+        try {
+            await estimateSectionImpl(ctx, { ...args, agentRunId, label: "Estimating section" });
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: agentRunId,
+                    status: "succeeded",
+                    stage: "done",
+                });
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "error",
+                    message,
+                    stage: "failed",
+                });
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: agentRunId,
+                    status: "failed",
+                    stage: "failed",
+                    error: message,
+                });
+            }
+            throw error;
+        }
     },
 });
 
 export const estimateProjectInBackground: ReturnType<typeof internalAction> = internalAction({
-    args: { projectId: v.id("projects") },
+    args: { projectId: v.id("projects"), agentRunId: v.optional(v.id("agentRuns")) },
     handler: async (ctx, args) => {
-        const accounting = await ctx.runQuery(api.accounting.getProjectAccounting, { projectId: args.projectId });
-        for (const sectionEntry of accounting.sections) {
-            await estimateSectionImpl(ctx, { projectId: args.projectId, sectionId: sectionEntry.section._id });
+        const agentRunId = args.agentRunId;
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "running",
+                stage: "loading_context",
+            });
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Loading all accounting sections for bulk estimation.",
+                stage: "loading_context",
+            });
         }
-        return { count: accounting.sections.length };
+
+        try {
+            const accounting = await ctx.runQuery(api.accounting.getProjectAccounting, { projectId: args.projectId });
+            const sections = (() => {
+                if (!accounting || typeof accounting !== "object") return [];
+                const raw = (accounting as { sections?: unknown }).sections;
+                if (!Array.isArray(raw)) return [];
+                return raw as Array<{ section: { _id: unknown; name: string } }>;
+            })();
+
+            const total = sections.length;
+            let index = 0;
+            for (const sectionEntry of sections) {
+                index += 1;
+                const label = `Estimating section ${index}/${total} (${sectionEntry.section.name})`;
+                await estimateSectionImpl(ctx, { projectId: args.projectId, sectionId: sectionEntry.section._id, agentRunId, label });
+            }
+
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: agentRunId,
+                    status: "succeeded",
+                    stage: "done",
+                });
+            }
+
+            return { count: total };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "error",
+                    message,
+                    stage: "failed",
+                });
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: agentRunId,
+                    status: "failed",
+                    stage: "failed",
+                    error: message,
+                });
+            }
+            throw error;
+        }
     },
 });
 
@@ -134,20 +260,38 @@ export const run: ReturnType<typeof action> = action({
         sectionId: v.id("sections"),
     },
     handler: async (ctx, args) => {
+        await ctx.runQuery(internal.agents.estimator.getContext, { projectId: args.projectId, sectionId: args.sectionId });
+
+        const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
+            projectId: args.projectId,
+            agent: "estimator",
+            stage: "queued",
+            initialMessage: "Queued section estimation.",
+        });
+
         await ctx.scheduler.runAfter(0, internal.agents.estimator.runInBackground, {
             projectId: args.projectId,
             sectionId: args.sectionId,
+            agentRunId,
         });
-        return { queued: true };
+        return { queued: true, runId: agentRunId };
     },
 });
 
 export const estimateProject: ReturnType<typeof action> = action({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
+        const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
+            projectId: args.projectId,
+            agent: "estimator",
+            stage: "queued",
+            initialMessage: "Queued bulk project estimation.",
+        });
+
         await ctx.scheduler.runAfter(0, internal.agents.estimator.estimateProjectInBackground, {
             projectId: args.projectId,
+            agentRunId,
         });
-        return { queued: true };
+        return { queued: true, runId: agentRunId };
     },
 });

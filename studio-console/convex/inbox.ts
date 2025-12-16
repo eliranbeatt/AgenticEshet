@@ -104,11 +104,11 @@ export const updateTriageStatus = internalMutation({
         error: v.optional(v.string())
     },
     handler: async (ctx, args) => {
-        const update: any = { 
-            suggestions: { 
+        const update: Record<string, unknown> = {
+            suggestions: {
                 ...(args.suggestions || {}),
-                triage: { status: args.status, error: args.error } 
-            } 
+                triage: { status: args.status, error: args.error },
+            },
         };
         
         const item = await ctx.db.get(args.inboxItemId);
@@ -146,12 +146,23 @@ export const runTriage = action({
         });
 
         try {
+            const attachmentNames = Array.isArray(item.attachments)
+                ? item.attachments
+                      .map((attachment) => {
+                          if (!attachment || typeof attachment !== "object") return null;
+                          const name = (attachment as { name?: unknown }).name;
+                          return typeof name === "string" ? name : null;
+                      })
+                      .filter((name): name is string => Boolean(name))
+                      .join(", ")
+                : "";
+
             const prompt = `
                 Analyze this inbox message and suggest tasks, decisions, and questions.
                 From: ${item.fromName} (${item.fromAddressOrPhone})
                 Subject: ${item.subject}
                 Body: ${item.bodyText}
-                Attachments: ${item.attachments.map((a: any) => a.name).join(", ")}
+                Attachments: ${attachmentNames}
             `;
 
             const result = await callChatWithSchema(TriageSchema, {
@@ -201,13 +212,16 @@ export const acceptSuggestions = mutation({
         for (const index of args.acceptedTasks) {
             const draft = item.suggestions.tasksDraft[index];
             if (draft) {
+                const priority = draft.priority === "High" || draft.priority === "Medium" || draft.priority === "Low"
+                    ? draft.priority
+                    : "Medium";
                 const taskId = await ctx.db.insert("tasks", {
                     projectId: item.projectId,
                     title: draft.title,
                     description: draft.details,
                     status: "todo",
                     category: "Admin", // Default
-                    priority: (draft.priority as any) || "Medium",
+                    priority,
                     source: "agent",
                     createdAt: Date.now(),
                     updatedAt: Date.now(),

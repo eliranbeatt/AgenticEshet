@@ -131,20 +131,20 @@ export default function ManagementPage() {
                 <VendorManager
                     vendors={data.vendors}
                     onCreate={createVendor}
-                    onUpdate={async (id, updates) => { await updateVendor({ id, updates: updates as any }); }}
+                    onUpdate={async (id, updates) => { await updateVendor({ id, updates }); }}
                     onDelete={async (id) => { await deleteVendor({ id }); }}
                 />
                 <EmployeeManager
                     employees={data.employees}
                     onCreate={createEmployee}
-                    onUpdate={async (id, updates) => { await updateEmployee({ id, updates: updates as any }); }}
+                    onUpdate={async (id, updates) => { await updateEmployee({ id, updates }); }}
                     onDelete={async (id) => { await deleteEmployee({ id }); }}
                 />
                 <MaterialManager
                     materials={data.materials}
                     vendors={data.vendors}
                     onCreate={createMaterial}
-                    onUpdate={async (id, updates) => { await updateMaterial({ id, updates: updates as any }); }}
+                    onUpdate={async (id, updates) => { await updateMaterial({ id, updates }); }}
                     onDelete={async (id) => { await deleteMaterial({ id }); }}
                 />
                 <PurchaseManager
@@ -153,7 +153,7 @@ export default function ManagementPage() {
                     materials={data.materials}
                     employees={data.employees}
                     onCreate={createPurchase}
-                    onUpdate={async (id, updates) => { await updatePurchase({ id, updates: updates as any }); }}
+                    onUpdate={async (id, updates) => { await updatePurchase({ id, updates }); }}
                     onDelete={async (id) => { await deletePurchase({ id }); }}
                 />
             </div>

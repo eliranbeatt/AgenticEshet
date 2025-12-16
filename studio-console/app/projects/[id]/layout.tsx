@@ -6,6 +6,7 @@ import { usePathname, useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Doc, Id } from "../../../convex/_generated/dataModel";
+import { AgentActivityPanel } from "./_components/AgentActivityPanel";
 
 type PlanPhaseMeta = {
     activePlan: { planId: Id<"plans">; version: number; approvedAt: number } | null;
@@ -171,6 +172,7 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
 
             <div className="flex-1 bg-gray-50 p-8 overflow-auto">
                 {children}
+                <AgentActivityPanel projectId={projectId} />
             </div>
         </div>
     );

@@ -148,10 +148,12 @@ export const createRun = internalMutation({
         projectId: v.id("projects"),
         planId: v.id("plans"),
         interactionId: v.string(),
+        agentRunId: v.optional(v.id("agentRuns")),
     },
     handler: async (ctx, args) => {
         return await ctx.db.insert("deepResearchRuns", {
             projectId: args.projectId,
+            agentRunId: args.agentRunId,
             planId: args.planId,
             createdAt: Date.now(),
             createdBy: "user",
@@ -188,9 +190,53 @@ export const getRun = query({
 export const startProject: ReturnType<typeof action> = action({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
+        await ctx.runQuery(internal.agents.deepResearch.getContext, { projectId: args.projectId });
+
+        const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
+            projectId: args.projectId,
+            agent: "deepResearch",
+            stage: "running",
+            initialMessage: "Starting deep research interaction.",
+        });
+
+        await ctx.runMutation(internal.agentRuns.setStatus, {
+            runId: agentRunId,
+            status: "running",
+            stage: "building_prompt",
+        });
+
         const { project, activePlan, sectionData, totals } = await ctx.runQuery(internal.agents.deepResearch.getContext, {
             projectId: args.projectId,
         });
+
+        type SectionDataEntry = {
+            section: { group: string; name: string; description?: string | null };
+            snapshot: {
+                plannedMaterialsCostE: number;
+                plannedWorkCostS: number;
+                plannedDirectCost: number;
+                plannedClientPrice: number;
+            };
+            materials: Array<{
+                category: string;
+                label: string;
+                procurement?: string;
+                description?: string | null;
+                plannedQuantity: number;
+                plannedUnitCost: number;
+                unit: string;
+            }>;
+            work: Array<{
+                workType: string;
+                role: string;
+                rateType: string;
+                plannedQuantity: number;
+                plannedUnitCost: number;
+                description?: string | null;
+            }>;
+        };
+
+        const typedSectionData = sectionData as unknown as SectionDataEntry[];
 
         const currency = project.currency ?? "ILS";
 
@@ -201,7 +247,7 @@ export const startProject: ReturnType<typeof action> = action({
             "",
             "| Group | Item | Planned materials | Planned labor | Planned direct | Planned client price |",
             "|---|---|---:|---:|---:|---:|",
-            ...sectionData.map((s: any) => {
+            ...typedSectionData.map((s) => {
                 const group = escapeTableCell(s.section.group);
                 const name = escapeTableCell(s.section.name);
                 return `| ${group} | ${name} | ${Math.round(s.snapshot.plannedMaterialsCostE).toLocaleString("en-US")} ${currency} | ${Math.round(s.snapshot.plannedWorkCostS).toLocaleString("en-US")} ${currency} | ${Math.round(s.snapshot.plannedDirectCost).toLocaleString("en-US")} ${currency} | ${Math.round(s.snapshot.plannedClientPrice).toLocaleString("en-US")} ${currency} |`;
@@ -211,10 +257,10 @@ export const startProject: ReturnType<typeof action> = action({
         const materialsPlanningMarkdown = [
             "| Group | Item | Category | Label | Procurement | Specs/Description | Qty | Unit | Planned unit cost | Planned total |",
             "|---|---|---|---|---|---|---:|---|---:|---:|",
-            ...sectionData.flatMap((s: any) => {
+            ...typedSectionData.flatMap((s) => {
                 const group = escapeTableCell(s.section.group);
                 const item = escapeTableCell(s.section.name);
-                return s.materials.map((m: any) => {
+                return s.materials.map((m) => {
                     const plannedTotal = m.plannedQuantity * m.plannedUnitCost;
                     const procurement = escapeTableCell(m.procurement ?? "either");
                     return `| ${group} | ${item} | ${escapeTableCell(m.category)} | ${escapeTableCell(m.label)} | ${procurement} | ${escapeTableCell(m.description ?? "")} | ${m.plannedQuantity} | ${escapeTableCell(m.unit)} | ${Math.round(m.plannedUnitCost).toLocaleString("en-US")} ${currency} | ${Math.round(plannedTotal).toLocaleString("en-US")} ${currency} |`;
@@ -225,10 +271,10 @@ export const startProject: ReturnType<typeof action> = action({
         const laborPlanningMarkdown = [
             "| Group | Item | Work type | Role | Rate type | Qty | Planned unit cost | Planned total | Description |",
             "|---|---|---|---|---|---:|---:|---:|---|",
-            ...sectionData.flatMap((s: any) => {
+            ...typedSectionData.flatMap((s) => {
                 const group = escapeTableCell(s.section.group);
                 const item = escapeTableCell(s.section.name);
-                return s.work.map((w: any) => {
+                return s.work.map((w) => {
                     const plannedTotal = w.rateType === "flat" ? w.plannedUnitCost : w.plannedQuantity * w.plannedUnitCost;
                     return `| ${group} | ${item} | ${escapeTableCell(w.workType)} | ${escapeTableCell(w.role)} | ${escapeTableCell(w.rateType)} | ${w.plannedQuantity} | ${Math.round(w.plannedUnitCost).toLocaleString("en-US")} ${currency} | ${Math.round(plannedTotal).toLocaleString("en-US")} ${currency} | ${escapeTableCell(w.description ?? "")} |`;
                 });
@@ -241,11 +287,18 @@ export const startProject: ReturnType<typeof action> = action({
             accountingSummaryMarkdown,
             materialsPlanningMarkdown,
             laborPlanningMarkdown,
-            sections: sectionData.map((s: any) => ({
+            sections: typedSectionData.map((s) => ({
                 group: s.section.group,
                 name: s.section.name,
                 description: s.section.description ?? null,
             })),
+        });
+
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId: agentRunId,
+            level: "info",
+            message: "Submitting prompt to Deep Research provider.",
+            stage: "starting_interaction",
         });
 
         const interaction = await createDeepResearchInteraction({
@@ -260,6 +313,14 @@ export const startProject: ReturnType<typeof action> = action({
             projectId: args.projectId,
             planId: activePlan._id,
             interactionId,
+            agentRunId,
+        });
+
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId: agentRunId,
+            level: "info",
+            message: "Deep research started. Waiting for completion (polling updates status).",
+            stage: "in_progress",
         });
 
         return { runId, interactionId };
@@ -287,6 +348,14 @@ export const pollRun: ReturnType<typeof action> = action({
                     reportJson: JSON.stringify(interaction),
                 },
             });
+
+            if (run.agentRunId) {
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: run.agentRunId,
+                    status: "succeeded",
+                    stage: "done",
+                });
+            }
         } else if (status === "failed") {
             await ctx.runMutation(internal.agents.deepResearch.updateRun, {
                 runId: args.runId,
@@ -297,6 +366,22 @@ export const pollRun: ReturnType<typeof action> = action({
                     reportJson: JSON.stringify(interaction),
                 },
             });
+
+            if (run.agentRunId) {
+                const message = interaction.error ?? "Deep research failed";
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: run.agentRunId,
+                    level: "error",
+                    message,
+                    stage: "failed",
+                });
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: run.agentRunId,
+                    status: "failed",
+                    stage: "failed",
+                    error: message,
+                });
+            }
         } else {
             await ctx.runMutation(internal.agents.deepResearch.updateRun, {
                 runId: args.runId,
@@ -306,6 +391,14 @@ export const pollRun: ReturnType<typeof action> = action({
                     reportJson: JSON.stringify(interaction),
                 },
             });
+
+            if (run.agentRunId) {
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: run.agentRunId,
+                    status: "running",
+                    stage: "in_progress",
+                });
+            }
         }
 
         return { status };

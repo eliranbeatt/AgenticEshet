@@ -2,11 +2,12 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { type Doc } from "@/convex/_generated/dataModel";
 
 export function PriceHistoryTable() {
     // For now, we just show the latest 50 observations globally.
     // In a real app, we'd have filters.
-    const history = useQuery(api.prices.listLatestObservations, { limit: 50 });
+    const history = useQuery(api.prices.listLatestObservations, { limit: 50 }) as Array<Doc<"priceObservations">> | undefined;
 
     if (!history) {
         return <div>Loading price history...</div>;
@@ -34,7 +35,7 @@ export function PriceHistoryTable() {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                        {history.map((obs: any) => (
+                        {history.map((obs) => (
                             <tr key={obs._id} className="hover:bg-gray-50">
                                 <td className="px-3 py-2 font-medium text-gray-900">{obs.rawItemName}</td>
                                 <td className="px-3 py-2 text-gray-700">{obs.vendorName}</td>

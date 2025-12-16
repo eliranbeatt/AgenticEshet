@@ -168,29 +168,91 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
     args: {
         projectId: v.id("projects"),
         replaceExisting: v.optional(v.boolean()),
+        agentRunId: v.optional(v.id("agentRuns")),
     },
     handler: async (ctx, args) => {
-        const { project, activePlan } = await ctx.runQuery(internal.agents.accountingGenerator.getContext, {
-            projectId: args.projectId,
-        });
+        const agentRunId = args.agentRunId;
 
-        const systemPrompt =
-            "You are an expert cost estimator and production accountant for a creative studio. " +
-            "Return structured JSON only that matches the required schema.";
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "running",
+                stage: "loading_context",
+            });
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Loading approved plan for accounting generation.",
+                stage: "loading_context",
+            });
+        }
 
-        const payload = await callChatWithSchema(AccountingFromPlanSchema, {
-            systemPrompt,
-            userPrompt: buildPrompt({ project, planMarkdown: activePlan.contentMarkdown }),
-            temperature: 0.2,
-        });
+        try {
+            const { project, activePlan } = await ctx.runQuery(internal.agents.accountingGenerator.getContext, {
+                projectId: args.projectId,
+            });
 
-        await ctx.runMutation(internal.agents.accountingGenerator.applyGeneratedAccounting, {
-            projectId: args.projectId,
-            payload,
-            replaceExisting: args.replaceExisting ?? true,
-        });
+            const systemPrompt =
+                "You are an expert cost estimator and production accountant for a creative studio. " +
+                "Return structured JSON only that matches the required schema.";
 
-        return { sections: payload.sections.length };
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "info",
+                    message: "Calling model to convert plan into accounting sections and lines.",
+                    stage: "llm_call",
+                });
+            }
+
+            const payload = await callChatWithSchema(AccountingFromPlanSchema, {
+                systemPrompt,
+                userPrompt: buildPrompt({ project, planMarkdown: activePlan.contentMarkdown }),
+                temperature: 0.2,
+            });
+
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "info",
+                    message: `Persisting ${payload.sections.length} accounting sections.`,
+                    stage: "persisting",
+                });
+            }
+
+            await ctx.runMutation(internal.agents.accountingGenerator.applyGeneratedAccounting, {
+                projectId: args.projectId,
+                payload,
+                replaceExisting: args.replaceExisting ?? true,
+            });
+
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: agentRunId,
+                    status: "succeeded",
+                    stage: "done",
+                });
+            }
+
+            return { sections: payload.sections.length };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "error",
+                    message,
+                    stage: "failed",
+                });
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: agentRunId,
+                    status: "failed",
+                    stage: "failed",
+                    error: message,
+                });
+            }
+            throw error;
+        }
     },
 });
 
@@ -200,11 +262,21 @@ export const run: ReturnType<typeof action> = action({
         replaceExisting: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
+        await ctx.runQuery(internal.agents.accountingGenerator.getContext, { projectId: args.projectId });
+
+        const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
+            projectId: args.projectId,
+            agent: "accountingGenerator",
+            stage: "queued",
+            initialMessage: "Queued accounting generation from approved plan.",
+        });
+
         await ctx.scheduler.runAfter(0, internal.agents.accountingGenerator.runInBackground, {
             projectId: args.projectId,
             replaceExisting: args.replaceExisting,
+            agentRunId,
         });
 
-        return { queued: true };
+        return { queued: true, runId: agentRunId };
     },
 });

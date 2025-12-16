@@ -4,6 +4,7 @@ import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { TaskBreakdownSchema } from "../lib/zodSchemas";
 import { Id, type Doc } from "../_generated/dataModel";
+import { queueTaskGeneration } from "../lib/architectTaskGeneration";
 
 // 1. DATA ACCESS
 export const getContext: ReturnType<typeof internalQuery> = internalQuery({
@@ -264,25 +265,52 @@ export const saveTasks = internalMutation({
 export const runInBackground: ReturnType<typeof internalAction> = internalAction({
   args: {
     projectId: v.id("projects"),
+    agentRunId: v.optional(v.id("agentRuns")),
   },
   handler: async (ctx, args) => {
-    const { project, latestPlan, systemPrompt, sections, materialLines, workLines, existingTasks } = await ctx.runQuery(internal.agents.architect.getContext, {
-      projectId: args.projectId,
-    });
+    const agentRunId = args.agentRunId;
 
-    const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
-        projectId: args.projectId,
-        query: latestPlan ? latestPlan.contentMarkdown.slice(0, 800) : project.details.notes || project.name,
-        scope: "both",
-        sourceTypes: ["plan", "task", "quest", "doc_upload"],
-        limit: 8,
-        agentRole: "architect_agent",
-        includeSummaries: true,
-    });
-
-    if (!latestPlan) {
-        throw new Error("No active plan found. Approve a plan before generating tasks.");
+    if (agentRunId) {
+        await ctx.runMutation(internal.agentRuns.setStatus, {
+            runId: agentRunId,
+            status: "running",
+            stage: "loading_context",
+        });
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId: agentRunId,
+            level: "info",
+            message: "Loading project context and plan.",
+            stage: "loading_context",
+        });
     }
+
+    try {
+        const { project, latestPlan, systemPrompt, sections, materialLines, workLines, existingTasks } = await ctx.runQuery(internal.agents.architect.getContext, {
+          projectId: args.projectId,
+        });
+
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Searching knowledge base for relevant context.",
+                stage: "knowledge_search",
+            });
+        }
+
+        const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
+            projectId: args.projectId,
+            query: latestPlan ? latestPlan.contentMarkdown.slice(0, 800) : project.details.notes || project.name,
+            scope: "both",
+            sourceTypes: ["plan", "task", "quest", "doc_upload"],
+            limit: 8,
+            agentRole: "architect_agent",
+            includeSummaries: true,
+        });
+
+        if (!latestPlan) {
+            throw new Error("No active plan found. Approve a plan before generating tasks.");
+        }
 
     const existingTaskSummary = existingTasks.length
         ? existingTasks
@@ -360,10 +388,19 @@ Dependency test checklist (do this before answering):
 
 When relevant, set accountingSectionName to one of the Accounting Sections above so tasks can be grouped and auto-linked. If a specific accounting item applies, set accountingItemType ("material" or "work") and accountingItemLabel exactly as shown in that section list; otherwise set them to null. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge.`;
 
-    const result = await callChatWithSchema(TaskBreakdownSchema, {
-      systemPrompt,
-      userPrompt,
-    });
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Calling model to break down plan into tasks.",
+                stage: "llm_call",
+            });
+        }
+
+        const result = await callChatWithSchema(TaskBreakdownSchema, {
+          systemPrompt,
+          userPrompt,
+        });
 
     const normalizedTasks = result.tasks.map((task) => {
         const accountingSectionName = task.accountingSectionName?.trim();
@@ -376,12 +413,47 @@ When relevant, set accountingSectionName to one of the Accounting Sections above
         };
     });
 
-    await ctx.runMutation(internal.agents.architect.saveTasks, {
-      projectId: args.projectId,
-      tasks: normalizedTasks,
-    });
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: `Saving ${normalizedTasks.length} tasks to the database.`,
+                stage: "persisting",
+            });
+        }
 
-    return result;
+        await ctx.runMutation(internal.agents.architect.saveTasks, {
+          projectId: args.projectId,
+          tasks: normalizedTasks,
+        });
+
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "succeeded",
+                stage: "done",
+            });
+        }
+
+        return result;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "error",
+                message,
+                stage: "failed",
+            });
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "failed",
+                stage: "failed",
+                error: message,
+            });
+        }
+        throw error;
+    }
   },
 });
 
@@ -390,10 +462,6 @@ export const run: ReturnType<typeof action> = action({
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
-    await ctx.scheduler.runAfter(0, internal.agents.architect.runInBackground, {
-        projectId: args.projectId,
-    });
-
-    return { queued: true };
+    return await queueTaskGeneration(ctx, args.projectId);
   },
 });

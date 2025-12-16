@@ -89,7 +89,9 @@ export const saveQuote = internalMutation({
         quoteData.clientDocumentText,
     ].join("\n");
 
-    await ctx.scheduler.runAfter(0, (internal as any).knowledge.ingestArtifact, {
+    const ingestArtifact = (internal as unknown as { knowledge: { ingestArtifact: unknown } }).knowledge.ingestArtifact;
+
+    await ctx.scheduler.runAfter(0, ingestArtifact, {
         projectId: args.projectId,
         sourceType: "quote",
         sourceRefId: `quote-v${version}`,
@@ -119,21 +121,48 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
   args: {
     projectId: v.id("projects"),
     instructions: v.optional(v.string()),
+    agentRunId: v.optional(v.id("agentRuns")),
   },
   handler: async (ctx, args) => {
-    const { project, tasks, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
-      projectId: args.projectId,
-    });
+    const agentRunId = args.agentRunId;
 
-    const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
-        projectId: args.projectId,
-        query: [args.instructions || "", project.clientName, project.details.notes || ""].join("\n"),
-        scope: "both",
-        sourceTypes: ["quote", "task", "doc_upload", "plan"],
-        limit: 8,
-        agentRole: "quote_agent",
-        includeSummaries: true,
-    });
+    if (agentRunId) {
+        await ctx.runMutation(internal.agentRuns.setStatus, {
+            runId: agentRunId,
+            status: "running",
+            stage: "loading_context",
+        });
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId: agentRunId,
+            level: "info",
+            message: "Loading project context and tasks for quoting.",
+            stage: "loading_context",
+        });
+    }
+
+    try {
+        const { project, tasks, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
+          projectId: args.projectId,
+        });
+
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Searching knowledge base for pricing references.",
+                stage: "knowledge_search",
+            });
+        }
+
+        const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
+            projectId: args.projectId,
+            query: [args.instructions || "", project.clientName, project.details.notes || ""].join("\n"),
+            scope: "both",
+            sourceTypes: ["quote", "task", "doc_upload", "plan"],
+            limit: 8,
+            agentRole: "quote_agent",
+            includeSummaries: true,
+        });
 
     const taskSummary = tasks
         .map((task: Doc<"tasks">) => `- ${task.title} [${task.category}/${task.priority}]`)
@@ -163,17 +192,61 @@ User Instructions: ${args.instructions || "Generate initial quote based on known
 
 Always include a currency field (ILS by default) and ensure the internal breakdown matches the total amount.`;
 
-    const result = await callChatWithSchema(QuoteSchema, {
-      systemPrompt,
-      userPrompt,
-    });
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Calling model to generate quote breakdown.",
+                stage: "llm_call",
+            });
+        }
 
-    await ctx.runMutation(internal.agents.quote.saveQuote, {
-      projectId: args.projectId,
-      quoteData: result,
-    });
+        const result = await callChatWithSchema(QuoteSchema, {
+          systemPrompt,
+          userPrompt,
+        });
 
-    return result;
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Saving generated quote.",
+                stage: "persisting",
+            });
+        }
+
+        await ctx.runMutation(internal.agents.quote.saveQuote, {
+          projectId: args.projectId,
+          quoteData: result,
+        });
+
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "succeeded",
+                stage: "done",
+            });
+        }
+
+        return result;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "error",
+                message,
+                stage: "failed",
+            });
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "failed",
+                stage: "failed",
+                error: message,
+            });
+        }
+        throw error;
+    }
   },
 });
 
@@ -184,11 +257,21 @@ export const run: ReturnType<typeof action> = action({
     instructions: v.optional(v.string()), // e.g. "Add travel expenses"
   },
   handler: async (ctx, args) => {
+    await ctx.runQuery(internal.agents.quote.getContext, { projectId: args.projectId });
+
+    const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
+        projectId: args.projectId,
+        agent: "quote",
+        stage: "queued",
+        initialMessage: "Queued quote generation.",
+    });
+
     await ctx.scheduler.runAfter(0, internal.agents.quote.runInBackground, {
         projectId: args.projectId,
         instructions: args.instructions,
+        agentRunId,
     });
 
-    return { queued: true };
+    return { queued: true, runId: agentRunId };
   },
 });

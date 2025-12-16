@@ -10,6 +10,7 @@
 
 import type * as accounting from "../accounting.js";
 import type * as admin from "../admin.js";
+import type * as agentRuns from "../agentRuns.js";
 import type * as agents_accountingFromDeepResearch from "../agents/accountingFromDeepResearch.js";
 import type * as agents_accountingGenerator from "../agents/accountingGenerator.js";
 import type * as agents_architect from "../agents/architect.js";
@@ -29,6 +30,7 @@ import type * as http from "../http.js";
 import type * as inbox from "../inbox.js";
 import type * as ingestion from "../ingestion.js";
 import type * as knowledge from "../knowledge.js";
+import type * as lib_architectTaskGeneration from "../lib/architectTaskGeneration.js";
 import type * as lib_costing from "../lib/costing.js";
 import type * as lib_fileParsers from "../lib/fileParsers.js";
 import type * as lib_gemini from "../lib/gemini.js";
@@ -58,6 +60,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   accounting: typeof accounting;
   admin: typeof admin;
+  agentRuns: typeof agentRuns;
   "agents/accountingFromDeepResearch": typeof agents_accountingFromDeepResearch;
   "agents/accountingGenerator": typeof agents_accountingGenerator;
   "agents/architect": typeof agents_architect;
@@ -77,6 +80,7 @@ declare const fullApi: ApiFromModules<{
   inbox: typeof inbox;
   ingestion: typeof ingestion;
   knowledge: typeof knowledge;
+  "lib/architectTaskGeneration": typeof lib_architectTaskGeneration;
   "lib/costing": typeof lib_costing;
   "lib/fileParsers": typeof lib_fileParsers;
   "lib/gemini": typeof lib_gemini;

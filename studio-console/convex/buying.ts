@@ -37,7 +37,9 @@ export const generateSuggestions = action({
         const history = await ctx.runQuery(api.prices.getHistory, { canonicalItemId, limit: 50 });
 
         // 4. Compute Suggestions
-        const prices = history.map((h: any) => h.unitPrice);
+        const prices = history
+            .map((h) => (h as { unitPrice?: unknown }).unitPrice)
+            .filter((value): value is number => typeof value === "number");
         const stats = calculateStats(prices);
         
         // Group by vendor to find top options

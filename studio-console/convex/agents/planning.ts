@@ -92,7 +92,9 @@ export const saveResult = internalMutation({
       createdAt: Date.now(),
     });
 
-    await ctx.scheduler.runAfter(0, (internal as any).knowledge.ingestArtifact, {
+    const ingestArtifact = (internal as unknown as { knowledge: { ingestArtifact: unknown } }).knowledge.ingestArtifact;
+
+    await ctx.scheduler.runAfter(0, ingestArtifact, {
         projectId: args.projectId,
         sourceType: "plan",
         sourceRefId: planId,
@@ -113,21 +115,48 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
   args: {
     projectId: v.id("projects"),
     userRequest: v.string(),
+    agentRunId: v.optional(v.id("agentRuns")),
   },
   handler: async (ctx, args) => {
-    const { project, systemPrompt, existingPlans, latestClarification, knowledgeDocs: recentUploads } = await ctx.runQuery(internal.agents.planning.getContext, {
-      projectId: args.projectId,
-    });
+    const agentRunId = args.agentRunId;
 
-    const knowledgeResults = await ctx.runAction(api.knowledge.dynamicSearch, {
-        projectId: args.projectId,
-        query: [args.userRequest, project.details.notes || "", project.clientName].join("\n"),
-        scope: "both",
-        sourceTypes: ["plan", "doc_upload", "conversation"],
-        limit: 8,
-        agentRole: "planning_agent",
-        includeSummaries: true,
-    });
+    if (agentRunId) {
+        await ctx.runMutation(internal.agentRuns.setStatus, {
+            runId: agentRunId,
+            status: "running",
+            stage: "loading_context",
+        });
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId: agentRunId,
+            level: "info",
+            message: "Loading project context for planning.",
+            stage: "loading_context",
+        });
+    }
+
+    try {
+        const { project, systemPrompt, existingPlans, latestClarification, knowledgeDocs: recentUploads } = await ctx.runQuery(internal.agents.planning.getContext, {
+          projectId: args.projectId,
+        });
+
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Searching knowledge base for planning context.",
+                stage: "knowledge_search",
+            });
+        }
+
+        const knowledgeResults = await ctx.runAction(api.knowledge.dynamicSearch, {
+            projectId: args.projectId,
+            query: [args.userRequest, project.details.notes || "", project.clientName].join("\n"),
+            scope: "both",
+            sourceTypes: ["plan", "doc_upload", "conversation"],
+            limit: 8,
+            agentRole: "planning_agent",
+            includeSummaries: true,
+        });
 
     const clarificationSection = latestClarification
         ? latestClarification.contentMarkdown.slice(0, 1200)
@@ -174,18 +203,62 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         `User Request: ${args.userRequest}`,
     ].join("\n");
 
-    const result = await callChatWithSchema(PlanSchema, {
-      systemPrompt,
-      userPrompt: context,
-    });
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Calling model to generate plan draft.",
+                stage: "llm_call",
+            });
+        }
 
-    await ctx.runMutation(internal.agents.planning.saveResult, {
-      projectId: args.projectId,
-      userRequest: args.userRequest,
-      planData: result,
-    });
+        const result = await callChatWithSchema(PlanSchema, {
+          systemPrompt,
+          userPrompt: context,
+        });
 
-    return result;
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "info",
+                message: "Saving plan draft.",
+                stage: "persisting",
+            });
+        }
+
+        await ctx.runMutation(internal.agents.planning.saveResult, {
+          projectId: args.projectId,
+          userRequest: args.userRequest,
+          planData: result,
+        });
+
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "succeeded",
+                stage: "done",
+            });
+        }
+
+        return result;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: agentRunId,
+                level: "error",
+                message,
+                stage: "failed",
+            });
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "failed",
+                stage: "failed",
+                error: message,
+            });
+        }
+        throw error;
+    }
   },
 });
 
@@ -196,11 +269,21 @@ export const run: ReturnType<typeof action> = action({
     userRequest: v.string(), // e.g. "Create initial plan" or "Refine timeline"
   },
   handler: async (ctx, args) => {
+    await ctx.runQuery(internal.agents.planning.getContext, { projectId: args.projectId });
+
+    const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
+        projectId: args.projectId,
+        agent: "planning",
+        stage: "queued",
+        initialMessage: "Queued plan generation.",
+    });
+
     await ctx.scheduler.runAfter(0, internal.agents.planning.runInBackground, {
         projectId: args.projectId,
         userRequest: args.userRequest,
+        agentRunId,
     });
 
-    return { queued: true };
+    return { queued: true, runId: agentRunId };
   },
 });

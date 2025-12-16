@@ -167,7 +167,7 @@ export const updateJobStatus = internalMutation({
         errorSummary: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
-        const update: any = { status: args.status };
+        const update: Record<string, unknown> = { status: args.status };
         if (args.stage) update.stage = args.stage;
         if (args.progress) update.progress = args.progress;
         if (args.errorSummary) update.errorSummary = args.errorSummary;
@@ -223,7 +223,7 @@ export const updateFileStatus = internalMutation({
         })),
     },
     handler: async (ctx, args) => {
-        const update: any = { 
+        const update: Record<string, unknown> = { 
             status: args.status,
             stage: args.stage,
             updatedAt: Date.now()

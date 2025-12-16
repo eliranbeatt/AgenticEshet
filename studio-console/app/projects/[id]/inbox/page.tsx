@@ -2,17 +2,17 @@
 
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Id, type Doc } from "@/convex/_generated/dataModel";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
 export default function ProjectInboxPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
-    const inboxItems = useQuery(api.inbox.list, { projectId });
+    const inboxItems = useQuery(api.inbox.list, { projectId }) as Array<Doc<"inboxItems">> | undefined;
     const [selectedItemId, setSelectedItemId] = useState<Id<"inboxItems"> | null>(null);
 
-    const selectedItem = inboxItems?.find((item: any) => item._id === selectedItemId);
+    const selectedItem = inboxItems?.find((item) => item._id === selectedItemId);
 
     return (
         <div className="flex h-full">
@@ -22,7 +22,7 @@ export default function ProjectInboxPage() {
                     <h2 className="text-lg font-semibold">Inbox</h2>
                 </div>
                 <div className="divide-y divide-gray-200">
-                    {inboxItems?.map((item: any) => (
+                    {inboxItems?.map((item) => (
                         <div 
                             key={item._id} 
                             onClick={() => setSelectedItemId(item._id)}
@@ -68,7 +68,7 @@ export default function ProjectInboxPage() {
     );
 }
 
-function InboxItemDetail({ item }: { item: any }) {
+function InboxItemDetail({ item }: { item: Doc<"inboxItems"> }) {
     const acceptSuggestions = useMutation(api.inbox.acceptSuggestions);
     const [accepting, setAccepting] = useState(false);
 
@@ -105,7 +105,7 @@ function InboxItemDetail({ item }: { item: any }) {
                     <div className="mt-4">
                         <h4 className="text-sm font-medium mb-2">Attachments</h4>
                         <div className="flex gap-2 flex-wrap">
-                            {item.attachments.map((att: any, i: number) => (
+                            {item.attachments.map((att, i: number) => (
                                 <div key={i} className="border rounded px-3 py-2 text-sm bg-white flex items-center gap-2">
                                     <span className="text-gray-500">📎</span>
                                     {att.name}
@@ -128,7 +128,7 @@ function InboxItemDetail({ item }: { item: any }) {
                     <div className="mb-6">
                         <h4 className="text-sm font-medium text-gray-700 mb-2 uppercase tracking-wide">Suggested Tasks</h4>
                         <div className="space-y-3">
-                            {item.suggestions.tasksDraft.map((task: any, i: number) => (
+                            {item.suggestions.tasksDraft.map((task, i: number) => (
                                 <div key={i} className="border border-blue-100 bg-blue-50 rounded-lg p-4">
                                     <div className="flex justify-between items-start">
                                         <div>

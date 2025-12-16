@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Id, type Doc } from "@/convex/_generated/dataModel";
 import { useParams } from "next/navigation";
 import UploadComponent from "../_components/UploadComponent";
 import Link from "next/link";
@@ -11,8 +11,8 @@ export default function JobDetailsPage() {
     const params = useParams();
     const jobId = params.jobId as Id<"ingestionJobs">;
     
-    const job = useQuery(api.ingestion.getJob, { jobId });
-    const files = useQuery(api.ingestion.listFiles, { jobId });
+    const job = useQuery(api.ingestion.getJob, { jobId }) as Doc<"ingestionJobs"> | null | undefined;
+    const files = useQuery(api.ingestion.listFiles, { jobId }) as Array<Doc<"ingestionFiles">> | undefined;
     
     const runJob = useAction(api.ingestion.runJob);
     const retryJob = useMutation(api.ingestion.retryJob);
@@ -130,7 +130,7 @@ export default function JobDetailsPage() {
                         </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                        {files?.map((file: any) => (
+                        {files?.map((file) => (
                             <tr key={file._id}>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                                     {file.originalFilename}

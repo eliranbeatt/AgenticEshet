@@ -312,6 +312,7 @@ export default defineSchema({
     // 7b. DEEP RESEARCH RUNS (Gemini Deep Research outputs)
     deepResearchRuns: defineTable({
         projectId: v.id("projects"),
+        agentRunId: v.optional(v.id("agentRuns")),
         planId: v.optional(v.id("plans")),
         createdAt: v.number(),
         createdBy: v.string(),
@@ -323,7 +324,35 @@ export default defineSchema({
         error: v.optional(v.string()),
     })
         .index("by_project", ["projectId"])
+        .index("by_agentRunId", ["agentRunId"])
         .index("by_project_createdAt", ["projectId", "createdAt"]),
+
+    // 7c. AGENT RUNS (UI live feedback)
+    agentRuns: defineTable({
+        projectId: v.id("projects"),
+        agent: v.string(),
+        status: v.union(
+            v.literal("queued"),
+            v.literal("running"),
+            v.literal("succeeded"),
+            v.literal("failed")
+        ),
+        stage: v.optional(v.string()),
+        error: v.optional(v.string()),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+        startedAt: v.optional(v.number()),
+        finishedAt: v.optional(v.number()),
+        events: v.array(v.object({
+            ts: v.number(),
+            level: v.union(v.literal("info"), v.literal("warn"), v.literal("error")),
+            message: v.string(),
+            stage: v.optional(v.string()),
+        })),
+    })
+        .index("by_project_createdAt", ["projectId", "createdAt"])
+        .index("by_project_agent_createdAt", ["projectId", "agent", "createdAt"])
+        .index("by_project_status_createdAt", ["projectId", "status", "createdAt"]),
 
     // 8. CONVERSATIONS: for logging agent runs
     conversations: defineTable({

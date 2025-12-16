@@ -6,7 +6,7 @@ import type { ActionCtx } from "./_generated/server";
 
 type SourceType = "doc_upload" | "plan" | "conversation" | "task" | "quest" | "quote" | "system_note";
 
-const ingestArtifact = (internal as any).knowledge.ingestArtifact;
+const ingestArtifact = (internal as unknown as { knowledge: { ingestArtifact: unknown } }).knowledge.ingestArtifact;
 
 async function alreadyIngested(ctx: ActionCtx, sourceType: SourceType, sourceRefId: string) {
     const existing = await ctx.runQuery(internal.knowledge.findBySourceRef, { sourceType, sourceRefId });

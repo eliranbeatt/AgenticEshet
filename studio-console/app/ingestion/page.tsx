@@ -2,12 +2,13 @@
 
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { type Doc } from "@/convex/_generated/dataModel";
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 export default function IngestionPage() {
-    const jobs = useQuery(api.ingestion.listJobs, {});
+    const jobs = useQuery(api.ingestion.listJobs, {}) as Array<Doc<"ingestionJobs">> | undefined;
     const createJob = useMutation(api.ingestion.createJob);
     const router = useRouter();
     const [isCreating, setIsCreating] = useState(false);
@@ -61,7 +62,7 @@ export default function IngestionPage() {
                         </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                        {jobs?.map((job: any) => (
+                        {jobs?.map((job) => (
                             <tr key={job._id}>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <Link href={`/ingestion/${job._id}`} className="text-blue-600 hover:underline font-medium">

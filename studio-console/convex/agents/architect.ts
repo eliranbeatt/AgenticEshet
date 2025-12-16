@@ -211,8 +211,6 @@ export const saveTasks = internalMutation({
                 estimatedDuration: t.estimatedDuration,
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
-            }); createdAt: Date.now(),
-                updatedAt: Date.now(),
             });
             existingByTitle.set(normalizedTitle, { id: taskId, source: "agent" });
         } else {

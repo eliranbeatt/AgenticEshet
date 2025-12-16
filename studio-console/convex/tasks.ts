@@ -147,3 +147,17 @@ export const deleteTask = mutation({
         await ctx.db.delete(args.taskId);
     },
 });
+
+export const clearTasks = mutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const tasks = await ctx.db
+            .query("tasks")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+        
+        for (const task of tasks) {
+            await ctx.db.delete(task._id);
+        }
+    },
+});

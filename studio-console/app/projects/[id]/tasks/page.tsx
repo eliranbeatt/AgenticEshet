@@ -64,6 +64,7 @@ export default function TasksPage() {
     const updateTask = useMutation(api.tasks.updateTask);
     const createTask = useMutation(api.tasks.createTask);
     const deleteTask = useMutation(api.tasks.deleteTask);
+    const clearTasks = useMutation(api.tasks.clearTasks);
     const ensureTaskNumbers = useMutation(api.tasks.ensureTaskNumbers);
 
     const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -190,6 +191,21 @@ export default function TasksPage() {
         }
     };
 
+    const handleRegenerate = async () => {
+        if (!confirm("Are you sure you want to delete all tasks and regenerate them? This cannot be undone.")) return;
+        setIsGenerating(true);
+        try {
+            await clearTasks({ projectId });
+            await runArchitect({ projectId });
+            alert("Tasks cleared and regeneration started. New tasks will appear shortly.");
+        } catch (err) {
+            console.error(err);
+            alert("Failed to regenerate tasks.");
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
     const handleCreateManual = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newTaskTitle.trim()) return;
@@ -244,6 +260,14 @@ export default function TasksPage() {
                     className="bg-purple-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center gap-2"
                 >
                     {isGenerating ? "Thinking..." : "Auto-Generate from Plan"}
+                </button>
+
+                <button
+                    onClick={handleRegenerate}
+                    disabled={isGenerating}
+                    className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+                >
+                    {isGenerating ? "Thinking..." : "Regenerate (Clear & New)"}
                 </button>
             </div>
 

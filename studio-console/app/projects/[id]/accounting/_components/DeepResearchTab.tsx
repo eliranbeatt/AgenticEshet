@@ -100,7 +100,9 @@ function normalizeDeepResearchMarkdown(markdown: string): string {
 }
 
 export default function DeepResearchTab({ projectId }: { projectId: Id<"projects"> }) {
-    const runs = useQuery(api.deepResearch.listByProject, { projectId });
+    const runs = useQuery(api.deepResearch.listByProject, { projectId }) as
+        | Array<Doc<"deepResearchRuns">>
+        | undefined;
     const pollRun = useAction(api.agents.deepResearch.pollRun);
     const applyToAccounting = useAction(api.agents.accountingFromDeepResearch.run);
     const [selectedId, setSelectedId] = useState<Id<"deepResearchRuns"> | null>(null);

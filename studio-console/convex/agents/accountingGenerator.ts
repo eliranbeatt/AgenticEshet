@@ -164,7 +164,7 @@ export const applyGeneratedAccounting = internalMutation({
     },
 });
 
-export const runInBackground = internalAction({
+export const runInBackground: ReturnType<typeof internalAction> = internalAction({
     args: {
         projectId: v.id("projects"),
         replaceExisting: v.optional(v.boolean()),

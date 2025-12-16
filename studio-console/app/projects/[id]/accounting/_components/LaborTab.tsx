@@ -120,7 +120,9 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
                                         <WorkRow 
                                             key={w._id} 
                                             line={w} 
-                                            update={updateWorkLine} 
+                                            update={async (args) => {
+                                                await updateWorkLine(args);
+                                            }}
                                             onDelete={() => handleDeleteLine(w._id)}
                                         />
                                     ))}

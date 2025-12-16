@@ -159,7 +159,7 @@ export const applyGeneratedAccounting = internalMutation({
     },
 });
 
-export const runInBackground = internalAction({
+export const runInBackground: ReturnType<typeof internalAction> = internalAction({
     args: {
         projectId: v.id("projects"),
         runId: v.id("deepResearchRuns"),
@@ -180,7 +180,7 @@ export const runInBackground = internalAction({
             userPrompt: buildPrompt({
                 projectName: project.name,
                 clientName: project.clientName,
-                deepResearchMarkdown: run.reportMarkdown,
+                deepResearchMarkdown: run.reportMarkdown ?? "",
             }),
             temperature: 0.2,
         });

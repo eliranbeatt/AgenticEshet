@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useEffect, useMemo, useState } from "react";
 
 type DriveConfigResponse = {
@@ -43,7 +43,7 @@ export default function ConnectorsPage() {
 
     const selectedProject = useMemo(() => {
         if (!projectId || !projects) return null;
-        return projects.find((p) => p._id === projectId) ?? null;
+        return projects.find((p: Doc<"projects">) => p._id === projectId) ?? null;
     }, [projectId, projects]);
 
     useEffect(() => {
@@ -51,8 +51,9 @@ export default function ConnectorsPage() {
         const params = new URLSearchParams(window.location.search);
         const incoming = params.get("projectId");
         if (!incoming) return;
-        const exists = projects.some((p) => p._id === incoming);
-        if (exists) setProjectId(incoming as Id<"projects">);
+        const incomingId = incoming as Id<"projects">;
+        const exists = projects.some((p: Doc<"projects">) => p._id === incomingId);
+        if (exists) setProjectId(incomingId);
     }, [projects]);
 
     useEffect(() => {
@@ -251,7 +252,7 @@ export default function ConnectorsPage() {
                             className="w-full border border-gray-300 rounded px-3 py-2"
                         >
                             <option value="">Select a project...</option>
-                            {projects?.map((p) => (
+                            {projects?.map((p: Doc<"projects">) => (
                                 <option key={p._id} value={p._id}>
                                     {p.name} ({p.clientName})
                                 </option>
@@ -338,7 +339,7 @@ export default function ConnectorsPage() {
                                 <div className="text-xs text-gray-500">No watched folders yet.</div>
                             ) : (
                                 <div className="space-y-2">
-                                    {watches.map((w) => (
+                                    {watches.map((w: Doc<"connectorWatches">) => (
                                         <div key={w._id} className="border border-gray-200 rounded p-3">
                                             <div className="flex items-center justify-between">
                                                 <div className="text-sm font-medium text-gray-900">{w.name}</div>

@@ -232,8 +232,12 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
                     key={item.section._id}
                     item={item}
                     formatMoney={formatMoney}
-                    onUpdate={updateSection}
-                    onDelete={deleteSection}
+                    onUpdate={async (args) => {
+                        await updateSection(args);
+                    }}
+                    onDelete={async (args) => {
+                        await deleteSection(args);
+                    }}
                 />
             ))}
             {/* Totals Row */}

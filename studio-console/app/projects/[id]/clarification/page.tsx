@@ -25,7 +25,11 @@ export default function ClarificationPage() {
     const saveClarificationDoc = useMutation(api.clarificationDocs.save);
     const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
     const plans = useQuery(api.projects.getPlans, { projectId });
-    const transcript = useQuery(api.conversations.recentByPhase, { projectId, phase: "clarification", limit: 10 });
+    const transcript = useQuery(api.conversations.recentByPhase, {
+        projectId,
+        phase: "clarification",
+        limit: 10,
+    }) as Array<Doc<"conversations">> | undefined;
     const clarificationDoc = useQuery(api.clarificationDocs.getLatest, { projectId });
     
     const [messages, setMessages] = useState<Message[]>([]);

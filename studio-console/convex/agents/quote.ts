@@ -115,7 +115,7 @@ export const listQuotes = query({
     }
 });
 
-export const runInBackground = internalAction({
+export const runInBackground: ReturnType<typeof internalAction> = internalAction({
   args: {
     projectId: v.id("projects"),
     instructions: v.optional(v.string()),

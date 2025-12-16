@@ -142,7 +142,7 @@ export const saveResult = internalMutation({
 });
 
 // 3. AGENT ACTION: Main entry point
-export const runInBackground = internalAction({
+export const runInBackground: ReturnType<typeof internalAction> = internalAction({
   args: {
     projectId: v.id("projects"),
     conversationId: v.id("conversations"),

@@ -19,7 +19,7 @@ type ChatParams = {
 type ResponseTextFormat =
     | { type: "text" }
     | { type: "json_object" }
-    | { type: "json_schema"; name: string; schema: unknown; strict: true };
+    | { type: "json_schema"; name: string; schema: Record<string, unknown>; strict: true };
 
 const GLOBAL_LANGUAGE_INSTRUCTIONS = [
     "Language requirement:",
@@ -70,7 +70,7 @@ function buildJsonSchemaFormat(schema: z.ZodSchema<unknown>, name: string) {
     return {
         type: "json_schema" as const,
         name,
-        schema: z.toJSONSchema(schema),
+        schema: z.toJSONSchema(schema) as Record<string, unknown>,
         strict: true,
     } satisfies ResponseTextFormat;
 }

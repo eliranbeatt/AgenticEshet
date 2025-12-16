@@ -107,7 +107,7 @@ export const saveEstimation = internalMutation({
     },
 });
 
-export const runInBackground = internalAction({
+export const runInBackground: ReturnType<typeof internalAction> = internalAction({
     args: {
         projectId: v.id("projects"),
         sectionId: v.id("sections"),
@@ -117,7 +117,7 @@ export const runInBackground = internalAction({
     },
 });
 
-export const estimateProjectInBackground = internalAction({
+export const estimateProjectInBackground: ReturnType<typeof internalAction> = internalAction({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
         const accounting = await ctx.runQuery(api.accounting.getProjectAccounting, { projectId: args.projectId });

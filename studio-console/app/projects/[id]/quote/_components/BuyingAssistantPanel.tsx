@@ -22,8 +22,24 @@ type SuggestionOption = {
     confidence: string;
 };
 
+type SuggestionCitation = {
+    title: string;
+    url: string;
+    snippet?: string;
+};
+
+type SuggestionsResponse = {
+    summary: string;
+    source: string;
+    options: SuggestionOption[];
+    citations?: SuggestionCitation[];
+};
+
 export function BuyingAssistantPanel({ materialLineId, label }: BuyingAssistantPanelProps) {
-    const suggestions = useQuery(api.buying.getSuggestions, { materialLineId });
+    const suggestions = useQuery(api.buying.getSuggestions, { materialLineId }) as
+        | SuggestionsResponse
+        | null
+        | undefined;
     const materialLine = useQuery(api.buying.getMaterialLineContext, { materialLineId });
     const generateSuggestions = useAction(api.buying.generateSuggestions);
     const startResearch = useAction(api.research.startOnlineResearch);
@@ -219,7 +235,7 @@ export function BuyingAssistantPanel({ materialLineId, label }: BuyingAssistantP
                         <div className="text-xs text-gray-500 italic">No historical data found.</div>
                     )}
 
-                    {suggestions.citations?.length > 0 && (
+                    {suggestions.citations && suggestions.citations.length > 0 && (
                         <div className="mt-3">
                             <div className="text-xs font-medium text-gray-700 mb-1">Citations</div>
                             <ul className="space-y-1">

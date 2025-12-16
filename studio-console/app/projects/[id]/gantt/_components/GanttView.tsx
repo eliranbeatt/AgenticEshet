@@ -1,18 +1,29 @@
 "use client";
 
 import React, { useState, useMemo, useCallback } from "react";
-import { Gantt, Task, ViewMode, OnDateChange } from "gantt-task-react";
+import { Gantt, Task, ViewMode } from "gantt-task-react";
 import "gantt-task-react/dist/index.css";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import { useParams } from "next/navigation";
-import { addDays, startOfDay } from "date-fns";
+
+function startOfDay(date: Date): Date {
+    const normalized = new Date(date);
+    normalized.setHours(0, 0, 0, 0);
+    return normalized;
+}
+
+function addDays(date: Date, amount: number): Date {
+    const shifted = new Date(date);
+    shifted.setDate(shifted.getDate() + amount);
+    return shifted;
+}
 
 export default function GanttView() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
-    const tasks = useQuery(api.tasks.listByProject, { projectId });
+    const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
     const updateTask = useMutation(api.tasks.updateTask);
 
     const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Day);
@@ -47,8 +58,8 @@ export default function GanttView() {
         });
     }, [tasks]);
 
-    const handleTaskChange = useCallback<OnDateChange>(
-        async (task) => {
+    const handleTaskChange = useCallback(
+        async (task: Task) => {
             const newStart = task.start.getTime();
             const newEnd = task.end.getTime();
             

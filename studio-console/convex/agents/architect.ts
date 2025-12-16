@@ -261,7 +261,7 @@ export const saveTasks = internalMutation({
 });
 
 // 2. AGENT ACTION
-export const runInBackground = internalAction({
+export const runInBackground: ReturnType<typeof internalAction> = internalAction({
   args: {
     projectId: v.id("projects"),
   },

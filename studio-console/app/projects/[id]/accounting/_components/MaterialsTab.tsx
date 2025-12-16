@@ -135,7 +135,9 @@ export default function MaterialsTab({ data, projectId }: { data: ProjectAccount
                                         <MaterialRow 
                                             key={m._id} 
                                             line={m} 
-                                            update={updateMaterialLine} 
+                                            update={async (args) => {
+                                                await updateMaterialLine(args);
+                                            }}
                                             onSaveCatalog={() => handleSaveToCatalog(m)}
                                             onDelete={() => handleDeleteLine(m._id)}
                                         />

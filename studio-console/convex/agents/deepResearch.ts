@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery, query } from "../_generated/server";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { Doc } from "../_generated/dataModel";
 import { calculateSectionSnapshot, getProjectPricingDefaults } from "../lib/costing";
 import { createDeepResearchInteraction, getInteraction } from "../lib/geminiInteractions";
@@ -201,7 +201,7 @@ export const startProject: ReturnType<typeof action> = action({
             "",
             "| Group | Item | Planned materials | Planned labor | Planned direct | Planned client price |",
             "|---|---|---:|---:|---:|---:|",
-            ...sectionData.map((s) => {
+            ...sectionData.map((s: any) => {
                 const group = escapeTableCell(s.section.group);
                 const name = escapeTableCell(s.section.name);
                 return `| ${group} | ${name} | ${Math.round(s.snapshot.plannedMaterialsCostE).toLocaleString("en-US")} ${currency} | ${Math.round(s.snapshot.plannedWorkCostS).toLocaleString("en-US")} ${currency} | ${Math.round(s.snapshot.plannedDirectCost).toLocaleString("en-US")} ${currency} | ${Math.round(s.snapshot.plannedClientPrice).toLocaleString("en-US")} ${currency} |`;
@@ -211,10 +211,10 @@ export const startProject: ReturnType<typeof action> = action({
         const materialsPlanningMarkdown = [
             "| Group | Item | Category | Label | Procurement | Specs/Description | Qty | Unit | Planned unit cost | Planned total |",
             "|---|---|---|---|---|---|---:|---|---:|---:|",
-            ...sectionData.flatMap((s) => {
+            ...sectionData.flatMap((s: any) => {
                 const group = escapeTableCell(s.section.group);
                 const item = escapeTableCell(s.section.name);
-                return s.materials.map((m) => {
+                return s.materials.map((m: any) => {
                     const plannedTotal = m.plannedQuantity * m.plannedUnitCost;
                     const procurement = escapeTableCell(m.procurement ?? "either");
                     return `| ${group} | ${item} | ${escapeTableCell(m.category)} | ${escapeTableCell(m.label)} | ${procurement} | ${escapeTableCell(m.description ?? "")} | ${m.plannedQuantity} | ${escapeTableCell(m.unit)} | ${Math.round(m.plannedUnitCost).toLocaleString("en-US")} ${currency} | ${Math.round(plannedTotal).toLocaleString("en-US")} ${currency} |`;
@@ -225,10 +225,10 @@ export const startProject: ReturnType<typeof action> = action({
         const laborPlanningMarkdown = [
             "| Group | Item | Work type | Role | Rate type | Qty | Planned unit cost | Planned total | Description |",
             "|---|---|---|---|---|---:|---:|---:|---|",
-            ...sectionData.flatMap((s) => {
+            ...sectionData.flatMap((s: any) => {
                 const group = escapeTableCell(s.section.group);
                 const item = escapeTableCell(s.section.name);
-                return s.work.map((w) => {
+                return s.work.map((w: any) => {
                     const plannedTotal = w.rateType === "flat" ? w.plannedUnitCost : w.plannedQuantity * w.plannedUnitCost;
                     return `| ${group} | ${item} | ${escapeTableCell(w.workType)} | ${escapeTableCell(w.role)} | ${escapeTableCell(w.rateType)} | ${w.plannedQuantity} | ${Math.round(w.plannedUnitCost).toLocaleString("en-US")} ${currency} | ${Math.round(plannedTotal).toLocaleString("en-US")} ${currency} | ${escapeTableCell(w.description ?? "")} |`;
                 });
@@ -241,7 +241,7 @@ export const startProject: ReturnType<typeof action> = action({
             accountingSummaryMarkdown,
             materialsPlanningMarkdown,
             laborPlanningMarkdown,
-            sections: sectionData.map((s) => ({
+            sections: sectionData.map((s: any) => ({
                 group: s.section.group,
                 name: s.section.name,
                 description: s.section.description ?? null,
@@ -269,7 +269,7 @@ export const startProject: ReturnType<typeof action> = action({
 export const pollRun: ReturnType<typeof action> = action({
     args: { runId: v.id("deepResearchRuns") },
     handler: async (ctx, args) => {
-        const run = await ctx.runQuery(internal.agents.deepResearch.getRun, { runId: args.runId });
+        const run = await ctx.runQuery(api.agents.deepResearch.getRun, { runId: args.runId });
         if (!run) throw new Error("Run not found");
         if (!run.interactionId) throw new Error("Run has no interactionId");
 

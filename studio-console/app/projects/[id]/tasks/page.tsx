@@ -58,7 +58,7 @@ export default function TasksPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
 
-    const tasks = useQuery(api.tasks.listByProject, { projectId });
+    const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
     const accountingData = useQuery(api.accounting.getProjectAccounting, { projectId });
     const runArchitect = useAction(api.agents.architect.run);
     const updateTask = useMutation(api.tasks.updateTask);

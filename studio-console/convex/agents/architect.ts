@@ -77,8 +77,8 @@ export const saveTasks = internalMutation({
             accountingSectionName: v.optional(v.union(v.string(), v.null())),
             accountingItemLabel: v.optional(v.union(v.string(), v.null())),
             accountingItemType: v.optional(v.union(v.literal("material"), v.literal("work"), v.null())),
-            dependencies: v.optional(v.array(v.number())),
-            estimatedHours: v.optional(v.number()),
+            dependencies: v.array(v.number()),
+            estimatedHours: v.number(),
         })),
     },
     handler: async (ctx, args) => {
@@ -376,11 +376,14 @@ ${knowledgeSummary}
 
 Task: Break down this plan into actionable, atomic tasks. Focus on the immediate next steps implied by the plan.
 
-Dependencies (critical):
-- Assign dependencies for each task using the 1-based index of tasks in your own output list.
-- A dependency means: this task cannot start until the dependency task is DONE.
-- Only reference earlier tasks (dependencies must be < current task index). If you realize an ordering issue, reorder tasks so dependencies point backwards.
-- Use [] when a task can start immediately.
+REQUIRED: Dependencies & Estimations
+1. **Dependencies**: You MUST assign dependencies for each task using the 1-based index. A task cannot start until its dependencies are DONE. Use [] if it can start immediately. Reference ONLY earlier tasks (no forward references).
+2. **Estimation**: You MUST provide 'estimatedHours' for every task. Be realistic. 
+   - 1 hour = minor task
+   - 4 hours = half day
+   - 8 hours = full day
+   - 40 hours = full week
+   This is critical for the Gantt chart.
 
 Dependency test checklist (do this before answering):
 1) For each task, ask: does it require an approved plan, selected vendor, booked date/location, completed asset list, or delivered inputs from another task? If yes, add that prerequisite task index.

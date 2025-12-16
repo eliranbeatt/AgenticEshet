@@ -62,6 +62,9 @@ export const createTask = mutation({
         accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
         source: v.optional(v.union(v.literal("user"), v.literal("agent"))),
+        // Gantt fields
+        estimatedDuration: v.optional(v.number()), // in milliseconds
+        dependencies: v.optional(v.array(v.id("tasks"))),
     },
     handler: async (ctx, args) => {
         const existingTasks = await ctx.db
@@ -87,6 +90,8 @@ export const createTask = mutation({
             accountingLineId: args.accountingLineId,
             source: args.source ?? "user",
             taskNumber,
+            estimatedDuration: args.estimatedDuration,
+            dependencies: args.dependencies,
             createdAt: Date.now(),
             updatedAt: Date.now(),
         });
@@ -126,7 +131,7 @@ export const updateTask = mutation({
         accountingSectionId: v.optional(v.id("sections")),
         accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
-        
+
         // Gantt fields
         startDate: v.optional(v.number()),
         endDate: v.optional(v.number()),
@@ -155,7 +160,7 @@ export const clearTasks = mutation({
             .query("tasks")
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
             .collect();
-        
+
         for (const task of tasks) {
             await ctx.db.delete(task._id);
         }

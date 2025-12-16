@@ -10,8 +10,8 @@ export const TaskBreakdownSchema = z.object({
         accountingSectionName: z.string().nullable().describe("Accounting section label to link this task to (null if none)"),
         accountingItemLabel: z.string().nullable().describe("Accounting item label/role within that section (null if none)"),
         accountingItemType: z.enum(["material", "work"]).nullable().describe("Accounting item type (null if none)"),
-        estimatedHours: z.number().optional().describe("Estimated time to complete this task in hours. E.g. 4 for half a day, 24 for 3 days (assuming 8h work days)."),
-        dependencies: z.array(z.number()).default([]).describe("List of task indices (1-based) that this task depends on. Only reference tasks from this list that appear BEFORE this task. Use [] if it can start immediately."),
+        estimatedHours: z.number().describe("Estimated time to complete this task in hours. E.g. 4 for half a day, 24 for 3 days (assuming 8h work days). Required."),
+        dependencies: z.array(z.number()).describe("List of task indices (1-based) that this task depends on. You MUST provide this array. Only reference tasks from this list that appear BEFORE this task. Use [] if it can start immediately."),
     })),
 });
 

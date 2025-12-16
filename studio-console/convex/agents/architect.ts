@@ -77,6 +77,7 @@ export const saveTasks = internalMutation({
         accountingItemLabel: v.optional(v.union(v.string(), v.null())),
         accountingItemType: v.optional(v.union(v.literal("material"), v.literal("work"), v.null())),
         dependencies: v.optional(v.array(v.number())),
+        estimatedHours: v.optional(v.number()),
     })),
   },
   handler: async (ctx, args) => {
@@ -86,6 +87,7 @@ export const saveTasks = internalMutation({
         accountingSectionName: t.accountingSectionName ?? undefined,
         accountingItemLabel: t.accountingItemLabel ?? undefined,
         accountingItemType: t.accountingItemType ?? undefined,
+        estimatedDuration: t.estimatedHours ? t.estimatedHours * 60 * 60 * 1000 : undefined,
     }));
 
     const existingTasks = await ctx.db
@@ -202,13 +204,14 @@ export const saveTasks = internalMutation({
                 description: t.description,
                 category: t.category,
                 priority: t.priority,
-                accountingSectionId: sectionId,
-                accountingLineType,
                 accountingLineId,
                 status: "todo",
                 source: "agent",
                 taskNumber: currentTaskNumber,
+                estimatedDuration: t.estimatedDuration,
                 createdAt: Date.now(),
+                updatedAt: Date.now(),
+            }); createdAt: Date.now(),
                 updatedAt: Date.now(),
             });
             existingByTitle.set(normalizedTitle, { id: taskId, source: "agent" });

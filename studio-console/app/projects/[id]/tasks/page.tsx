@@ -410,6 +410,12 @@ function TaskCard({
         ? "Requires: " + task.dependencies.map(id => "#" + (taskNumberById.get(id) ?? "?")).join(", ")
         : null;
 
+    const durationText = task.estimatedDuration
+        ? task.estimatedDuration >= 86400000
+            ? `${(task.estimatedDuration / 86400000).toFixed(1)} days`
+            : `${(task.estimatedDuration / 3600000).toFixed(1)} hours`
+        : null;
+
     return (
         <div ref={setNodeRef} style={style} className="bg-white p-3 rounded shadow-sm border hover:shadow-md transition group relative">
             <div className="flex justify-between items-center mb-2">
@@ -439,13 +445,14 @@ function TaskCard({
             </div>
 
             <p className="text-sm font-medium text-gray-800 mb-1">{task.title}</p>
-            {task.description && <p className="text-xs text-gray-500 line-clamp-2 mb-2 whitespace-pre-line">{task.description}</p>}
-
-            {dependencyText && (
-                <p className="text-xs text-red-600 font-medium mb-2">{dependencyText}</p>
-            )}
-
             <div className="flex flex-wrap gap-2 text-[11px] text-gray-500 mb-2">
+                <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.priority} priority</span>
+                {durationText && <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">{durationText}</span>}
+                <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.source === "agent" ? "AI generated" : "User task"}</span>
+                <span className="px-2 py-0.5 rounded-full bg-gray-50">
+                    {accountingChipLabel}
+                </span>
+            </div>lassName="flex flex-wrap gap-2 text-[11px] text-gray-500 mb-2">
                 <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.priority} priority</span>
                 <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.source === "agent" ? "AI generated" : "User task"}</span>
                 <span className="px-2 py-0.5 rounded-full bg-gray-50">

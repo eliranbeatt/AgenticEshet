@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const TaskBreakdownSchema = z.object({
-    logic: z.string().describe("Reasoning for why these tasks are needed"),
+    logic: z.string().optional().describe("Reasoning for why these tasks are needed"),
     tasks: z.array(z.object({
         title: z.string(),
         description: z.string(),
@@ -40,23 +40,23 @@ export const QuoteSchema = z.object({
 });
 
 export const EstimationSchema = z.object({
-  materials: z.array(z.object({
-    category: z.string(),
-    label: z.string(),
-    unit: z.string(),
-    quantity: z.number(),
-    unitCost: z.number(),
-    vendor: z.optional(z.string().nullable()),
-    description: z.optional(z.string().nullable())
-  })),
-  work: z.array(z.object({
-    workType: z.string(), // studio, field, management
-    role: z.string(),
-    rateType: z.string(), // day, hour, flat
-    quantity: z.number(),
-    unitCost: z.number(),
-    description: z.optional(z.string().nullable())
-  }))
+    materials: z.array(z.object({
+        category: z.string(),
+        label: z.string(),
+        unit: z.string(),
+        quantity: z.number(),
+        unitCost: z.number(),
+        vendor: z.optional(z.string().nullable()),
+        description: z.optional(z.string().nullable())
+    })),
+    work: z.array(z.object({
+        workType: z.string(), // studio, field, management
+        role: z.string(),
+        rateType: z.string(), // day, hour, flat
+        quantity: z.number(),
+        unitCost: z.number(),
+        description: z.optional(z.string().nullable())
+    }))
 });
 
 export const EnhancerSchema = z.object({

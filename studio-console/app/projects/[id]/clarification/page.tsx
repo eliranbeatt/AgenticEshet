@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
+import { useThinkingMode } from "../../../ThinkingModeContext";
 
 type Message = {
     role: "user" | "assistant" | "system";
@@ -20,6 +21,7 @@ type AnalysisResult = {
 export default function ClarificationPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
+    const { thinkingMode } = useThinkingMode();
     
     const runClarification = useAction(api.agents.clarification.run);
     const saveClarificationDoc = useMutation(api.clarificationDocs.save);
@@ -88,6 +90,7 @@ export default function ClarificationPage() {
             const response = await runClarification({
                 projectId,
                 chatHistory: newMessages,
+                thinkingMode,
             });
             setActiveConversationId((response as { conversationId?: Id<"conversations"> }).conversationId ?? null);
         } catch (err) {

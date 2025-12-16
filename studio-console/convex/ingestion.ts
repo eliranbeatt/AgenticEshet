@@ -250,7 +250,7 @@ export const updateFileStatus = internalMutation({
 // --- Actions ---
 
 export const runJob = action({
-    args: { jobId: v.id("ingestionJobs") },
+    args: { jobId: v.id("ingestionJobs"), thinkingMode: v.optional(v.boolean()) },
     handler: async (ctx, args) => {
         // Use public query via api since we changed getJob to public
         const job = await ctx.runQuery(api.ingestion.getJob, { jobId: args.jobId });
@@ -275,7 +275,7 @@ export const runJob = action({
             if (file.status === "failed") continue; // Skip already failed unless retried
 
             try {
-                await processSingleFile(ctx, file, job);
+                await processSingleFile(ctx, file, job, args.thinkingMode);
                 doneFiles++;
             } catch (error: unknown) {
                 const message = error instanceof Error ? error.message : "Unknown error";
@@ -314,7 +314,12 @@ export const runJob = action({
     },
 });
 
-async function processSingleFile(ctx: ActionCtx, file: Doc<"ingestionFiles">, job: Doc<"ingestionJobs">) {
+async function processSingleFile(
+    ctx: ActionCtx,
+    file: Doc<"ingestionFiles">,
+    job: Doc<"ingestionJobs">,
+    thinkingMode?: boolean
+) {
     // 1. PARSE
     if (file.stage === "received" || file.stage === "failed") {
         const blob = await ctx.storage.get(file.storageId);
@@ -362,6 +367,7 @@ async function processSingleFile(ctx: ActionCtx, file: Doc<"ingestionFiles">, jo
     const enriched = await callChatWithSchema(EnhancerSchema, {
         systemPrompt: "Extract structured knowledge.",
         userPrompt: promptSections.filter(Boolean).join("\n\n"),
+        thinkingMode,
     });
 
     await ctx.runMutation(internal.ingestion.updateFileStatus, {

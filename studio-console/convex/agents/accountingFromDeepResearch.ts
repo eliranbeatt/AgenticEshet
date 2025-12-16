@@ -165,6 +165,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         runId: v.id("deepResearchRuns"),
         replaceExisting: v.optional(v.boolean()),
         agentRunId: v.optional(v.id("agentRuns")),
+        thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
         const agentRunId = args.agentRunId;
@@ -210,6 +211,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                     deepResearchMarkdown: run.reportMarkdown ?? "",
                 }),
                 temperature: 0.2,
+                thinkingMode: args.thinkingMode,
             });
 
             if (agentRunId) {
@@ -262,6 +264,7 @@ export const run: ReturnType<typeof action> = action({
         projectId: v.id("projects"),
         runId: v.id("deepResearchRuns"),
         replaceExisting: v.optional(v.boolean()),
+        thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
         await ctx.runQuery(internal.agents.accountingFromDeepResearch.getContext, {
@@ -281,6 +284,7 @@ export const run: ReturnType<typeof action> = action({
             runId: args.runId,
             replaceExisting: args.replaceExisting,
             agentRunId,
+            thinkingMode: args.thinkingMode,
         });
 
         return { queued: true, runId: agentRunId };

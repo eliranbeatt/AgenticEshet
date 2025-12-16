@@ -7,10 +7,12 @@ import { api } from "../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useThinkingMode } from "../../../ThinkingModeContext";
 
 export default function PlanningPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
+    const { thinkingMode } = useThinkingMode();
     
     const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
     const plans = useQuery(api.projects.getPlans, { projectId });
@@ -52,6 +54,7 @@ export default function PlanningPage() {
             await runPlanning({
                 projectId,
                 userRequest: input,
+                thinkingMode,
             });
             setInput("");
             alert("Planning started in the background. A new plan will appear shortly.");

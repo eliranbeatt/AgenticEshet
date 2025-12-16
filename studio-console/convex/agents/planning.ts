@@ -116,6 +116,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
     projectId: v.id("projects"),
     userRequest: v.string(),
     agentRunId: v.optional(v.id("agentRuns")),
+    thinkingMode: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const agentRunId = args.agentRunId;
@@ -215,6 +216,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         const result = await callChatWithSchema(PlanSchema, {
           systemPrompt,
           userPrompt: context,
+          thinkingMode: args.thinkingMode,
         });
 
         if (agentRunId) {
@@ -267,6 +269,7 @@ export const run: ReturnType<typeof action> = action({
   args: {
     projectId: v.id("projects"),
     userRequest: v.string(), // e.g. "Create initial plan" or "Refine timeline"
+    thinkingMode: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     await ctx.runQuery(internal.agents.planning.getContext, { projectId: args.projectId });
@@ -282,6 +285,7 @@ export const run: ReturnType<typeof action> = action({
         projectId: args.projectId,
         userRequest: args.userRequest,
         agentRunId,
+        thinkingMode: args.thinkingMode,
     });
 
     return { queued: true, runId: agentRunId };

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useAction, useMutation } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Id, type Doc } from "../../../../convex/_generated/dataModel";
+import { useThinkingMode } from "../../../ThinkingModeContext";
 
 type QuoteBreakdownItem = {
     label: string;
@@ -16,6 +17,7 @@ type QuoteBreakdownItem = {
 export default function QuotePage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
+    const { thinkingMode } = useThinkingMode();
     
     const quotes = useQuery(api.agents.quote.listQuotes, { projectId });
     const runQuoteAgent = useAction(api.agents.quote.run);
@@ -35,7 +37,7 @@ export default function QuotePage() {
     const handleGenerate = async () => {
         setIsGenerating(true);
         try {
-            await runQuoteAgent({ projectId, instructions: instruction });
+            await runQuoteAgent({ projectId, instructions: instruction, thinkingMode });
             setInstruction("");
             alert("Quote generation started in the background. A new quote will appear shortly.");
         } catch (error: unknown) {

@@ -139,6 +139,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         conversationId: v.id("conversations"),
         chatHistory: v.array(v.object({ role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")), content: v.string() })),
         agentRunId: v.optional(v.id("agentRuns")),
+        thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
         const agentRunId = args.agentRunId;
@@ -262,6 +263,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 systemPrompt,
                 userPrompt,
                 additionalMessages: args.chatHistory,
+                thinkingMode: args.thinkingMode,
             });
 
             if (agentRunId) {
@@ -318,6 +320,7 @@ export const run: ReturnType<typeof action> = action({
     args: {
         projectId: v.id("projects"),
         chatHistory: v.array(v.object({ role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")), content: v.string() })),
+        thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
         const createdAt = Date.now();
@@ -343,9 +346,9 @@ export const run: ReturnType<typeof action> = action({
             conversationId,
             chatHistory: args.chatHistory,
             agentRunId,
+            thinkingMode: args.thinkingMode,
         });
 
         return { queued: true, conversationId, runId: agentRunId };
     },
 });
-

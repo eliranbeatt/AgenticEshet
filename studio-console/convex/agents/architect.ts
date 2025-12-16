@@ -8,358 +8,359 @@ import { queueTaskGeneration } from "../lib/architectTaskGeneration";
 
 // 1. DATA ACCESS
 export const getContext: ReturnType<typeof internalQuery> = internalQuery({
-  args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
-    const project = await ctx.db.get(args.projectId);
-    if (!project) throw new Error("Project not found");
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const project = await ctx.db.get(args.projectId);
+        if (!project) throw new Error("Project not found");
 
-    const plans = await ctx.db
-        .query("plans")
-        .withIndex("by_project_phase", (q) =>
-            q.eq("projectId", args.projectId).eq("phase", "planning")
-        )
-        .order("desc")
-        .collect();
-    
-    const latestPlan = plans.find((plan) => plan.isActive);
+        const plans = await ctx.db
+            .query("plans")
+            .withIndex("by_project_phase", (q) =>
+                q.eq("projectId", args.projectId).eq("phase", "planning")
+            )
+            .order("desc")
+            .collect();
 
-    const sections = await ctx.db
-        .query("sections")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
+        const latestPlan = plans.find((plan) => plan.isActive);
 
-    const materialLines = await ctx.db
-        .query("materialLines")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
+        const sections = await ctx.db
+            .query("sections")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    const workLines = await ctx.db
-        .query("workLines")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
+        const materialLines = await ctx.db
+            .query("materialLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    const existingTasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
+        const workLines = await ctx.db
+            .query("workLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
-        projectId: args.projectId,
-        limit: 3,
-    });
+        const existingTasks = await ctx.db
+            .query("tasks")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    const skill = await ctx.db
-      .query("skills")
-      .withIndex("by_name", (q) => q.eq("name", "architect")) // We might need to seed this skill
-      .first();
+        const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
+            projectId: args.projectId,
+            limit: 3,
+        });
 
-    return {
-      project,
-      latestPlan,
-      sections,
-      materialLines,
-      workLines,
-      existingTasks,
-      knowledgeDocs,
-      systemPrompt: skill?.content || "You are a Senior Solutions Architect.",
-    };
-  },
+        const skill = await ctx.db
+            .query("skills")
+            .withIndex("by_name", (q) => q.eq("name", "architect")) // We might need to seed this skill
+            .first();
+
+        return {
+            project,
+            latestPlan,
+            sections,
+            materialLines,
+            workLines,
+            existingTasks,
+            knowledgeDocs,
+            systemPrompt: skill?.content || "You are a Senior Solutions Architect.",
+        };
+    },
 });
 
 export const saveTasks = internalMutation({
-  args: {
-    projectId: v.id("projects"),
-    tasks: v.array(v.object({
-        title: v.string(),
-        description: v.string(),
-        category: v.union(v.literal("Logistics"), v.literal("Creative"), v.literal("Finance"), v.literal("Admin"), v.literal("Studio")),
-        priority: v.union(v.literal("High"), v.literal("Medium"), v.literal("Low")),
-        accountingSectionName: v.optional(v.union(v.string(), v.null())),
-        accountingItemLabel: v.optional(v.union(v.string(), v.null())),
-        accountingItemType: v.optional(v.union(v.literal("material"), v.literal("work"), v.null())),
-        dependencies: v.optional(v.array(v.number())),
-        estimatedHours: v.optional(v.number()),
-    })),
-  },
-  handler: async (ctx, args) => {
-    const project = await ctx.db.get(args.projectId);
-    const tasks = args.tasks.map((t) => ({
-        ...t,
-        accountingSectionName: t.accountingSectionName ?? undefined,
-        accountingItemLabel: t.accountingItemLabel ?? undefined,
-        accountingItemType: t.accountingItemType ?? undefined,
-        estimatedDuration: t.estimatedHours ? t.estimatedHours * 60 * 60 * 1000 : undefined,
-    }));
+    args: {
+        projectId: v.id("projects"),
+        tasks: v.array(v.object({
+            title: v.string(),
+            description: v.string(),
+            category: v.union(v.literal("Logistics"), v.literal("Creative"), v.literal("Finance"), v.literal("Admin"), v.literal("Studio")),
+            priority: v.union(v.literal("High"), v.literal("Medium"), v.literal("Low")),
+            accountingSectionName: v.optional(v.union(v.string(), v.null())),
+            accountingItemLabel: v.optional(v.union(v.string(), v.null())),
+            accountingItemType: v.optional(v.union(v.literal("material"), v.literal("work"), v.null())),
+            dependencies: v.optional(v.array(v.number())),
+            estimatedHours: v.optional(v.number()),
+        })),
+    },
+    handler: async (ctx, args) => {
+        const project = await ctx.db.get(args.projectId);
+        const tasks = args.tasks.map((t) => ({
+            ...t,
+            accountingSectionName: t.accountingSectionName ?? undefined,
+            accountingItemLabel: t.accountingItemLabel ?? undefined,
+            accountingItemType: t.accountingItemType ?? undefined,
+            estimatedDuration: t.estimatedHours ? t.estimatedHours * 60 * 60 * 1000 : undefined,
+        }));
 
-    const existingTasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
-    
-    let maxTaskNumber = 0;
-    for (const t of existingTasks) {
-        if (t.taskNumber && t.taskNumber > maxTaskNumber) maxTaskNumber = t.taskNumber;
-    }
-    let currentTaskNumber = maxTaskNumber;
+        const existingTasks = await ctx.db
+            .query("tasks")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    const existingByTitle = new Map<string, { id: Id<"tasks">; source: string }>(
-        existingTasks.map((task) => [task.title.trim().toLowerCase(), { id: task._id, source: task.source }])
-    );
-
-    const sections = await ctx.db
-        .query("sections")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
-
-    const materialLines = await ctx.db
-        .query("materialLines")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
-
-    const workLines = await ctx.db
-        .query("workLines")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
-
-    const normalizeKey = (value: string) => value.trim().toLowerCase();
-
-    const sectionNameCounts = new Map<string, number>();
-    for (const section of sections) {
-        const nameKey = normalizeKey(section.name);
-        sectionNameCounts.set(nameKey, (sectionNameCounts.get(nameKey) ?? 0) + 1);
-    }
-
-    const sectionLookup = new Map<string, Id<"sections">>();
-    const sectionNameLookupUnique = new Map<string, Id<"sections">>();
-    for (const section of sections) {
-        const display = `[${section.group}] ${section.name}`;
-        sectionLookup.set(normalizeKey(display), section._id);
-        const nameKey = normalizeKey(section.name);
-        if ((sectionNameCounts.get(nameKey) ?? 0) === 1) {
-            sectionNameLookupUnique.set(nameKey, section._id);
+        let maxTaskNumber = 0;
+        for (const t of existingTasks) {
+            if (t.taskNumber && t.taskNumber > maxTaskNumber) maxTaskNumber = t.taskNumber;
         }
-    }
+        let currentTaskNumber = maxTaskNumber;
 
-    const materialsBySection = new Map<Id<"sections">, Map<string, Id<"materialLines">>>();
-    for (const line of materialLines) {
-        const sectionId = line.sectionId as Id<"sections">;
-        if (!materialsBySection.has(sectionId)) materialsBySection.set(sectionId, new Map());
-        materialsBySection.get(sectionId)!.set(normalizeKey(line.label), line._id);
-    }
+        const existingByTitle = new Map<string, { id: Id<"tasks">; source: string }>(
+            existingTasks.map((task) => [task.title.trim().toLowerCase(), { id: task._id, source: task.source }])
+        );
 
-    const workBySection = new Map<Id<"sections">, Map<string, Id<"workLines">>>();
-    for (const line of workLines) {
-        const sectionId = line.sectionId as Id<"sections">;
-        if (!workBySection.has(sectionId)) workBySection.set(sectionId, new Map());
-        workBySection.get(sectionId)!.set(normalizeKey(line.role), line._id);
-    }
+        const sections = await ctx.db
+            .query("sections")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    const resolveSectionId = (raw?: string) => {
-        if (!raw) return undefined;
-        const key = normalizeKey(raw);
-        return sectionLookup.get(key) ?? sectionNameLookupUnique.get(key);
-    };
+        const materialLines = await ctx.db
+            .query("materialLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    const batchIndexToId = new Map<number, Id<"tasks">>();
+        const workLines = await ctx.db
+            .query("workLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    for (let i = 0; i < tasks.length; i++) {
-        const t = tasks[i];
-        const normalizedTitle = t.title.trim().toLowerCase();
-        const sectionId = resolveSectionId(t.accountingSectionName);
+        const normalizeKey = (value: string) => value.trim().toLowerCase();
 
-        let accountingLineType: "material" | "work" | undefined;
-        let accountingLineId: Id<"materialLines"> | Id<"workLines"> | undefined;
-        if (sectionId && t.accountingItemType && t.accountingItemLabel) {
-            const itemKey = normalizeKey(t.accountingItemLabel);
-            if (t.accountingItemType === "material") {
-                accountingLineId = materialsBySection.get(sectionId)?.get(itemKey);
-                accountingLineType = accountingLineId ? "material" : undefined;
-            } else if (t.accountingItemType === "work") {
-                accountingLineId = workBySection.get(sectionId)?.get(itemKey);
-                accountingLineType = accountingLineId ? "work" : undefined;
+        const sectionNameCounts = new Map<string, number>();
+        for (const section of sections) {
+            const nameKey = normalizeKey(section.name);
+            sectionNameCounts.set(nameKey, (sectionNameCounts.get(nameKey) ?? 0) + 1);
+        }
+
+        const sectionLookup = new Map<string, Id<"sections">>();
+        const sectionNameLookupUnique = new Map<string, Id<"sections">>();
+        for (const section of sections) {
+            const display = `[${section.group}] ${section.name}`;
+            sectionLookup.set(normalizeKey(display), section._id);
+            const nameKey = normalizeKey(section.name);
+            if ((sectionNameCounts.get(nameKey) ?? 0) === 1) {
+                sectionNameLookupUnique.set(nameKey, section._id);
             }
         }
-        const existingTask = existingByTitle.get(normalizedTitle);
-        let taskId: Id<"tasks">;
 
-        if (existingTask && existingTask.source === "agent") {
-            taskId = existingTask.id;
-            await ctx.db.patch(taskId, {
-                description: t.description,
-                category: t.category,
-                priority: t.priority,
-                accountingSectionId: sectionId,
-                accountingLineType,
-                accountingLineId,
-                updatedAt: Date.now(),
-            });
-            if (!existingTasks.find(et => et._id === taskId)?.taskNumber) {
-                 currentTaskNumber++;
-                 await ctx.db.patch(taskId, { taskNumber: currentTaskNumber });
-            }
-        } else if (!existingTask) {
-            currentTaskNumber++;
-            taskId = await ctx.db.insert("tasks", {
-                projectId: args.projectId,
-                title: t.title,
-                description: t.description,
-                category: t.category,
-                priority: t.priority,
-                accountingLineId,
-                status: "todo",
-                source: "agent",
-                taskNumber: currentTaskNumber,
-                estimatedDuration: t.estimatedDuration,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-            });
-            existingByTitle.set(normalizedTitle, { id: taskId, source: "agent" });
-        } else {
-            taskId = existingTask.id;
+        const materialsBySection = new Map<Id<"sections">, Map<string, Id<"materialLines">>>();
+        for (const line of materialLines) {
+            const sectionId = line.sectionId as Id<"sections">;
+            if (!materialsBySection.has(sectionId)) materialsBySection.set(sectionId, new Map());
+            materialsBySection.get(sectionId)!.set(normalizeKey(line.label), line._id);
         }
-        batchIndexToId.set(i + 1, taskId);
-    }
 
-    for (let i = 0; i < tasks.length; i++) {
-        const t = tasks[i];
-        if (t.dependencies && t.dependencies.length > 0) {
-            const taskId = batchIndexToId.get(i + 1);
-            if (taskId) {
-                const depIds: Id<"tasks">[] = [];
-                for (const depIndex of t.dependencies) {
-                    const depId = batchIndexToId.get(depIndex);
-                    if (depId) depIds.push(depId);
-                }
-                if (depIds.length > 0) {
-                    await ctx.db.patch(taskId, { dependencies: depIds });
+        const workBySection = new Map<Id<"sections">, Map<string, Id<"workLines">>>();
+        for (const line of workLines) {
+            const sectionId = line.sectionId as Id<"sections">;
+            if (!workBySection.has(sectionId)) workBySection.set(sectionId, new Map());
+            workBySection.get(sectionId)!.set(normalizeKey(line.role), line._id);
+        }
+
+        const resolveSectionId = (raw?: string) => {
+            if (!raw) return undefined;
+            const key = normalizeKey(raw);
+            return sectionLookup.get(key) ?? sectionNameLookupUnique.get(key);
+        };
+
+        const batchIndexToId = new Map<number, Id<"tasks">>();
+
+        for (let i = 0; i < tasks.length; i++) {
+            const t = tasks[i];
+            const normalizedTitle = t.title.trim().toLowerCase();
+            const sectionId = resolveSectionId(t.accountingSectionName);
+
+            let accountingLineType: "material" | "work" | undefined;
+            let accountingLineId: Id<"materialLines"> | Id<"workLines"> | undefined;
+            if (sectionId && t.accountingItemType && t.accountingItemLabel) {
+                const itemKey = normalizeKey(t.accountingItemLabel);
+                if (t.accountingItemType === "material") {
+                    accountingLineId = materialsBySection.get(sectionId)?.get(itemKey);
+                    accountingLineType = accountingLineId ? "material" : undefined;
+                } else if (t.accountingItemType === "work") {
+                    accountingLineId = workBySection.get(sectionId)?.get(itemKey);
+                    accountingLineType = accountingLineId ? "work" : undefined;
                 }
             }
+            const existingTask = existingByTitle.get(normalizedTitle);
+            let taskId: Id<"tasks">;
+
+            if (existingTask && existingTask.source === "agent") {
+                taskId = existingTask.id;
+                await ctx.db.patch(taskId, {
+                    description: t.description,
+                    category: t.category,
+                    priority: t.priority,
+                    accountingSectionId: sectionId,
+                    accountingLineType,
+                    accountingLineId,
+                    updatedAt: Date.now(),
+                });
+                if (!existingTasks.find(et => et._id === taskId)?.taskNumber) {
+                    currentTaskNumber++;
+                    await ctx.db.patch(taskId, { taskNumber: currentTaskNumber });
+                }
+            } else if (!existingTask) {
+                currentTaskNumber++;
+                taskId = await ctx.db.insert("tasks", {
+                    projectId: args.projectId,
+                    title: t.title,
+                    description: t.description,
+                    category: t.category,
+                    priority: t.priority,
+                    accountingLineId,
+                    status: "todo",
+                    source: "agent",
+                    taskNumber: currentTaskNumber,
+                    estimatedDuration: t.estimatedDuration,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                });
+                existingByTitle.set(normalizedTitle, { id: taskId, source: "agent" });
+            } else {
+                taskId = existingTask.id;
+            }
+            batchIndexToId.set(i + 1, taskId);
         }
-    }
 
-    const taskSnapshot = await ctx.db
-        .query("tasks")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
+        for (let i = 0; i < tasks.length; i++) {
+            const t = tasks[i];
+            if (t.dependencies && t.dependencies.length > 0) {
+                const taskId = batchIndexToId.get(i + 1);
+                if (taskId) {
+                    const depIds: Id<"tasks">[] = [];
+                    for (const depIndex of t.dependencies) {
+                        const depId = batchIndexToId.get(depIndex);
+                        if (depId) depIds.push(depId);
+                    }
+                    if (depIds.length > 0) {
+                        await ctx.db.patch(taskId, { dependencies: depIds });
+                    }
+                }
+            }
+        }
 
-    const taskText = taskSnapshot
-        .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority}) ${task.description || ""}`)
-        .join("\n");
+        const taskSnapshot = await ctx.db
+            .query("tasks")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
 
-    await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
-        projectId: args.projectId,
-        sourceType: "task",
-        sourceRefId: `tasks-${Date.now()}`,
-        title: `Task Snapshot ${new Date().toISOString()}`,
-        text: taskText,
-        summary: `Updated ${args.tasks.length} tasks from architect agent.`,
-        tags: ["tasks", "architect"],
-        topics: [],
-        phase: "planning",
-        clientName: project?.clientName,
-    });
-  },
+        const taskText = taskSnapshot
+            .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority}) ${task.description || ""}`)
+            .join("\n");
+
+        await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+            projectId: args.projectId,
+            sourceType: "task",
+            sourceRefId: `tasks-${Date.now()}`,
+            title: `Task Snapshot ${new Date().toISOString()}`,
+            text: taskText,
+            summary: `Updated ${args.tasks.length} tasks from architect agent.`,
+            tags: ["tasks", "architect"],
+            topics: [],
+            phase: "planning",
+            clientName: project?.clientName,
+        });
+    },
 });
 
 // 2. AGENT ACTION
 export const runInBackground: ReturnType<typeof internalAction> = internalAction({
-  args: {
-    projectId: v.id("projects"),
-    agentRunId: v.optional(v.id("agentRuns")),
-  },
-  handler: async (ctx, args) => {
-    const agentRunId = args.agentRunId;
-
-    if (agentRunId) {
-        await ctx.runMutation(internal.agentRuns.setStatus, {
-            runId: agentRunId,
-            status: "running",
-            stage: "loading_context",
-        });
-        await ctx.runMutation(internal.agentRuns.appendEvent, {
-            runId: agentRunId,
-            level: "info",
-            message: "Loading project context and plan.",
-            stage: "loading_context",
-        });
-    }
-
-    try {
-        const { project, latestPlan, systemPrompt, sections, materialLines, workLines, existingTasks } = await ctx.runQuery(internal.agents.architect.getContext, {
-          projectId: args.projectId,
-        });
+    args: {
+        projectId: v.id("projects"),
+        agentRunId: v.optional(v.id("agentRuns")),
+        thinkingMode: v.optional(v.boolean()),
+    },
+    handler: async (ctx, args) => {
+        const agentRunId = args.agentRunId;
 
         if (agentRunId) {
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: agentRunId,
+                status: "running",
+                stage: "loading_context",
+            });
             await ctx.runMutation(internal.agentRuns.appendEvent, {
                 runId: agentRunId,
                 level: "info",
-                message: "Searching knowledge base for relevant context.",
-                stage: "knowledge_search",
+                message: "Loading project context and plan.",
+                stage: "loading_context",
             });
         }
 
-        const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
-            projectId: args.projectId,
-            query: latestPlan ? latestPlan.contentMarkdown.slice(0, 800) : project.details.notes || project.name,
-            scope: "both",
-            sourceTypes: ["plan", "task", "quest", "doc_upload"],
-            limit: 8,
-            agentRole: "architect_agent",
-            includeSummaries: true,
-        });
+        try {
+            const { project, latestPlan, systemPrompt, sections, materialLines, workLines, existingTasks } = await ctx.runQuery(internal.agents.architect.getContext, {
+                projectId: args.projectId,
+            });
 
-        if (!latestPlan) {
-            throw new Error("No active plan found. Approve a plan before generating tasks.");
-        }
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "info",
+                    message: "Searching knowledge base for relevant context.",
+                    stage: "knowledge_search",
+                });
+            }
 
-    const existingTaskSummary = existingTasks.length
-        ? existingTasks
-              .slice(0, 20)
-              .map((task: Doc<"tasks">) => `- ${task.title} [${task.status}] (${task.category}/${task.priority})`)
-              .join("\n")
-        : "- No existing tasks found.";
+            const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
+                projectId: args.projectId,
+                query: latestPlan ? latestPlan.contentMarkdown.slice(0, 800) : project.details.notes || project.name,
+                scope: "both",
+                sourceTypes: ["plan", "task", "quest", "doc_upload"],
+                limit: 8,
+                agentRole: "architect_agent",
+                includeSummaries: true,
+            });
 
-    const knowledgeSummary = knowledgeDocs.length
-        ? knowledgeDocs
-              .map((entry: { doc: { sourceType: string; title: string; summary?: string; keyPoints?: string[] }; text?: string }) => {
-                  const keyPoints = Array.isArray(entry.doc.keyPoints) && entry.doc.keyPoints.length > 0
-                      ? ` Key points: ${entry.doc.keyPoints.slice(0, 6).join("; ")}`
-                      : "";
-                  const base = (entry.doc.summary ?? entry.text?.slice(0, 200) ?? "").trim();
-                  return `- [${entry.doc.sourceType}] ${entry.doc.title}: ${base}${keyPoints}`;
-              })
-              .join("\n")
-        : "- No relevant knowledge documents found.";
+            if (!latestPlan) {
+                throw new Error("No active plan found. Approve a plan before generating tasks.");
+            }
 
-    const materialBySection = new Map<string, string[]>();
-    for (const line of materialLines) {
-        const sectionId = line.sectionId;
-        if (!materialBySection.has(sectionId)) materialBySection.set(sectionId, []);
-        materialBySection.get(sectionId)!.push(line.label);
-    }
+            const existingTaskSummary = existingTasks.length
+                ? existingTasks
+                    .slice(0, 20)
+                    .map((task: Doc<"tasks">) => `- ${task.title} [${task.status}] (${task.category}/${task.priority})`)
+                    .join("\n")
+                : "- No existing tasks found.";
 
-    const workBySection = new Map<string, string[]>();
-    for (const line of workLines) {
-        const sectionId = line.sectionId;
-        if (!workBySection.has(sectionId)) workBySection.set(sectionId, []);
-        workBySection.get(sectionId)!.push(line.role);
-    }
+            const knowledgeSummary = knowledgeDocs.length
+                ? knowledgeDocs
+                    .map((entry: { doc: { sourceType: string; title: string; summary?: string; keyPoints?: string[] }; text?: string }) => {
+                        const keyPoints = Array.isArray(entry.doc.keyPoints) && entry.doc.keyPoints.length > 0
+                            ? ` Key points: ${entry.doc.keyPoints.slice(0, 6).join("; ")}`
+                            : "";
+                        const base = (entry.doc.summary ?? entry.text?.slice(0, 200) ?? "").trim();
+                        return `- [${entry.doc.sourceType}] ${entry.doc.title}: ${base}${keyPoints}`;
+                    })
+                    .join("\n")
+                : "- No relevant knowledge documents found.";
 
-    const accountingSummary = sections.length
-        ? sections
-              .slice(0, 40)
-              .map((section: Doc<"sections">) => {
-                  const sectionLabel = `[${section.group}] ${section.name}`;
-                  const materials = materialBySection.get(section._id) ?? [];
-                  const work = workBySection.get(section._id) ?? [];
-                  const materialsText = materials.length ? `Materials: ${materials.slice(0, 6).join(", ")}` : "Materials: (none)";
-                  const workText = work.length ? `Work: ${work.slice(0, 6).join(", ")}` : "Work: (none)";
-                  return `- ${sectionLabel}\n  ${materialsText}\n  ${workText}`;
-              })
-              .join("\n")
-        : "- No accounting sections found. If a task cannot be linked, set accountingSectionName to null.";
+            const materialBySection = new Map<string, string[]>();
+            for (const line of materialLines) {
+                const sectionId = line.sectionId;
+                if (!materialBySection.has(sectionId)) materialBySection.set(sectionId, []);
+                materialBySection.get(sectionId)!.push(line.label);
+            }
 
-    const userPrompt = `Project: ${project.name}
+            const workBySection = new Map<string, string[]>();
+            for (const line of workLines) {
+                const sectionId = line.sectionId;
+                if (!workBySection.has(sectionId)) workBySection.set(sectionId, []);
+                workBySection.get(sectionId)!.push(line.role);
+            }
+
+            const accountingSummary = sections.length
+                ? sections
+                    .slice(0, 40)
+                    .map((section: Doc<"sections">) => {
+                        const sectionLabel = `[${section.group}] ${section.name}`;
+                        const materials = materialBySection.get(section._id) ?? [];
+                        const work = workBySection.get(section._id) ?? [];
+                        const materialsText = materials.length ? `Materials: ${materials.slice(0, 6).join(", ")}` : "Materials: (none)";
+                        const workText = work.length ? `Work: ${work.slice(0, 6).join(", ")}` : "Work: (none)";
+                        return `- ${sectionLabel}\n  ${materialsText}\n  ${workText}`;
+                    })
+                    .join("\n")
+                : "- No accounting sections found. If a task cannot be linked, set accountingSectionName to null.";
+
+            const userPrompt = `Project: ${project.name}
     
 Plan Content:
 ${latestPlan.contentMarkdown}
@@ -386,82 +387,84 @@ Dependency test checklist (do this before answering):
 2) Ensure there are no cycles and no forward references.
 3) Ensure at least some tasks have dependencies if the plan implies sequencing.
 
-When relevant, set accountingSectionName to one of the Accounting Sections above so tasks can be grouped and auto-linked. If a specific accounting item applies, set accountingItemType ("material" or "work") and accountingItemLabel exactly as shown in that section list; otherwise set them to null. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge.`;
+When relevant, set accountingSectionName to one of the Accounting Sections above so tasks can be grouped and auto-linked. If a specific accounting item applies, set accountingItemType ("material" or "work") and accountingItemLabel exactly as shown in that section list; otherwise set them to null. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge. Provide a 'logic' string explaining your reasoning before listing the tasks.`;
 
-        if (agentRunId) {
-            await ctx.runMutation(internal.agentRuns.appendEvent, {
-                runId: agentRunId,
-                level: "info",
-                message: "Calling model to break down plan into tasks.",
-                stage: "llm_call",
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "info",
+                    message: "Calling model to break down plan into tasks.",
+                    stage: "llm_call",
+                });
+            }
+
+            const result = await callChatWithSchema(TaskBreakdownSchema, {
+                systemPrompt,
+                userPrompt,
+                thinkingMode: args.thinkingMode,
             });
+
+            const normalizedTasks = result.tasks.map((task) => {
+                const accountingSectionName = task.accountingSectionName?.trim();
+                const accountingItemLabel = task.accountingItemLabel?.trim();
+                return {
+                    ...task,
+                    accountingSectionName: accountingSectionName && accountingSectionName.length > 0 ? accountingSectionName : undefined,
+                    accountingItemLabel: accountingItemLabel && accountingItemLabel.length > 0 ? accountingItemLabel : undefined,
+                    accountingItemType: task.accountingItemType ?? undefined,
+                };
+            });
+
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "info",
+                    message: `Saving ${normalizedTasks.length} tasks to the database.`,
+                    stage: "persisting",
+                });
+            }
+
+            await ctx.runMutation(internal.agents.architect.saveTasks, {
+                projectId: args.projectId,
+                tasks: normalizedTasks,
+            });
+
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: agentRunId,
+                    status: "succeeded",
+                    stage: "done",
+                });
+            }
+
+            return result;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (agentRunId) {
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId: agentRunId,
+                    level: "error",
+                    message,
+                    stage: "failed",
+                });
+                await ctx.runMutation(internal.agentRuns.setStatus, {
+                    runId: agentRunId,
+                    status: "failed",
+                    stage: "failed",
+                    error: message,
+                });
+            }
+            throw error;
         }
-
-        const result = await callChatWithSchema(TaskBreakdownSchema, {
-          systemPrompt,
-          userPrompt,
-        });
-
-    const normalizedTasks = result.tasks.map((task) => {
-        const accountingSectionName = task.accountingSectionName?.trim();
-        const accountingItemLabel = task.accountingItemLabel?.trim();
-        return {
-            ...task,
-            accountingSectionName: accountingSectionName && accountingSectionName.length > 0 ? accountingSectionName : undefined,
-            accountingItemLabel: accountingItemLabel && accountingItemLabel.length > 0 ? accountingItemLabel : undefined,
-            accountingItemType: task.accountingItemType ?? undefined,
-        };
-    });
-
-        if (agentRunId) {
-            await ctx.runMutation(internal.agentRuns.appendEvent, {
-                runId: agentRunId,
-                level: "info",
-                message: `Saving ${normalizedTasks.length} tasks to the database.`,
-                stage: "persisting",
-            });
-        }
-
-        await ctx.runMutation(internal.agents.architect.saveTasks, {
-          projectId: args.projectId,
-          tasks: normalizedTasks,
-        });
-
-        if (agentRunId) {
-            await ctx.runMutation(internal.agentRuns.setStatus, {
-                runId: agentRunId,
-                status: "succeeded",
-                stage: "done",
-            });
-        }
-
-        return result;
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (agentRunId) {
-            await ctx.runMutation(internal.agentRuns.appendEvent, {
-                runId: agentRunId,
-                level: "error",
-                message,
-                stage: "failed",
-            });
-            await ctx.runMutation(internal.agentRuns.setStatus, {
-                runId: agentRunId,
-                status: "failed",
-                stage: "failed",
-                error: message,
-            });
-        }
-        throw error;
-    }
-  },
+    },
 });
 
 export const run: ReturnType<typeof action> = action({
-  args: {
-    projectId: v.id("projects"),
-  },
-  handler: async (ctx, args) => {
-    return await queueTaskGeneration(ctx, args.projectId);
-  },
+    args: {
+        projectId: v.id("projects"),
+        thinkingMode: v.optional(v.boolean()),
+    },
+    handler: async (ctx, args) => {
+        return await queueTaskGeneration(ctx, args.projectId, args.thinkingMode);
+    },
 });

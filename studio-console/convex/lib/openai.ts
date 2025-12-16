@@ -12,6 +12,7 @@ type ChatParams = {
     model?: string;
     additionalMessages?: ChatMessage[];
     temperature?: number;
+    thinkingMode?: boolean;
     maxRetries?: number;
     retryDelayMs?: number;
 };
@@ -93,6 +94,10 @@ function supportsTemperature(model: string): boolean {
     return true;
 }
 
+function supportsReasoningEffort(model: string): boolean {
+    return model.toLowerCase().startsWith("gpt-5");
+}
+
 export async function callChatWithSchema<T>(
     schema: z.ZodSchema<T>,
     params: ChatParams
@@ -137,7 +142,10 @@ export async function callChatWithSchema<T>(
                     instructions: `${systemInstructions}${jsonHint}`,
                     input: `${formatConversation(transcriptMessages)}${jsonHintInput}`,
                     ...(supportsTemperature(model) ? { temperature: params.temperature ?? 0 } : {}),
-                    text: { format, verbosity: "medium" },
+                    ...(supportsReasoningEffort(model)
+                        ? { reasoning: { effort: params.thinkingMode ? "high" : "low" } }
+                        : {}),
+                    text: { format, verbosity: params.thinkingMode ? "medium" : "low" },
                     parallel_tool_calls: true,
                 });
             };

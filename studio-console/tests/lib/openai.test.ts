@@ -41,6 +41,29 @@ describe("callChatWithSchema", () => {
         expect(responsesCreateMock).toHaveBeenCalledTimes(1);
     });
 
+    it("sets reasoning effort when thinkingMode is enabled", async () => {
+        responsesCreateMock.mockResolvedValueOnce({
+            output_text: JSON.stringify({ summary: "Deep" }),
+            error: null,
+        });
+
+        const result = await callChatWithSchema(schema, {
+            systemPrompt: "You are a helper",
+            userPrompt: "Summarize",
+            model: "gpt-5.2",
+            thinkingMode: true,
+            maxRetries: 1,
+        });
+
+        expect(result).toEqual({ summary: "Deep" });
+        expect(responsesCreateMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                reasoning: { effort: "high" },
+                text: expect.objectContaining({ verbosity: "medium" }),
+            })
+        );
+    });
+
     it("retries on transient failures", async () => {
         responsesCreateMock
             .mockRejectedValueOnce(new Error("temporary"))

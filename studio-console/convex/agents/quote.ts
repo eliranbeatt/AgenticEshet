@@ -122,6 +122,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
     projectId: v.id("projects"),
     instructions: v.optional(v.string()),
     agentRunId: v.optional(v.id("agentRuns")),
+    thinkingMode: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const agentRunId = args.agentRunId;
@@ -204,6 +205,7 @@ Always include a currency field (ILS by default) and ensure the internal breakdo
         const result = await callChatWithSchema(QuoteSchema, {
           systemPrompt,
           userPrompt,
+          thinkingMode: args.thinkingMode,
         });
 
         if (agentRunId) {
@@ -255,6 +257,7 @@ export const run: ReturnType<typeof action> = action({
   args: {
     projectId: v.id("projects"),
     instructions: v.optional(v.string()), // e.g. "Add travel expenses"
+    thinkingMode: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     await ctx.runQuery(internal.agents.quote.getContext, { projectId: args.projectId });
@@ -270,6 +273,7 @@ export const run: ReturnType<typeof action> = action({
         projectId: args.projectId,
         instructions: args.instructions,
         agentRunId,
+        thinkingMode: args.thinkingMode,
     });
 
     return { queued: true, runId: agentRunId };

@@ -11,7 +11,7 @@ type ActionCtx = {
     scheduler: Scheduler;
 };
 
-export async function queueTaskGeneration(ctx: ActionCtx, projectId: Id<"projects">) {
+export async function queueTaskGeneration(ctx: ActionCtx, projectId: Id<"projects">, thinkingMode?: boolean) {
     const { latestPlan } = await ctx.runQuery(internal.agents.architect.getContext, {
         projectId,
     }) as { latestPlan: unknown };
@@ -30,6 +30,7 @@ export async function queueTaskGeneration(ctx: ActionCtx, projectId: Id<"project
     await ctx.scheduler.runAfter(0, internal.agents.architect.runInBackground, {
         projectId,
         agentRunId,
+        thinkingMode,
     });
 
     return { queued: true, runId: agentRunId };

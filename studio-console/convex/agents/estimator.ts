@@ -19,7 +19,10 @@ type EstimatorContext = {
     systemPrompt: string;
 };
 
-async function estimateSectionImpl(ctx: EstimatorCtx, args: { projectId: unknown; sectionId: unknown; agentRunId?: unknown; label?: string }) {
+async function estimateSectionImpl(
+    ctx: EstimatorCtx,
+    args: { projectId: unknown; sectionId: unknown; agentRunId?: unknown; label?: string; thinkingMode?: boolean }
+) {
     const agentRunId = args.agentRunId;
     const label = args.label ?? "Estimating section";
 
@@ -61,6 +64,7 @@ Please estimate the required materials and labor to execute this section.
     const result = await callChatWithSchema(EstimationSchema, {
         systemPrompt,
         userPrompt,
+        thinkingMode: args.thinkingMode,
     });
 
     if (agentRunId) {
@@ -148,6 +152,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         projectId: v.id("projects"),
         sectionId: v.id("sections"),
         agentRunId: v.optional(v.id("agentRuns")),
+        thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
         const agentRunId = args.agentRunId;
@@ -190,7 +195,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
 });
 
 export const estimateProjectInBackground: ReturnType<typeof internalAction> = internalAction({
-    args: { projectId: v.id("projects"), agentRunId: v.optional(v.id("agentRuns")) },
+    args: { projectId: v.id("projects"), agentRunId: v.optional(v.id("agentRuns")), thinkingMode: v.optional(v.boolean()) },
     handler: async (ctx, args) => {
         const agentRunId = args.agentRunId;
         if (agentRunId) {
@@ -221,7 +226,7 @@ export const estimateProjectInBackground: ReturnType<typeof internalAction> = in
             for (const sectionEntry of sections) {
                 index += 1;
                 const label = `Estimating section ${index}/${total} (${sectionEntry.section.name})`;
-                await estimateSectionImpl(ctx, { projectId: args.projectId, sectionId: sectionEntry.section._id, agentRunId, label });
+                await estimateSectionImpl(ctx, { projectId: args.projectId, sectionId: sectionEntry.section._id, agentRunId, label, thinkingMode: args.thinkingMode });
             }
 
             if (agentRunId) {
@@ -258,6 +263,7 @@ export const run: ReturnType<typeof action> = action({
     args: {
         projectId: v.id("projects"),
         sectionId: v.id("sections"),
+        thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
         await ctx.runQuery(internal.agents.estimator.getContext, { projectId: args.projectId, sectionId: args.sectionId });
@@ -273,13 +279,14 @@ export const run: ReturnType<typeof action> = action({
             projectId: args.projectId,
             sectionId: args.sectionId,
             agentRunId,
+            thinkingMode: args.thinkingMode,
         });
         return { queued: true, runId: agentRunId };
     },
 });
 
 export const estimateProject: ReturnType<typeof action> = action({
-    args: { projectId: v.id("projects") },
+    args: { projectId: v.id("projects"), thinkingMode: v.optional(v.boolean()) },
     handler: async (ctx, args) => {
         const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
             projectId: args.projectId,
@@ -291,6 +298,7 @@ export const estimateProject: ReturnType<typeof action> = action({
         await ctx.scheduler.runAfter(0, internal.agents.estimator.estimateProjectInBackground, {
             projectId: args.projectId,
             agentRunId,
+            thinkingMode: args.thinkingMode,
         });
         return { queued: true, runId: agentRunId };
     },

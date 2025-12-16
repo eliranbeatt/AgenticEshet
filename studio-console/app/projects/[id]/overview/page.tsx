@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
 import { useParams } from "next/navigation";
@@ -15,6 +15,13 @@ type DetailsFormState = {
     notes: string;
 };
 
+type RecentDocUpload = {
+    _id: Id<"knowledgeDocs">;
+    title: string;
+    createdAt: number;
+    processingStatus: Doc<"knowledgeDocs">["processingStatus"];
+};
+
 const statusOptions: DetailsFormState["status"][] = ["lead", "planning", "production", "archived"];
 
 export default function ProjectOverviewPage() {
@@ -26,6 +33,11 @@ export default function ProjectOverviewPage() {
     const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
     const quests = useQuery(api.quests.list, { projectId });
     const questStats = useQuery(api.quests.getStats, { projectId });
+    const recentDocUploads = useQuery(api.knowledge.listRecentDocs, {
+        projectId,
+        limit: 6,
+        sourceTypes: ["doc_upload"],
+    });
     const clarificationHistory = useQuery(api.conversations.recentByPhase, {
         projectId,
         phase: "clarification",
@@ -39,6 +51,10 @@ export default function ProjectOverviewPage() {
     const trelloSync = useQuery(api.trelloSync.getSyncState, { projectId });
     const quotes = useQuery(api.agents.quote.listQuotes, { projectId });
     const updateProject = useMutation(api.projects.updateProject);
+    const createIngestionJob = useMutation(api.ingestion.createJob);
+    const generateUploadUrl = useMutation(api.ingestion.generateUploadUrl);
+    const addFilesToJob = useMutation(api.ingestion.addFilesToJob);
+    const runIngestionJob = useAction(api.ingestion.runJob);
 
     const [formState, setFormState] = useState<DetailsFormState>({
         status: "lead",
@@ -49,6 +65,11 @@ export default function ProjectOverviewPage() {
     });
     const [isSaving, setIsSaving] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
+
+    const docFileInputRef = useRef<HTMLInputElement>(null);
+    const [isUploadingDocs, setIsUploadingDocs] = useState(false);
+    const [docUploadContext, setDocUploadContext] = useState("");
+    const [docUploadTags, setDocUploadTags] = useState("");
 
     useEffect(() => {
         if (project) {
@@ -121,6 +142,60 @@ export default function ProjectOverviewPage() {
         }
     };
 
+    const handleDocUpload = async (event: React.FormEvent) => {
+        event.preventDefault();
+        const files = docFileInputRef.current?.files;
+        if (!files || files.length === 0) return;
+
+        setIsUploadingDocs(true);
+        try {
+            const parsedTags = docUploadTags
+                .split(",")
+                .map((tag) => tag.trim())
+                .filter((tag) => tag.length > 0);
+
+            const jobId = await createIngestionJob({
+                projectId,
+                name: `Quick upload ${new Date().toLocaleString()}`,
+                sourceType: "upload",
+                defaultContext: docUploadContext.trim() || undefined,
+                defaultTags: parsedTags.length > 0 ? parsedTags : undefined,
+            });
+
+            const uploadedFiles: Array<{ storageId: string; name: string; mimeType: string; size: number }> = [];
+            for (const file of Array.from(files)) {
+                const postUrl = await generateUploadUrl();
+                const result = await fetch(postUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": file.type },
+                    body: file,
+                });
+                const { storageId } = await result.json();
+                uploadedFiles.push({
+                    storageId,
+                    name: file.name,
+                    mimeType: file.type || "application/octet-stream",
+                    size: file.size,
+                });
+            }
+
+            await addFilesToJob({ jobId, files: uploadedFiles });
+            await runIngestionJob({ jobId });
+
+            setDocUploadContext("");
+            setDocUploadTags("");
+        } catch (error) {
+            console.error(error);
+            const message = error instanceof Error ? error.message : "Upload failed";
+            alert(message);
+        } finally {
+            setIsUploadingDocs(false);
+            if (docFileInputRef.current) {
+                docFileInputRef.current.value = "";
+            }
+        }
+    };
+
     return (
         <div className="space-y-8">
             {/* Summary + stats */}
@@ -142,6 +217,81 @@ export default function ProjectOverviewPage() {
                             ) : planMeta?.latestPlan?.isDraft ? (
                                 <span className="px-3 py-1 rounded-full bg-yellow-100 text-yellow-800">Draft plan awaiting approval</span>
                             ) : null}
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded shadow-sm border space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 className="text-sm font-semibold uppercase text-gray-500 tracking-wide">Upload documents</h3>
+                                <p className="text-sm text-gray-600 mt-2">
+                                    Uploaded files are ingested into the Knowledge Base and automatically summarized with key points. Clarification and downstream agents pull them as context.
+                                </p>
+                            </div>
+                            <Link
+                                href={`/projects/${projectId}/knowledge`}
+                                className="text-sm text-blue-600 hover:text-blue-800 whitespace-nowrap"
+                            >
+                                Manage in Knowledge
+                            </Link>
+                        </div>
+
+                        <form onSubmit={handleDocUpload} className="space-y-3">
+                            <input
+                                ref={docFileInputRef}
+                                type="file"
+                                multiple
+                                className="w-full border rounded px-3 py-2 text-sm"
+                                accept=".pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.xls,.ppt,.pptx,.json,.html,.htm,.rtf"
+                            />
+                            <input
+                                type="text"
+                                value={docUploadContext}
+                                onChange={(e) => setDocUploadContext(e.target.value)}
+                                placeholder="Optional context (e.g. client brief, assumptions, source)"
+                                className="w-full border rounded px-3 py-2 text-sm"
+                            />
+                            <input
+                                type="text"
+                                value={docUploadTags}
+                                onChange={(e) => setDocUploadTags(e.target.value)}
+                                placeholder="Optional tags (comma separated)"
+                                className="w-full border rounded px-3 py-2 text-sm"
+                            />
+                            <button
+                                type="submit"
+                                disabled={isUploadingDocs}
+                                className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50"
+                            >
+                                {isUploadingDocs ? "Uploading..." : "Upload & process"}
+                            </button>
+                        </form>
+
+                        <div className="space-y-2">
+                            <div className="text-xs font-semibold uppercase text-gray-500 tracking-wide">Recent uploads</div>
+                            {recentDocUploads === undefined ? (
+                                <div className="text-sm text-gray-400">Loading...</div>
+                            ) : recentDocUploads.length === 0 ? (
+                                <div className="text-sm text-gray-400">No documents uploaded yet.</div>
+                            ) : (
+                                <ul className="space-y-2">
+                                    {recentDocUploads.map((doc: RecentDocUpload) => (
+                                        <li key={doc._id} className="flex items-center justify-between gap-3 border rounded px-3 py-2">
+                                            <div className="min-w-0">
+                                                <div className="text-sm font-medium text-gray-900 truncate" title={doc.title}>
+                                                    {doc.title}
+                                                </div>
+                                                <div className="text-xs text-gray-500">
+                                                    {new Date(doc.createdAt).toLocaleString()}
+                                                </div>
+                                            </div>
+                                            <span className="text-[10px] uppercase font-semibold px-2 py-1 rounded bg-gray-100 text-gray-700">
+                                                {doc.processingStatus}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
                         </div>
                     </div>
 

@@ -43,7 +43,8 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
 
     const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
       projectId: args.projectId,
-      limit: 3,
+      limit: 8,
+      sourceTypes: ["doc_upload"],
     });
 
     return {
@@ -148,7 +149,7 @@ export const runInBackground = internalAction({
     chatHistory: v.array(v.object({ role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")), content: v.string() })),
   },
   handler: async (ctx, args) => {
-    const { project, systemPrompt, activePlan, recentClarifications } = await ctx.runQuery(internal.agents.clarification.getContext, {
+    const { project, systemPrompt, activePlan, recentClarifications, knowledgeDocs } = await ctx.runQuery(internal.agents.clarification.getContext, {
       projectId: args.projectId,
     });
 
@@ -178,11 +179,28 @@ export const runInBackground = internalAction({
         })
         .join("\n");
 
+    const uploadedDocsSummary = knowledgeDocs && knowledgeDocs.length > 0
+        ? knowledgeDocs
+              .map((doc: { sourceType?: string; title: string; summary?: string; keyPoints?: string[] }) => {
+                  const keyPoints = Array.isArray(doc.keyPoints) && doc.keyPoints.length > 0
+                      ? ` Key points: ${doc.keyPoints.slice(0, 6).join("; ")}`
+                      : "";
+                  return `- [doc_upload] ${doc.title}: ${(doc.summary ?? "").slice(0, 400)}${keyPoints}`;
+              })
+              .join("\n")
+        : "- No uploaded documents ready yet.";
+
     const knowledgeSummary = knowledgeResults.length
         ? knowledgeResults
-              .map((doc: { doc: { sourceType: string; title: string; summary?: string }; text?: string }) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
+              .map((entry: { doc: { sourceType: string; title: string; summary?: string; keyPoints?: string[] }; text?: string }) => {
+                  const keyPoints = Array.isArray(entry.doc.keyPoints) && entry.doc.keyPoints.length > 0
+                      ? ` Key points: ${entry.doc.keyPoints.slice(0, 6).join("; ")}`
+                      : "";
+                  const base = (entry.doc.summary ?? entry.text?.slice(0, 200) ?? "").trim();
+                  return `- [${entry.doc.sourceType}] ${entry.doc.title}: ${base}${keyPoints}`;
+              })
               .join("\n")
-        : "- No knowledge documents available.";
+        : "- No relevant knowledge documents found.";
 
     const userPrompt = [
         `Project: ${project.name}`,
@@ -194,6 +212,9 @@ export const runInBackground = internalAction({
         "",
         "Recent Clarification Interactions (Do NOT Repeat these):",
         previousClarifications || "- None recorded",
+        "",
+        "Recently Uploaded Documents:",
+        uploadedDocsSummary,
         "",
         "Knowledge Documents:",
         knowledgeSummary,

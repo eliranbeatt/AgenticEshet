@@ -504,6 +504,8 @@ export const dynamicSearch: ReturnType<typeof action> = action({
                     _id: entry.doc._id,
                     title: entry.doc.title,
                     summary: args.includeSummaries === false ? undefined : entry.doc.summary,
+                    keyPoints: args.includeSummaries === false ? undefined : (entry.doc.keyPoints ?? []),
+                    keywords: args.includeSummaries === false ? undefined : (entry.doc.keywords ?? []),
                     tags: entry.doc.tags,
                     sourceType: (entry.doc.sourceType as SourceType | undefined) ?? "doc_upload",
                     topics: entry.doc.topics ?? [],
@@ -621,6 +623,42 @@ export const listDocsForNormalization = internalQuery({
 });
 
 // --- Queries ---
+
+export const listRecentDocs = query({
+    args: {
+        projectId: v.id("projects"),
+        limit: v.optional(v.number()),
+        sourceTypes: v.optional(v.array(sourceTypeEnum)),
+    },
+    handler: async (ctx, args) => {
+        const limit = Math.max(1, Math.min(args.limit ?? 6, 25));
+        const docs = await ctx.db
+            .query("knowledgeDocs")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .order("desc")
+            .take(limit * 4);
+
+        const filtered = args.sourceTypes && args.sourceTypes.length > 0
+            ? docs.filter((doc) => args.sourceTypes?.includes(((doc.sourceType as SourceType | undefined) ?? "doc_upload")))
+            : docs;
+
+        return filtered.slice(0, limit).map((doc) => ({
+            _id: doc._id,
+            title: doc.title,
+            summary: doc.summary,
+            tags: doc.tags,
+            keyPoints: doc.keyPoints ?? [],
+            keywords: doc.keywords ?? [],
+            sourceType: (doc.sourceType as SourceType | undefined) ?? "doc_upload",
+            topics: doc.topics ?? [],
+            domain: doc.domain,
+            clientName: doc.clientName,
+            phase: doc.phase,
+            processingStatus: doc.processingStatus,
+            createdAt: doc.createdAt,
+        }));
+    },
+});
 
 export const listDocs = query({
     args: { projectId: v.id("projects") },
@@ -764,6 +802,8 @@ export const getContextDocs = internalQuery({
             title: doc.title,
             summary: doc.summary,
             tags: doc.tags,
+            keyPoints: doc.keyPoints ?? [],
+            keywords: doc.keywords ?? [],
             sourceType: doc.sourceType,
             topics: doc.topics ?? [],
             domain: doc.domain,

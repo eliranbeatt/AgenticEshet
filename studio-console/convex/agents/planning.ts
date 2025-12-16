@@ -3,7 +3,6 @@ import { action, internalAction, internalMutation, internalQuery } from "../_gen
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { PlanSchema } from "../lib/zodSchemas";
-import { type Doc } from "../_generated/dataModel";
 
 // 1. DATA ACCESS
 export const getContext: ReturnType<typeof internalQuery> = internalQuery({
@@ -36,7 +35,8 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
 
     const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
         projectId: args.projectId,
-        limit: 3,
+        limit: 8,
+        sourceTypes: ["doc_upload"],
     });
 
     return {
@@ -115,11 +115,11 @@ export const runInBackground = internalAction({
     userRequest: v.string(),
   },
   handler: async (ctx, args) => {
-    const { project, systemPrompt, existingPlans, latestClarification } = await ctx.runQuery(internal.agents.planning.getContext, {
+    const { project, systemPrompt, existingPlans, latestClarification, knowledgeDocs: recentUploads } = await ctx.runQuery(internal.agents.planning.getContext, {
       projectId: args.projectId,
     });
 
-    const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
+    const knowledgeResults = await ctx.runAction(api.knowledge.dynamicSearch, {
         projectId: args.projectId,
         query: [args.userRequest, project.details.notes || "", project.clientName].join("\n"),
         scope: "both",
@@ -133,11 +133,28 @@ export const runInBackground = internalAction({
         ? latestClarification.contentMarkdown.slice(0, 1200)
         : "No clarification summary recorded.";
 
-    const knowledgeSection = knowledgeDocs.length
-        ? knowledgeDocs
-              .map((doc: { doc: { sourceType: string; title: string; summary?: string }; text?: string }) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
+    const uploadedDocsSection = recentUploads && recentUploads.length > 0
+        ? recentUploads
+              .map((doc: { title: string; summary?: string; keyPoints?: string[] }) => {
+                  const keyPoints = Array.isArray(doc.keyPoints) && doc.keyPoints.length > 0
+                      ? ` Key points: ${doc.keyPoints.slice(0, 6).join("; ")}`
+                      : "";
+                  return `- [doc_upload] ${doc.title}: ${(doc.summary ?? "").slice(0, 400)}${keyPoints}`;
+              })
               .join("\n")
-        : "No knowledge documents available.";
+        : "No uploaded documents ready yet.";
+
+    const knowledgeSection = knowledgeResults.length
+        ? knowledgeResults
+              .map((entry: { doc: { sourceType: string; title: string; summary?: string; keyPoints?: string[] }; text?: string }) => {
+                  const keyPoints = Array.isArray(entry.doc.keyPoints) && entry.doc.keyPoints.length > 0
+                      ? ` Key points: ${entry.doc.keyPoints.slice(0, 6).join("; ")}`
+                      : "";
+                  const base = (entry.doc.summary ?? entry.text?.slice(0, 200) ?? "").trim();
+                  return `- [${entry.doc.sourceType}] ${entry.doc.title}: ${base}${keyPoints}`;
+              })
+              .join("\n")
+        : "No relevant knowledge documents found.";
 
     const context = [
         `Project: ${project.name}`,
@@ -147,6 +164,9 @@ export const runInBackground = internalAction({
         "",
         "Latest Clarification Summary:",
         clarificationSection,
+        "",
+        "Recently Uploaded Documents:",
+        uploadedDocsSection,
         "",
         "Relevant Knowledge Snippets:",
         knowledgeSection,

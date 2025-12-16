@@ -172,9 +172,15 @@ export const runInBackground = internalAction({
 
     const knowledgeSummary = knowledgeDocs.length
         ? knowledgeDocs
-              .map((doc: { doc: { sourceType: string; title: string; summary?: string }; text?: string }) => `- [${doc.doc.sourceType}] ${doc.doc.title}: ${doc.doc.summary ?? doc.text?.slice(0, 200)}`)
+              .map((entry: { doc: { sourceType: string; title: string; summary?: string; keyPoints?: string[] }; text?: string }) => {
+                  const keyPoints = Array.isArray(entry.doc.keyPoints) && entry.doc.keyPoints.length > 0
+                      ? ` Key points: ${entry.doc.keyPoints.slice(0, 6).join("; ")}`
+                      : "";
+                  const base = (entry.doc.summary ?? entry.text?.slice(0, 200) ?? "").trim();
+                  return `- [${entry.doc.sourceType}] ${entry.doc.title}: ${base}${keyPoints}`;
+              })
               .join("\n")
-        : "- No knowledge documents available.";
+        : "- No relevant knowledge documents found.";
 
     const userPrompt = `Project: ${project.name}
     

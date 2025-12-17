@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Id } from "../../../../convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
@@ -31,7 +31,7 @@ export default function SolutioningPage() {
         selectedItemId ? { projectId, itemId: selectedItemId } : "skip" // "skip" if null
     );
 
-    const chatMutation = useMutation(api.agents.solutioning.chat);
+    const chatMutation = useAction(api.agents.solutioning.chat);
     const updateSolutionMutation = useMutation(api.agents.solutioning.updateSolution);
 
     // --- Effects ---
@@ -130,8 +130,8 @@ export default function SolutioningPage() {
                                 key={item._id}
                                 onClick={() => setSelectedItemId(item._id)}
                                 className={`p-3 rounded cursor-pointer border transition-colors ${selectedItemId === item._id
-                                        ? "bg-blue-50 border-blue-400 ring-1 ring-blue-200"
-                                        : "bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-200"
+                                    ? "bg-blue-50 border-blue-400 ring-1 ring-blue-200"
+                                    : "bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-200"
                                     }`}
                             >
                                 <div className="flex justify-between items-start mb-1">
@@ -181,8 +181,8 @@ export default function SolutioningPage() {
                                 {conversation?.map((msg, idx) => (
                                     <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                                         <div className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm ${msg.role === "user"
-                                                ? "bg-blue-600 text-white rounded-br-none"
-                                                : "bg-white border text-gray-800 rounded-bl-none"
+                                            ? "bg-blue-600 text-white rounded-br-none"
+                                            : "bg-white border text-gray-800 rounded-bl-none"
                                             }`}>
                                             <div className="whitespace-pre-wrap">{msg.content}</div>
                                         </div>

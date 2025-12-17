@@ -21,7 +21,7 @@ export default defineSchema({
         overviewSummary: v.optional(v.string()),
         createdAt: v.number(),  // Date.now()
         createdBy: v.string(),  // userId/email (local for now)
-        
+
         // Accounting / Costing Fields
         currency: v.optional(v.string()), // e.g. "ILS", "USD"
         overheadPercent: v.optional(v.number()), // 0.15
@@ -37,14 +37,14 @@ export default defineSchema({
         description: v.optional(v.string()),
         sortOrder: v.number(),
         pricingMode: v.union(v.literal("estimated"), v.literal("actual"), v.literal("mixed")),
-        
+
         // Per-section overrides
         overheadPercentOverride: v.optional(v.number()),
         riskPercentOverride: v.optional(v.number()),
         profitPercentOverride: v.optional(v.number()),
     })
-    .index("by_project", ["projectId"])
-    .index("by_project_group", ["projectId", "group"]),
+        .index("by_project", ["projectId"])
+        .index("by_project_group", ["projectId", "group"]),
 
     // 17. MATERIAL LINES (The "E" in cost)
     materialLines: defineTable({
@@ -62,27 +62,33 @@ export default defineSchema({
                 v.literal("either")
             )
         ),
-        
+
         // Vendor Link
         vendorId: v.optional(v.id("vendors")),
         vendorName: v.optional(v.string()), // Snapshot or ad-hoc name
 
         unit: v.string(), // m, sqm, unit
-        
+
         // Planning
         plannedQuantity: v.number(),
         plannedUnitCost: v.number(),
-        
+
         // Actuals
         actualQuantity: v.optional(v.number()),
         actualUnitCost: v.optional(v.number()),
-        
+
         taxRate: v.optional(v.number()), // e.g., 0.17
         status: v.string(), // planned, ordered, received, paid
         note: v.optional(v.string()),
+
+        // Solutioning Agent Fields
+        solutioned: v.optional(v.boolean()),
+        solutionPlan: v.optional(v.string()), // The "how to" text
+        lastUpdatedBy: v.optional(v.string()),
+        updatedAt: v.optional(v.number()),
     })
-    .index("by_section", ["sectionId"])
-    .index("by_project", ["projectId"]),
+        .index("by_section", ["sectionId"])
+        .index("by_project", ["projectId"]),
 
     // 18. WORK LINES (The "S" in cost)
     workLines: defineTable({
@@ -91,23 +97,23 @@ export default defineSchema({
         workType: v.string(), // studio, field, management
         role: v.string(),
         personId: v.optional(v.string()), // Link to user/employee if needed
-        
+
         rateType: v.string(), // hour, day, flat
-        
+
         // Planning
         plannedQuantity: v.number(),
         plannedUnitCost: v.number(),
-        
+
         // Actuals
         actualQuantity: v.optional(v.number()),
         actualUnitCost: v.optional(v.number()),
-        
+
         status: v.string(), // planned, scheduled, done, paid
         description: v.optional(v.string()),
     })
-    .index("by_section", ["sectionId"])
-    .index("by_project", ["projectId"]),
-    
+        .index("by_section", ["sectionId"])
+        .index("by_project", ["projectId"]),
+
     // 19. VENDORS (Knowledge Base)
     vendors: defineTable({
         name: v.string(),
@@ -197,7 +203,7 @@ export default defineSchema({
         // Dependencies
         taskNumber: v.optional(v.number()),
         dependencies: v.optional(v.array(v.id("tasks"))),
-        
+
         // Gantt / Scheduling
         startDate: v.optional(v.number()),
         endDate: v.optional(v.number()),
@@ -379,7 +385,7 @@ export default defineSchema({
         defaultContext: v.string(),
         defaultTags: v.array(v.string()),
         enrichmentProfileId: v.optional(v.id("enrichmentProfiles")),
-        
+
         // New fields per plan
         sourceType: v.optional(v.union(
             v.literal("upload"),
@@ -417,10 +423,10 @@ export default defineSchema({
         ),
         createdAt: v.number(),
     })
-    .index("by_project", ["projectId"])
-    .index("by_projectId_createdAt", ["projectId", "createdAt"])
-    .index("by_status_createdAt", ["status", "createdAt"])
-    .index("by_sourceType_createdAt", ["sourceType", "createdAt"]),
+        .index("by_project", ["projectId"])
+        .index("by_projectId_createdAt", ["projectId", "createdAt"])
+        .index("by_status_createdAt", ["status", "createdAt"])
+        .index("by_sourceType_createdAt", ["sourceType", "createdAt"]),
 
     // 11. INGESTION FILES
     ingestionFiles: defineTable({
@@ -429,7 +435,7 @@ export default defineSchema({
         originalFilename: v.string(),
         storageId: v.string(),
         mimeType: v.string(),
-        
+
         // New fields per plan
         sourceType: v.optional(v.union(
             v.literal("upload"),
@@ -469,7 +475,7 @@ export default defineSchema({
             v.literal("committed"),
             v.literal("failed")
         ),
-        
+
         rawText: v.optional(v.string()),
         enrichedText: v.optional(v.string()),
         summary: v.optional(v.string()),
@@ -484,9 +490,9 @@ export default defineSchema({
         error: v.optional(v.string()),
         ragDocId: v.optional(v.id("knowledgeDocs")),
     })
-    .index("by_job", ["ingestionJobId"])
-    .index("by_project", ["projectId"])
-    .index("by_projectId_createdAt", ["projectId", "createdAt"]),
+        .index("by_job", ["ingestionJobId"])
+        .index("by_project", ["projectId"])
+        .index("by_projectId_createdAt", ["projectId", "createdAt"]),
 
     // 24. INBOX ITEMS
     inboxItems: defineTable({
@@ -549,9 +555,9 @@ export default defineSchema({
             }),
         })),
     })
-    .index("by_project_receivedAt", ["projectId", "receivedAt"])
-    .index("by_status_receivedAt", ["status", "receivedAt"])
-    .index("by_sourceMessageId", ["sourceMessageId"]),
+        .index("by_project_receivedAt", ["projectId", "receivedAt"])
+        .index("by_status_receivedAt", ["status", "receivedAt"])
+        .index("by_sourceMessageId", ["sourceMessageId"]),
 
     // 25. CONNECTOR ACCOUNTS
     connectorAccounts: defineTable({
@@ -577,7 +583,7 @@ export default defineSchema({
         createdAt: v.number(),
         updatedAt: v.number(),
     })
-    .index("by_owner_type", ["ownerUserId", "type"]),
+        .index("by_owner_type", ["ownerUserId", "type"]),
 
     // 26. CONNECTOR WATCHES
     connectorWatches: defineTable({
@@ -594,8 +600,8 @@ export default defineSchema({
         createdAt: v.number(),
         updatedAt: v.number(),
     })
-    .index("by_project", ["projectId"])
-    .index("by_account", ["accountId"]),
+        .index("by_project", ["projectId"])
+        .index("by_account", ["accountId"]),
 
     // 12. ENRICHMENT PROFILES (configurable enhancer behavior)
     enrichmentProfiles: defineTable({
@@ -663,8 +669,8 @@ export default defineSchema({
         observedAt: v.number(),
         notes: v.optional(v.string()),
     })
-    .index("by_canonicalItem_observedAt", ["canonicalItemId", "observedAt"])
-    .index("by_vendor_observedAt", ["vendorId", "observedAt"]),
+        .index("by_canonicalItem_observedAt", ["canonicalItemId", "observedAt"])
+        .index("by_vendor_observedAt", ["vendorId", "observedAt"]),
 
     // 28. CANONICAL ITEMS (Normalized Master List)
     canonicalItems: defineTable({
@@ -709,7 +715,7 @@ export default defineSchema({
         createdAt: v.number(),
         expiresAt: v.number(),
     })
-    .index("by_materialLine_createdAt", ["materialLineId", "createdAt"]),
+        .index("by_materialLine_createdAt", ["materialLineId", "createdAt"]),
 
     // 31. RESEARCH RUNS (Gemini Deep Research)
     researchRuns: defineTable({
@@ -752,7 +758,7 @@ export default defineSchema({
             projectId: v.optional(v.id("projects")),
         }),
     })
-    .index("by_status_startedAt", ["status", "startedAt"])
-    .index("by_linked_materialLine_createdAt", ["linked.materialLineId", "startedAt"])
-    .index("by_createdBy_startedAt", ["createdBy", "startedAt"]),
+        .index("by_status_startedAt", ["status", "startedAt"])
+        .index("by_linked_materialLine_createdAt", ["linked.materialLineId", "startedAt"])
+        .index("by_createdBy_startedAt", ["createdBy", "startedAt"]),
 });

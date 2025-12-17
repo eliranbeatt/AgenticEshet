@@ -35,14 +35,18 @@ async function estimateSectionImpl(
         });
     }
 
-    const { project, section, catalogItems, systemPrompt } = await ctx.runQuery(internal.agents.estimator.getContext, {
+    const { project, section, catalogItems, systemPrompt, solutionedItems } = await ctx.runQuery(internal.agents.estimator.getContext, {
         projectId: args.projectId,
         sectionId: args.sectionId,
-    }) as EstimatorContext;
+    }) as EstimatorContext & { solutionedItems: { label: string; solutionPlan: string }[] };
 
     const catalogContext = catalogItems.length > 0
         ? "Historical Prices from Catalog:\n" + catalogItems.map((c) => `- ${c.name}: ${c.lastPrice} per ${c.defaultUnit}`).join("\n")
         : "No specific catalog matches found.";
+
+    const solutionContext = solutionedItems && solutionedItems.length > 0
+        ? "\n\nLOCKED SOLUTIONS (Must adhere to these plans):\n" + solutionedItems.map(i => `Item: ${i.label}\nPlan: ${i.solutionPlan}`).join("\n---\n")
+        : "";
 
     const userPrompt = `
 Project: ${project.name}
@@ -52,13 +56,15 @@ Group: ${section.group}
 Description: ${section.description || "N/A"}
 
 ${catalogContext}
+${solutionContext}
 
 Please estimate the required materials and labor to execute this section.
 - **LANGUAGE: HEBREW ONLY** for all labels, descriptions, and roles.
 - **CURRENCY: ILS** (Shekels).
 - **UNITS: Metric/Israeli** (m, sqm, kg, units).
 - Be realistic with quantities and costs in the Israeli market.
-- Break down labor into specific roles (e.g. "xÿx'x"", "xzx¦xxTxY", "xzxÿx"xo xx"xxTxx~").
+- Break down labor into specific roles.
+- IMPORTANT: If an item is listed in "LOCKED SOLUTIONS", you MUST use the suggested materials and methods in that plan. Do not invent new ways for those items.
 `;
 
     const result = await callChatWithSchema(EstimationSchema, {
@@ -98,10 +104,22 @@ export const getContext = internalQuery({
             .withSearchIndex("search_material", (q) => q.search("name", section.name))
             .take(5);
 
+        // Fetch existing solutioned items to enforce their plan
+        const materialLines = await ctx.db
+            .query("materialLines")
+            .withIndex("by_section", (q) => q.eq("sectionId", args.sectionId))
+            .collect();
+
+        const solutionedItems = materialLines.filter(m => m.solutioned && m.solutionPlan);
+
         return {
             project,
             section,
             catalogItems,
+            solutionedItems: solutionedItems.map(item => ({
+                label: item.label,
+                solutionPlan: item.solutionPlan
+            })),
             systemPrompt: "You are an expert Production Estimator for an events and creative studio. Your goal is to break down a high-level element (Section) into detailed Bill of Materials and Labor tasks.",
         };
     },

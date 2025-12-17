@@ -477,6 +477,11 @@ function TaskCard({
                     {accountingChipLabel}
                 </span>
             </div>
+            {dependencyText && (
+                <p className="text-[11px] text-gray-500 mb-2">
+                    {dependencyText}
+                </p>
+            )}
 
             <div className="space-y-2 text-xs">
                 <InlineSelect

@@ -173,6 +173,27 @@ export const saveTasks = internalMutation({
             return match;
         };
 
+        const normalizeTempTaskId = (raw: string | undefined) => {
+            if (!raw) return null;
+            const trimmed = raw.trim();
+            if (!trimmed) return null;
+
+            const upper = trimmed.toUpperCase();
+            const direct = upper.match(/^T(\d+)$/);
+            if (direct) return `T${Number(direct[1])}`;
+
+            const withSeparator = upper.match(/^T\s*[-_#:]?\s*(\d+)\s*$/);
+            if (withSeparator) return `T${Number(withSeparator[1])}`;
+
+            const numericOnly = upper.match(/^#?\s*(\d+)\s*$/);
+            if (numericOnly) return `T${Number(numericOnly[1])}`;
+
+            const embedded = upper.match(/(?:TASK|T)\s*[-_#:]?\s*(\d+)/);
+            if (embedded) return `T${Number(embedded[1])}`;
+
+            return upper;
+        };
+
         const tempIdToDbId = new Map<string, Id<"tasks">>();
 
         for (let i = 0; i < tasks.length; i++) {
@@ -231,42 +252,58 @@ export const saveTasks = internalMutation({
             } else {
                 taskId = existingTask.id;
             }
-            if (t.id) {
-                tempIdToDbId.set(t.id, taskId);
-            }
+
+            const normalizedTempId = normalizeTempTaskId(t.id);
+            if (normalizedTempId) tempIdToDbId.set(normalizedTempId, taskId);
+            if (t.id) tempIdToDbId.set(t.id.trim(), taskId);
         }
 
         for (let i = 0; i < tasks.length; i++) {
             const t = tasks[i];
-            if (t.dependencies && t.dependencies.length > 0) {
-                let currentDbId: Id<"tasks"> | undefined;
-                if (t.id) currentDbId = tempIdToDbId.get(t.id);
-                // Fallback (though schema requires ID)
-                if (!currentDbId) {
-                    // Try to find it by re-resolving title if needed, or skip
-                    const existing = existingByTitle.get(t.title.trim().toLowerCase());
-                    if (existing) currentDbId = existing.id;
-                }
-
-                if (currentDbId) {
-                    const depIds: Id<"tasks">[] = [];
-                    for (const depStringId of t.dependencies) {
-                        let depDbId = tempIdToDbId.get(depStringId);
-
-                        // Fallback: if ID invalid, try matching by Title 
-                        // (handles cases where LLM mistakenly uses Title as dependency ID)
-                        if (!depDbId) {
-                            const existing = existingByTitle.get(depStringId.trim().toLowerCase());
-                            if (existing) depDbId = existing.id;
-                        }
-
-                        if (depDbId) depIds.push(depDbId);
-                    }
-                    if (depIds.length > 0) {
-                        await ctx.db.patch(currentDbId, { dependencies: depIds });
-                    }
-                }
+            let currentDbId: Id<"tasks"> | undefined;
+            if (t.id) {
+                currentDbId =
+                    tempIdToDbId.get(normalizeTempTaskId(t.id) ?? t.id.trim()) ??
+                    tempIdToDbId.get(t.id.trim());
             }
+            // Fallback (though schema requires ID)
+            if (!currentDbId) {
+                // Try to find it by re-resolving title if needed, or skip
+                const existing = existingByTitle.get(t.title.trim().toLowerCase());
+                if (existing) currentDbId = existing.id;
+            }
+
+            if (!currentDbId) continue;
+
+            const depIds: Id<"tasks">[] = [];
+            const desiredDependencies = t.dependencies ?? [];
+            for (const depStringIdRaw of desiredDependencies) {
+                const depStringId = depStringIdRaw.trim();
+                if (!depStringId) continue;
+
+                const candidates = [
+                    depStringId,
+                    depStringId.toUpperCase(),
+                    normalizeTempTaskId(depStringId),
+                ].filter((c): c is string => Boolean(c));
+
+                let depDbId: Id<"tasks"> | undefined;
+                for (const candidate of candidates) {
+                    depDbId = tempIdToDbId.get(candidate);
+                    if (depDbId) break;
+                }
+
+                // Fallback: if ID invalid, try matching by Title
+                // (handles cases where LLM mistakenly uses Title as dependency ID)
+                if (!depDbId) {
+                    const existing = existingByTitle.get(depStringId.toLowerCase());
+                    if (existing) depDbId = existing.id;
+                }
+
+                if (depDbId && depDbId !== currentDbId && !depIds.includes(depDbId)) depIds.push(depDbId);
+            }
+
+            await ctx.db.patch(currentDbId, { dependencies: depIds });
         }
 
         const taskSnapshot = await ctx.db

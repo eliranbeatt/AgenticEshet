@@ -134,7 +134,36 @@ export const saveEstimation = internalMutation({
     handler: async (ctx, args) => {
         const data = args.estimation;
 
+        const existingMaterials = await ctx.db
+            .query("materialLines")
+            .withIndex("by_section", (q) => q.eq("sectionId", args.sectionId))
+            .collect();
+
+        const lockedLabels = new Set(
+            existingMaterials
+                .filter((line) => line.solutioned && line.solutionPlan)
+                .map((line) => (line.label ?? "").trim().toLowerCase())
+                .filter(Boolean)
+        );
+
+        for (const line of existingMaterials) {
+            if (line.solutioned && line.solutionPlan) continue;
+            await ctx.db.delete(line._id);
+        }
+
+        const existingWork = await ctx.db
+            .query("workLines")
+            .withIndex("by_section", (q) => q.eq("sectionId", args.sectionId))
+            .collect();
+
+        for (const line of existingWork) {
+            await ctx.db.delete(line._id);
+        }
+
         for (const material of data.materials) {
+            const normalizedLabel = (material.label ?? "").trim().toLowerCase();
+            if (normalizedLabel && lockedLabels.has(normalizedLabel)) continue;
+
             await ctx.db.insert("materialLines", {
                 projectId: args.projectId,
                 sectionId: args.sectionId,

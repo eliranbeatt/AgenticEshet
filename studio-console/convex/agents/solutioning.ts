@@ -122,12 +122,22 @@ export const updateSolution = mutation({
         solutionPlan: v.string(),
     },
     handler: async (ctx, args) => {
+        const normalizedPlan = args.solutionPlan.trim();
+        const marker = "# SOLUTIONED (LOCKED - DO NOT EDIT)";
+        const lockedPlan = normalizedPlan.includes("SOLUTIONED (LOCKED")
+            ? normalizedPlan
+            : [marker, normalizedPlan].filter(Boolean).join("\n\n");
+
         await ctx.db.patch(args.itemId, {
             solutioned: true,
-            solutionPlan: args.solutionPlan,
+            solutionPlan: lockedPlan,
+            note: lockedPlan,
+            description: lockedPlan,
             lastUpdatedBy: "solutioning_agent", // or user
             updatedAt: Date.now(),
         });
+
+        return { solutioned: true };
     },
 });
 

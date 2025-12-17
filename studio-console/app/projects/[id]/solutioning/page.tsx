@@ -6,6 +6,20 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Id } from "../../../../convex/_generated/dataModel";
 
+type PlanningItem = {
+    _id: Id<"materialLines">;
+    label: string;
+    category: string;
+    sectionName: string;
+    group: string;
+    status: string;
+    note?: string;
+    solutioned?: boolean;
+    solutionPlan?: string;
+    plannedQuantity: number;
+    unit: string;
+};
+
 export default function SolutioningPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
@@ -19,6 +33,8 @@ export default function SolutioningPage() {
     // Editor State
     const [solutionDraft, setSolutionDraft] = useState("");
     const [isSaving, setIsSaving] = useState(false);
+    const selectedItemSnapshotRef = useRef<PlanningItem | null>(null);
+    const previousSelectedItemIdRef = useRef<string | null>(null);
 
     // --- Data ---
     const items = useQuery(api.agents.solutioning.getPlanningItems, { projectId });
@@ -33,15 +49,57 @@ export default function SolutioningPage() {
     const updateSolutionMutation = useMutation(api.agents.solutioning.updateSolution);
 
     // --- Effects ---
-    // Update draft when selection changes to the saved plan
+    // Update draft when selection changes (do not reset on refetches)
     useEffect(() => {
-        if (selectedItemId && items) {
-            const item = items.find(i => i._id === selectedItemId);
-            if (item) {
-                setSolutionDraft(item.solutionPlan || "");
-            }
+        if (!selectedItemId) return;
+        if (!items) return;
+
+        const selectedItemIdString = String(selectedItemId);
+        if (previousSelectedItemIdRef.current === selectedItemIdString) return;
+        previousSelectedItemIdRef.current = selectedItemIdString;
+
+        const draftKey = `solutioning:draft:${projectId}:${selectedItemId}`;
+        const storedDraft = typeof window === "undefined" ? null : window.localStorage.getItem(draftKey);
+        if (storedDraft) {
+            setSolutionDraft(storedDraft);
+            return;
         }
-    }, [selectedItemId, items]);
+
+        const item = items.find(i => i._id === selectedItemId);
+        setSolutionDraft(item?.solutionPlan || "");
+    }, [items, projectId, selectedItemId]);
+
+    useEffect(() => {
+        if (!selectedItemId) return;
+        if (!items) return;
+        const item = items.find(i => i._id === selectedItemId) ?? null;
+        if (!item) return;
+        selectedItemSnapshotRef.current = item;
+    }, [items, selectedItemId]);
+
+    useEffect(() => {
+        if (!items || items.length === 0) return;
+        if (selectedItemId) return;
+
+        const selectedKey = `solutioning:selected:${projectId}`;
+        const storedSelected = typeof window === "undefined" ? null : window.localStorage.getItem(selectedKey);
+        if (!storedSelected) return;
+        if (!items.some(item => item._id === storedSelected)) return;
+
+        setSelectedItemId(storedSelected as Id<"materialLines">);
+    }, [items, projectId, selectedItemId]);
+
+    useEffect(() => {
+        if (!selectedItemId) return;
+        const selectedKey = `solutioning:selected:${projectId}`;
+        window.localStorage.setItem(selectedKey, selectedItemId);
+    }, [projectId, selectedItemId]);
+
+    useEffect(() => {
+        if (!selectedItemId) return;
+        const draftKey = `solutioning:draft:${projectId}:${selectedItemId}`;
+        window.localStorage.setItem(draftKey, solutionDraft);
+    }, [projectId, selectedItemId, solutionDraft]);
 
     // Scroll to bottom of chat
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -106,7 +164,9 @@ export default function SolutioningPage() {
                 itemId: selectedItemId,
                 solutionPlan: solutionDraft,
             });
-            // Maybe show a toast?
+            const draftKey = `solutioning:draft:${projectId}:${selectedItemId}`;
+            window.localStorage.removeItem(draftKey);
+            setSolutionDraft((prev) => prev.trim());
         } catch (e) {
             alert("Failed to save: " + e);
         } finally {
@@ -115,7 +175,7 @@ export default function SolutioningPage() {
     };
 
     // Derived
-    const selectedItem = items?.find(i => i._id === selectedItemId);
+    const selectedItem = items?.find(i => i._id === selectedItemId) ?? selectedItemSnapshotRef.current;
 
     return (
         <div className="h-[calc(100vh-6rem)] flex flex-col gap-4">
@@ -194,7 +254,7 @@ export default function SolutioningPage() {
                                             ? "bg-blue-600 text-white rounded-br-none"
                                             : "bg-white border text-gray-800 rounded-bl-none"
                                             }`}>
-                                            <div className="whitespace-pre-wrap">{msg.content}</div>
+                                            <div className="whitespace-pre-wrap text-right" dir="rtl">{msg.content}</div>
                                         </div>
                                     </div>
                                 ))}
@@ -215,7 +275,7 @@ export default function SolutioningPage() {
                             <textarea
                                 ref={chatInputRef}
                                 rows={1}
-                                className="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-5 min-h-[40px] max-h-40"
+                                className="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-5 min-h-[40px] max-h-40 text-right"
                                 placeholder={selectedItem ? "Ask about materials, dimensions, vendors..." : "Select an item..."}
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
@@ -224,6 +284,7 @@ export default function SolutioningPage() {
                                     e.preventDefault();
                                     void handleSend();
                                 }}
+                                dir="rtl"
                                 disabled={!selectedItem || isTyping}
                             />
                             <button
@@ -241,15 +302,15 @@ export default function SolutioningPage() {
                 <div className="flex-1 flex flex-col bg-white border rounded shadow-sm">
                     <div className="p-3 border-b bg-gray-50 font-semibold text-sm text-gray-700 flex justify-between items-center">
                         <span>Selected Solution</span>
-                        {selectedItem && (
+                        <div className="flex items-center gap-2 font-normal">
                             <button
                                 onClick={handleSaveSolution}
-                                disabled={isSaving || !solutionDraft.trim()}
+                                disabled={!selectedItemId || isSaving || !solutionDraft.trim()}
                                 className="bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700 disabled:opacity-50"
                             >
                                 {isSaving ? "Applying..." : "Apply to Plan"}
                             </button>
-                        )}
+                        </div>
                     </div>
 
                     {!selectedItem ? (
@@ -258,16 +319,12 @@ export default function SolutioningPage() {
                         </div>
                     ) : (
                         <div className="flex-1 flex flex-col h-full">
-                            <div className="p-2 bg-blue-50 border-b text-xs text-blue-800 flex flex-col gap-1">
-                                <div><strong>Item:</strong> {selectedItem.label}</div>
-                                <div><strong>Original Plan:</strong> {selectedItem.note || "No specific note"}</div>
-                            </div>
                             <textarea
-                                className="flex-1 w-full p-4 resize-none focus:outline-none text-sm font-mono leading-relaxed"
+                                className="flex-1 w-full p-4 resize-none focus:outline-none text-sm font-mono leading-relaxed text-right"
                                 placeholder="# Production Plan\n\n1. Cut material...\n2. Assemble..."
                                 value={solutionDraft}
                                 onChange={(e) => setSolutionDraft(e.target.value)}
-                                dir="auto"
+                                dir="rtl"
                             />
                             <div className="p-2 border-t bg-gray-50 text-[10px] text-gray-400">
                                 This text will be saved as the official production method for accounting.

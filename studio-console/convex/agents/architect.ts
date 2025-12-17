@@ -70,6 +70,7 @@ export const saveTasks = internalMutation({
     args: {
         projectId: v.id("projects"),
         tasks: v.array(v.object({
+            id: v.string(),
             title: v.string(),
             description: v.string(),
             category: v.union(v.literal("Logistics"), v.literal("Creative"), v.literal("Finance"), v.literal("Admin"), v.literal("Studio")),
@@ -77,7 +78,7 @@ export const saveTasks = internalMutation({
             accountingSectionName: v.optional(v.union(v.string(), v.null())),
             accountingItemLabel: v.optional(v.union(v.string(), v.null())),
             accountingItemType: v.optional(v.union(v.literal("material"), v.literal("work"), v.null())),
-            dependencies: v.array(v.number()),
+            dependencies: v.array(v.string()),
             estimatedHours: v.number(),
         })),
     },
@@ -157,10 +158,22 @@ export const saveTasks = internalMutation({
         const resolveSectionId = (raw?: string) => {
             if (!raw) return undefined;
             const key = normalizeKey(raw);
-            return sectionLookup.get(key) ?? sectionNameLookupUnique.get(key);
+            let match = sectionLookup.get(key) ?? sectionNameLookupUnique.get(key);
+
+            if (!match) {
+                // Fuzzy fallback: check if raw is contained in any section label or vice versa
+                // e.g. "paint" matches "[Studio Elements] Paint"
+                for (const [sKey, sId] of sectionLookup.entries()) {
+                    if (sKey.includes(key) || key.includes(sKey)) {
+                        match = sId;
+                        break;
+                    }
+                }
+            }
+            return match;
         };
 
-        const batchIndexToId = new Map<number, Id<"tasks">>();
+        const tempIdToDbId = new Map<string, Id<"tasks">>();
 
         for (let i = 0; i < tasks.length; i++) {
             const t = tasks[i];
@@ -191,6 +204,7 @@ export const saveTasks = internalMutation({
                     accountingSectionId: sectionId,
                     accountingLineType,
                     accountingLineId,
+                    estimatedDuration: t.estimatedDuration,
                     updatedAt: Date.now(),
                 });
                 if (!existingTasks.find(et => et._id === taskId)?.taskNumber) {
@@ -217,21 +231,39 @@ export const saveTasks = internalMutation({
             } else {
                 taskId = existingTask.id;
             }
-            batchIndexToId.set(i + 1, taskId);
+            if (t.id) {
+                tempIdToDbId.set(t.id, taskId);
+            }
         }
 
         for (let i = 0; i < tasks.length; i++) {
             const t = tasks[i];
             if (t.dependencies && t.dependencies.length > 0) {
-                const taskId = batchIndexToId.get(i + 1);
-                if (taskId) {
+                let currentDbId: Id<"tasks"> | undefined;
+                if (t.id) currentDbId = tempIdToDbId.get(t.id);
+                // Fallback (though schema requires ID)
+                if (!currentDbId) {
+                    // Try to find it by re-resolving title if needed, or skip
+                    const existing = existingByTitle.get(t.title.trim().toLowerCase());
+                    if (existing) currentDbId = existing.id;
+                }
+
+                if (currentDbId) {
                     const depIds: Id<"tasks">[] = [];
-                    for (const depIndex of t.dependencies) {
-                        const depId = batchIndexToId.get(depIndex);
-                        if (depId) depIds.push(depId);
+                    for (const depStringId of t.dependencies) {
+                        let depDbId = tempIdToDbId.get(depStringId);
+
+                        // Fallback: if ID invalid, try matching by Title 
+                        // (handles cases where LLM mistakenly uses Title as dependency ID)
+                        if (!depDbId) {
+                            const existing = existingByTitle.get(depStringId.trim().toLowerCase());
+                            if (existing) depDbId = existing.id;
+                        }
+
+                        if (depDbId) depIds.push(depDbId);
                     }
                     if (depIds.length > 0) {
-                        await ctx.db.patch(taskId, { dependencies: depIds });
+                        await ctx.db.patch(currentDbId, { dependencies: depIds });
                     }
                 }
             }
@@ -365,7 +397,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
 Plan Content:
 ${latestPlan.contentMarkdown}
 
-Accounting Sections (use the section label exactly when linking tasks):
+Accounting Sections (IMPORTANT: Use the exact label format "[Group] Name" when linking tasks):
 ${accountingSummary}
 
 Existing Tasks (for deduplication):
@@ -377,18 +409,29 @@ ${knowledgeSummary}
 Task: Break down this plan into actionable, atomic tasks. Focus on the immediate next steps implied by the plan.
 
 REQUIRED: Dependencies & Estimations
-1. **Dependencies**: You MUST assign dependencies for each task using the 1-based index. A task cannot start until its dependencies are DONE. Use [] if it can start immediately. Reference ONLY earlier tasks (no forward references).
+1. **Dependencies**: 
+   - You MUST assign a unique string 'id' (e.g. "T1", "T2", "T3") to EACH task you generate in this list.
+   - Use these IDs in the 'dependencies' array to link tasks.
+   - Example: If Task B depends on Task A, and Task A has id="T1", then Task B should have dependencies=["T1"].
+   - A task cannot start until its dependencies are DONE. 
+   - Use '[]' if it can start immediately. 
+   - Reference ONLY tasks defined in this list (no forward references, no IDs from outside this list).
 2. **Estimation**: You MUST provide 'estimatedHours' for every task. Be realistic. 
    - 1 hour = minor task
    - 4 hours = half day
    - 8 hours = full day
    - 40 hours = full week
-   This is critical for the Gantt chart.
+   - This is critical for the Gantt chart.
+3. **Accounting Linking**:
+   - Try to link every task to an Accounting Section if possible. 
+   - Use the exact string from the "Accounting Sections" list or a close match (e.g. "[Studio Elements] Paint").
+   - If a specific material or work role applies, include it.
 
 Dependency test checklist (do this before answering):
-1) For each task, ask: does it require an approved plan, selected vendor, booked date/location, completed asset list, or delivered inputs from another task? If yes, add that prerequisite task index.
+1) For each task, check if it relies on a previous task completing. Link it explicitly using definitions.
 2) Ensure there are no cycles and no forward references.
 3) Ensure at least some tasks have dependencies if the plan implies sequencing.
+4) Verify all dependency IDs exist in your generated list.
 
 When relevant, set accountingSectionName to one of the Accounting Sections above so tasks can be grouped and auto-linked. If a specific accounting item applies, set accountingItemType ("material" or "work") and accountingItemLabel exactly as shown in that section list; otherwise set them to null. Avoid duplicating tasks that already exist and update existing ones with refined descriptions if needed. Prioritize Hebrew wording that aligns with retrieved knowledge. Provide a 'logic' string explaining your reasoning before listing the tasks.`;
 

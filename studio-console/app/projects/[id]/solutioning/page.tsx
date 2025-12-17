@@ -5,8 +5,6 @@ import { useParams } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Id } from "../../../../convex/_generated/dataModel";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 export default function SolutioningPage() {
     const params = useParams();
@@ -47,9 +45,21 @@ export default function SolutioningPage() {
 
     // Scroll to bottom of chat
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const chatInputRef = useRef<HTMLTextAreaElement>(null);
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [conversation, isTyping]);
+
+    useEffect(() => {
+        const textarea = chatInputRef.current;
+        if (!textarea) return;
+
+        textarea.style.height = "0px";
+        const maxHeightPx = 160;
+        const nextHeight = Math.min(textarea.scrollHeight, maxHeightPx);
+        textarea.style.height = `${nextHeight}px`;
+        textarea.style.overflowY = textarea.scrollHeight > maxHeightPx ? "auto" : "hidden";
+    }, [input]);
 
     // --- Handlers ---
 
@@ -201,14 +211,19 @@ export default function SolutioningPage() {
                     </div>
 
                     <div className="p-3 border-t bg-white">
-                        <div className="flex gap-2">
-                            <input
-                                type="text"
-                                className="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        <div className="flex gap-2 items-end">
+                            <textarea
+                                ref={chatInputRef}
+                                rows={1}
+                                className="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-5 min-h-[40px] max-h-40"
                                 placeholder={selectedItem ? "Ask about materials, dimensions, vendors..." : "Select an item..."}
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                                onKeyDown={(e) => {
+                                    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                                    e.preventDefault();
+                                    void handleSend();
+                                }}
                                 disabled={!selectedItem || isTyping}
                             />
                             <button

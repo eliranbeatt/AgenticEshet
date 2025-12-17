@@ -176,6 +176,14 @@ export const chat = action({
         - Engage in a conversation. Ask clarifying questions.
         - If you have a solid recommendation, provide a "Suggested Plan" snippet (Markdown) that describes the production steps/materials clearly.
         - LANGUAGE: Hebrew (User facing). Technical terms can be English.
+
+        REQUIRED OUTPUT FORMAT:
+        You must return a valid JSON object with the following fields:
+        {
+            "response": "Your conversational reply in Hebrew",
+            "suggestedPlan": "Optional: The complete markdown plan content if you are proposing one",
+            "isComplete": boolean // true if the user has agreed to a final plan and you are submitting it
+        }
         `;
 
         const userMessage: Message = { role: "user", content: args.message };

@@ -1,0 +1,551 @@
+Below is the **full end-to-end implementation plan** for introducing a canonical **Project Item** entity that replaces “plan cards / concept cards / material lines / sections / task sections” across the app, including **DB schema, CRUD, UI tree sidebar, approvals/versioning, projections to accounting/tasks/quote, and full data migration/backfill**. This plan is tailored to your current Next.js App Router + Convex architecture and existing tables/pages/agents.  
+
+---
+
+# 1) Target outcome (what “done” looks like)
+
+## 1.1 Canonical truth
+
+* **Every “thing” in the project becomes an Item**: moving, management, install day, teardown, studio build element, rental, purchase, printing, decor element, etc.
+* All tabs read the same item list. Differences between tabs are **only**:
+
+  * which item revision is shown (approved vs proposed-by-tab)
+  * which tools/agents can propose edits
+
+## 1.2 Items have:
+
+* **Stable identity** (`projectItems`)
+* **Versioned JSON** with deep nested sub-entities (`itemRevisions.data = ItemSpecV2`)
+* **Approval flow**
+
+  * proposed revisions are visible only in the creating tab until approved
+  * approved revision is visible everywhere
+* **History**
+
+  * older revisions preserved (and optionally indexed into knowledge)
+
+## 1.3 Existing tables remain temporarily as projections
+
+Your app already relies heavily on: `sections/materialLines/workLines/tasks/quotes/projectAssets/assetLinks/...` 
+We will not break them. We’ll **link and progressively project** from items into them.
+
+---
+
+# 2) Data model (Convex) — tables + indexes
+
+> Important naming: your schema already has `canonicalItems` + `itemNormalizationMap` (price normalization). So name the new entity **`projectItems`** (UI label can remain “Items”). 
+
+## 2.1 New tables
+
+### A) `projectItems`
+
+**Purpose:** stable identity + status + “current approved revision”
+Fields:
+
+* `projectId: Id<"projects">`
+* `title: string`
+* `typeKey: string` (enum-like but allow custom)
+* `status: "draft"|"approved"|"archived"`
+* `sortOrder?: number`
+* `tags?: string[]`
+* `createdAt, updatedAt`
+* `createdFrom: { source: "manual"|"conceptCard"|"plan"|"accountingBackfill"|"agent", sourceId?: string }`
+* `approvedRevisionId?: Id<"itemRevisions">`
+* `latestRevisionNumber: number` (for fast increments)
+
+**Indexes**
+
+* by projectId + status
+* by projectId + sortOrder
+* by projectId + typeKey
+
+---
+
+### B) `itemRevisions`
+
+**Purpose:** proposed/approved versions (big JSON)
+Fields:
+
+* `projectId`
+* `itemId: Id<"projectItems">`
+* `tabScope: "clarification"|"ideation"|"planning"|"solutioning"|"accounting"|"tasks"|"quote"`
+* `state: "proposed"|"approved"|"rejected"|"superseded"`
+* `revisionNumber: number` (monotonic per item)
+* `baseApprovedRevisionId?: Id<"itemRevisions">`
+* `data: ItemSpecV2` (validated by zod schema)
+* `summaryMarkdown?: string` (diff summary)
+* `createdBy: { kind:"user"|"agent", agentRunId?: Id<"agentRuns"> }`
+* `createdAt`
+
+**Indexes**
+
+* by itemId + revisionNumber
+* by projectId + tabScope + state
+* by projectId + state (fast loading of approved for sidebar)
+
+---
+
+### C) `itemTemplates` (quick-add defaults + future customization)
+
+**Purpose:** template buttons (Moving, Studio Work, Purchase, etc.)
+Fields:
+
+* `key: string` (e.g., `moving`, `studio_work`, `purchase`)
+* `labelHe: string`
+* `defaultTypeKey: string`
+* `defaultData: Partial<ItemSpecV2>`
+* `enabled: boolean`
+* `sortOrder`
+
+---
+
+### D) (Optional but recommended) `itemProjectionLocks`
+
+**Purpose:** avoid infinite “sync loops” between items and projections
+Fields:
+
+* `projectId`
+* `itemId`
+* `lastSyncedFromItemRevisionId?: Id<"itemRevisions">`
+* `lastSyncedAt`
+
+---
+
+## 2.2 Schema updates to existing tables (add itemId)
+
+Add optional `itemId` to:
+
+* `sections.itemId?`
+* `materialLines.itemId?`
+* `workLines.itemId?`
+* `tasks.itemId?`
+* `assetLinks.entityType` add `"item"` and `assetLinks.entityId = itemId`
+
+You already have `assetLinks` and `projectAssets` so we reuse them for images on items. 
+
+---
+
+# 3) ItemSpecV2 — JSON that supports the deep collapsible tree
+
+This is the schema your sidebar expansion drills into: item → subtasks (nested) → materials/labor → logistics/procurement/etc.
+
+## 3.1 ItemSpecV2 (top)
+
+Required sections (consistent order for UI scanning):
+
+1. `identity`
+2. `quality`
+3. `budgeting`
+4. `procurement`
+5. `studioWork`
+6. `logistics`
+7. `onsite`
+8. `safety`
+9. `breakdown` (subtasks/materials/labor)
+10. `attachments`
+11. `state` (questions/assumptions/decisions)
+12. `quote`
+
+### Minimal skeleton
+
+* `identity: { title, typeKey, description, tags? }`
+* `quality: { tier:"low"|"medium"|"high", notes? }`
+* `budgeting: { estimate?: { amount?: number, currency:"ILS", confidence:number }, range?: { min?:number, max?:number }, notes? }`
+* `procurement: { required:boolean, channel:"none"|"local"|"abroad"|"both", leadTimeDays?:number, purchaseList?: PurchaseNeed[] }`
+* `studioWork: { required:boolean, workTypes:string[], estMinutes?:number, tools?:string[] }`
+* `logistics: { transportRequired:boolean, packagingNotes?:string, storageRequired?:boolean }`
+* `onsite: { installDays?:number, shootDays?:number, teardownDays?:number, operatorDuringEvent?:boolean }`
+* `safety: { publicInteraction:boolean, electrical:boolean, weightBearing:boolean, notes?:string }`
+* `breakdown: { subtasks: SubtaskSpec[], materials: MaterialSpec[], labor: LaborSpec[] }`
+* `attachments: { images?: ItemImageRef[], docs?: ItemDocRef[], links?: {url,label}[] }`
+* `state: { openQuestions:string[], assumptions:string[], decisions:string[], alternatives?: AlternativeSpec[] }`
+* `quote: { includeInQuote:boolean, clientTextOverride?:string, milestones?: {name,date?}[] }`
+
+## 3.2 Nested subtasks (infinite depth)
+
+`SubtaskSpec = { id, title, description?, status?, estMinutes?, children?: SubtaskSpec[], materialRefs?: string[], laborRefs?: string[], taskProjection?: { createTask:boolean, titleOverride? } }`
+
+## 3.3 Materials and labor (for accounting projection)
+
+`MaterialSpec = { id, name, spec?, qty?, unit?, unitCostEstimate?, vendor?, procurement:{channel,leadTimeDays?}, notes? }`
+`LaborSpec = { id, role, estMinutes?, dayCount?, rateRef?, notes? }`
+
+---
+
+# 4) CRUD & approval flows (Convex functions)
+
+## 4.1 Core CRUD
+
+Create these Convex functions:
+
+### Queries
+
+* `items.listApproved(projectId)`
+* `items.listSidebarTree(projectId, opts: { includeProposedTab?: tabScope, includeDrafts?: boolean })`
+* `items.getItem(itemId)` (with approved + optionally proposed-by-tab)
+* `items.listRevisions(itemId)`
+
+### Mutations
+
+* `items.createFromTemplate(projectId, templateKey)`
+* `items.createManual(projectId, {title,typeKey,description})`
+* `items.renameItem(itemId, newTitle)` (creates a proposed revision unless user chooses “direct approve”)
+* `items.upsertRevision(itemId, tabScope, patchOrFullData, changeReason?)`
+* `items.approveRevision(itemId, revisionId)`
+* `items.rejectRevision(itemId, revisionId)`
+* `items.archiveItem(itemId)` (soft delete recommended)
+* `items.restoreItem(itemId)`
+
+### Actions (for agent support / schema validation / diffs)
+
+* `items.generateRevisionDiff(baseApprovedRevisionId, proposedData)`
+* `items.agentProposeItemUpdate(itemId, tabScope, agentOutput)` (validates schema + writes proposed revision)
+
+## 4.2 Double-approval delete (2 OK clicks)
+
+Implement as a two-step process:
+
+* `items.requestDelete(itemId)` → sets `deleteRequestedAt=now`, returns `expiresAt=now+8s`
+* `items.confirmDelete(itemId)`:
+
+  * if within window → archive item + mark revisions superseded
+  * else error “expired; request again”
+
+UI: first click turns the delete button into a red “Click again to confirm”.
+
+---
+
+# 5) UI changes (all pages)
+
+Your app has project tabs at `/projects/[id]/...` including clarification/ideation/planning/solutioning/tasks/gantt/accounting/quote/knowledge/history/etc. 
+
+## 5.1 New shared component: `ItemsTreeSidebar`
+
+Place in the project layout (or per-page where needed) as the left panel.
+
+### Sidebar structure
+
+**Top:**
+
+* search
+* filter chips (status/type/procurement/quality)
+* quick-add buttons from `itemTemplates`
+
+**Tree list (accordion):**
+
+* item row shows: title + type badge + status chip + micro-metrics (₪ estimate, procurement channel, studio work, onsite days, risk flags)
+* expand reveals fixed sections in same order:
+
+  * Subtasks
+  * Materials
+  * Labor
+  * Procurement/Logistics
+  * On-site
+  * Images
+  * Questions/Decisions
+
+### Editing in tree
+
+* Inline rename item
+* Inline add/edit/remove subtask/material/labor nodes
+* Clicking a node opens right-side editor for full details
+
+### Proposed vs approved visibility
+
+Sidebar default shows **approved** items.
+When inside a tab, allow toggle:
+
+* “Show proposed from this tab”
+* Proposed nodes are visually distinct (e.g., dotted border + “Proposal (Solutioning)” chip)
+
+---
+
+## 5.2 Clarification tab (`/projects/[id]/clarification`)
+
+Clarification becomes the **main item authoring** environment.
+
+Layout:
+
+* Left: ItemsTreeSidebar
+* Middle: chat thread
+* Right: Item Editor (selected item)
+
+Buttons:
+
+* “Run clarification on this item” → agent proposes revision
+* “Approve” per item (promotes revision to global)
+
+---
+
+## 5.3 Ideation tab (`/projects/[id]/ideation`)
+
+You already generate `ideationConceptCards`. 
+Add:
+
+* On each concept card: **“Create item”**
+
+  * creates `projectItem + proposed revision(tabScope="ideation")`
+  * stays local until approved
+
+---
+
+## 5.4 Planning tab (`/projects/[id]/planning`)
+
+Keep plan docs as-is, but:
+
+* show approved items sidebar
+* planning agent can propose item updates (tabScope="planning") rather than producing separate “plan cards”
+
+---
+
+## 5.5 Solutioning tab (`/projects/[id]/solutioning`)
+
+Currently solutioning is tied to accounting structures and material line solution fields. 
+Refactor to:
+
+* user selects an **item**
+* solutioning chat proposes updated `ItemSpecV2` (adds breakdown steps/material specs/labor)
+* “Apply solution to item” → writes proposed revision(tabScope="solutioning")
+* “Approve” → becomes global and triggers projection sync (below)
+
+---
+
+## 5.6 Accounting tab (`/projects/[id]/accounting`)
+
+Accounting currently uses `sections/materialLines/workLines` heavily. 
+Transition plan:
+
+* Render accounting grouped by `itemId` instead of “section only”
+* Each item has a section under the hood (projection)
+* When user edits lines:
+
+  * still writes to materialLines/workLines (safe)
+  * also produces a proposed item revision(tabScope="accounting") summarizing changes
+  * user approves to sync back into item spec (optional, but recommended for consistency)
+
+---
+
+## 5.7 Tasks tab + Task modal (`/projects/[id]/tasks`)
+
+Tasks already exist and have a modal. 
+Update:
+
+* group tasks by item
+* add “Generate tasks from item subtasks”
+* task modal shows item context + item images
+* editing task steps can optionally propose update to item subtask tree (if enabled)
+
+---
+
+## 5.8 Gantt (`/projects/[id]/gantt`)
+
+No major UI changes:
+
+* show grouped lanes by item
+* uses tasks.itemId for grouping
+
+---
+
+## 5.9 Quote (`/projects/[id]/quote`)
+
+Quote wizard changes:
+
+* choose items to include
+* items excluded still count in totals (internal)
+* quote agent receives **quote-safe** item view (no profit/risk/overhead internals)
+* attach item images into quote PDF (reuse `projectAssets/assetLinks`)
+
+You already have `/api/quote-pdf`. 
+
+---
+
+# 6) Projection engine (items → accounting/tasks/quote/assets)
+
+## 6.1 Projection rules
+
+When an item revision is approved:
+
+1. `ensureSectionForItem(itemId)`
+
+   * create or find `sections` row with `sections.itemId=itemId`
+2. `syncMaterialsToMaterialLines(itemId)`
+
+   * upsert materialLines under that section, set `materialLines.itemId=itemId`
+3. `syncLaborToWorkLines(itemId)`
+
+   * upsert workLines, set `workLines.itemId=itemId`
+4. `syncSubtasksToTasks(itemId)`
+
+   * create/update tasks with `tasks.itemId=itemId`
+   * preserve manual overrides (status/dates/assignee) unless item explicitly dictates
+5. `syncQuoteSelections` (when quote wizard runs)
+
+   * uses quote-safe view, links images via assetLinks
+
+## 6.2 Loop prevention
+
+Write `itemProjectionLocks.lastSyncedFromItemRevisionId` so projections don’t trigger “item changed → projection changed → item changed”.
+
+---
+
+# 7) Agent refactors (so all agents talk ItemSpecV2)
+
+Your repo has many agents (clarification, planning, solutioning, ideation, taskEditor, accountingGenerator, quote…) wired through Convex actions and chat streaming. 
+
+## 7.1 New shared “Item Update” schema (Zod)
+
+Define a schema for agent output:
+
+* `itemId`
+* `proposedData: ItemSpecV2`
+* `summaryMarkdown`
+* `openQuestionsDelta?`
+
+Agents should never write directly into accounting/task tables as their primary output anymore; they propose item revisions.
+
+## 7.2 Agent-by-agent changes
+
+* Clarification agent:
+
+  * reads selected item approved revision (or draft)
+  * outputs full ItemSpecV2 with filled fields + questions/assumptions
+* Solutioning agent:
+
+  * enriches breakdown and technical details
+* AccountingGenerator:
+
+  * can propose materials/labor inside item spec, then projection writes lines
+* TaskEditor:
+
+  * can patch subtask tree or generate task detail, then sync
+
+---
+
+# 8) Data migration & backfill (safe, phased, idempotent)
+
+You already have migrations/backfill utilities in Convex (at least some utilities exist per inventory). 
+
+## Phase M0 — Ship schema + read-only sidebar
+
+1. Add new tables and new optional columns (`itemId?`) to existing tables
+2. Ship ItemsTreeSidebar in read-only mode (loads only approved items)
+
+## Phase M1 — Backfill from Accounting (best signal)
+
+Create internal action: `migrations.backfillItemsFromAccounting(projectId | allProjects)`
+For each project:
+
+* For each `section`:
+
+  * create `projectItem` if none linked
+  * create **approved** `itemRevision` mapping:
+
+    * section name → item.title
+    * materialLines → ItemSpecV2.breakdown.materials
+    * workLines → ItemSpecV2.breakdown.labor
+  * set `sections.itemId`, set `materialLines.itemId`, set `workLines.itemId`
+
+Idempotency:
+
+* if `sections.itemId` exists → skip
+* store `createdFrom.source="accountingBackfill"`
+
+## Phase M2 — Backfill from Tasks
+
+Internal action: `migrations.linkTasksToItems(projectId)`
+
+* If tasks reference section/category → map to itemId of that section
+* Else fuzzy match by title (safe threshold)
+* Set `tasks.itemId`
+
+## Phase M3 — “Start clean” for new projects
+
+* New projects begin with **no items** unless user quick-adds templates in clarification
+* Templates are loaded from `itemTemplates`
+
+## Phase M4 — Gradual cutover per tab
+
+Order:
+
+1. Clarification (manual items + approval)
+2. Solutioning (apply to item)
+3. Accounting (group by item)
+4. Tasks (generate from item subtasks)
+5. Quote (select items)
+6. Ideation/planning (spawn item proposals)
+
+## Phase M5 — Deprecate legacy naming
+
+Stop calling things “plan cards/material lines/sections” in UI:
+
+* UI labels show “Items”
+* Legacy structures remain only as the accounting “ledger view”
+
+---
+
+# 9) Testing & QA checklist (do not skip)
+
+## 9.1 Migration correctness
+
+* Backfill creates item per accounting section
+* Totals in accounting summary remain identical pre/post
+* No duplicate sections created on rerun (idempotent)
+* Tasks remain intact (status/dates preserved)
+
+## 9.2 Approval rules
+
+* Proposed revision is visible only on the originating tab
+* Approving updates global sidebar everywhere
+* Old approved revision remains retrievable in history
+
+## 9.3 Projection correctness
+
+* Approve item → materialLines/workLines/tasks updated
+* Manual edits in accounting don’t get overwritten unexpectedly
+* Loop prevention works (no “thrash”)
+
+## 9.4 Delete safety
+
+* First delete click arms confirmation
+* Second click within window archives
+* Archived items disappear by default but can be restored
+
+---
+
+# 10) Implementation task list (practical “agent checklist”)
+
+## Backend (Convex)
+
+1. Add schema: `projectItems`, `itemRevisions`, `itemTemplates`, optional `itemProjectionLocks`
+2. Add `itemId?` to: sections/materialLines/workLines/tasks and extend assetLinks to support items
+3. Implement CRUD mutations/queries/actions listed above
+4. Implement projection engine (ensure section + sync lines + sync tasks)
+5. Implement migrations:
+
+   * backfillItemsFromAccounting
+   * linkTasksToItems
+
+## Frontend (Next.js)
+
+1. Build `ItemsTreeSidebar` (accordion + search/filters + quick-add)
+2. Build `ItemEditorPanel` (right panel)
+3. Update clarification page layout (sidebar + chat + editor)
+4. Add “Create item” on ideation concept cards
+5. Update solutioning to operate on selected item
+6. Update accounting to group by itemId (still using existing CRUD under the hood)
+7. Update tasks board to group by item and support generate-from-subtasks
+8. Update quote wizard to select items + attach item images
+
+## Agents
+
+1. Define `ItemSpecV2` + `ItemUpdateOutput` Zod schemas
+2. Update clarification/solutioning/accountingGenerator/taskEditor to propose item revisions
+3. Add “Approve” action hooks in UI for each proposal
+
+---
+
+If you want, I can also produce:
+
+* the exact **Zod schema code** for ItemSpecV2,
+* the exact **Convex function signatures** (args/returns),
+* and the **UI component hierarchy** (files + props) for `ItemsTreeSidebar` and `ItemEditorPanel` aligned to your current app layout and hooks.

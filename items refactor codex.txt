@@ -1,0 +1,275 @@
+# Items Refactor Plan (Codex)
+
+This plan updates the original items refactor to match the current repo layout and Convex + Next.js App Router code. It calls out exact file paths, schema fields, and migration steps that fit the existing architecture.
+
+## 0. Goals and constraints
+- Items are the canonical source of truth for all project deliverables and operational elements.
+- Revisions are versioned and tab-scoped (ideation, clarification, planning, solutioning, accounting, tasks, quote).
+- Existing tables (sections, materialLines, workLines, tasks, quotes, assets) remain intact as projections during migration.
+- No breaking changes to current UI while backfill runs; idempotent migrations.
+- Keep ASCII-only files and 4-space indentation for TypeScript changes.
+
+## 1. Schema changes (Convex)
+File: `studio-console/convex/schema.ts`
+
+### New tables
+1) `projectItems`
+- `projectId: Id<"projects">`
+- `title: string` (denormalized for quick list)
+- `typeKey: string` (classification, not necessarily accounting group)
+- `status: "draft" | "approved" | "archived"`
+- `sortOrder?: number`
+- `tags?: string[]`
+- `createdFrom: { source: "manual" | "ideationCard" | "planning" | "accountingBackfill" | "agent", sourceId?: string }`
+- `approvedRevisionId?: Id<"itemRevisions">`
+- `latestRevisionNumber: number`
+- `deleteRequestedAt?: number`
+- `archivedAt?: number`
+- `createdAt: number`
+- `updatedAt: number`
+Indexes:
+- `by_project_status` (projectId, status)
+- `by_project_sort` (projectId, sortOrder)
+- `by_project_type` (projectId, typeKey)
+
+2) `itemRevisions`
+- `projectId: Id<"projects">`
+- `itemId: Id<"projectItems">`
+- `tabScope: "ideation" | "clarification" | "planning" | "solutioning" | "accounting" | "tasks" | "quote"`
+- `state: "proposed" | "approved" | "rejected" | "superseded"`
+- `revisionNumber: number` (monotonic per item)
+- `baseApprovedRevisionId?: Id<"itemRevisions">`
+- `data: ItemSpecV2` (validated by zod)
+- `summaryMarkdown?: string`
+- `createdBy: { kind: "user" | "agent", agentRunId?: Id<"agentRuns"> }`
+- `createdAt: number`
+Indexes:
+- `by_item_revision` (itemId, revisionNumber)
+- `by_project_tab_state` (projectId, tabScope, state)
+- `by_project_state` (projectId, state)
+
+3) `itemTemplates`
+- `key: string`
+- `label: string`
+- `typeKey: string`
+- `defaultData: ItemSpecV2` (or partial)
+- `enabled: boolean`
+- `sortOrder: number`
+
+4) `itemProjectionLocks` (optional but recommended)
+- `projectId: Id<"projects">`
+- `itemId: Id<"projectItems">`
+- `lastSyncedRevisionId?: Id<"itemRevisions">`
+- `lastSyncedAt: number`
+
+### Updates to existing tables
+- `sections`: add `itemId?: Id<"projectItems">`
+- `materialLines`: add `itemId?: Id<"projectItems">`, `itemMaterialId?: string` (stable mapping to ItemSpec material)
+- `workLines`: add `itemId?: Id<"projectItems">`, `itemLaborId?: string`
+- `tasks`: add `itemId?: Id<"projectItems">`, `itemSubtaskId?: string`
+- `assetLinks.entityType`: add `"projectItem"`
+- Optional: `knowledgeDocs.sourceType` + `knowledgeChunks.sourceType` add `"item"` if we index approved items into knowledge.
+
+## 2. ItemSpecV2 and shared types
+Files:
+- `studio-console/convex/lib/zodSchemas.ts` (backend validation)
+- `studio-console/lib/items.ts` (shared TS types + helpers for UI)
+
+### ItemSpecV2 (example shape)
+- `version: "ItemSpecV2"`
+- `identity: { title: string; typeKey: string; description?: string; tags?: string[]; accountingGroup?: string }`
+- `quality: { tier: "low" | "medium" | "high"; notes?: string }`
+- `budgeting: { estimate?: { amount?: number; currency: "ILS"; confidence?: number }; range?: { min?: number; max?: number }; notes?: string }`
+- `procurement: { required: boolean; channel: "none" | "local" | "abroad" | "both"; leadTimeDays?: number; purchaseList?: PurchaseNeed[] }`
+- `studioWork: { required: boolean; workTypes?: string[]; estMinutes?: number; buildPlanMarkdown?: string; buildPlanJson?: string }`
+- `logistics: { transportRequired: boolean; packagingNotes?: string; storageRequired?: boolean }`
+- `onsite: { installDays?: number; shootDays?: number; teardownDays?: number; operatorDuringEvent?: boolean }`
+- `safety: { publicInteraction?: boolean; electrical?: boolean; weightBearing?: boolean; notes?: string }`
+- `breakdown: { subtasks: SubtaskSpec[]; materials: MaterialSpec[]; labor: LaborSpec[] }`
+- `attachments: { links?: Array<{ url: string; label?: string }> }` (images via assetLinks)
+- `state: { openQuestions: string[]; assumptions: string[]; decisions: string[]; alternatives?: AlternativeSpec[] }`
+- `quote: { includeInQuote: boolean; clientTextOverride?: string; milestones?: Array<{ name: string; date?: string }> }`
+
+### Mapping to existing line tables
+- `MaterialSpec`: `{ id: string; category?: string; label: string; description?: string; qty?: number; unit?: string; unitCostEstimate?: number; vendorName?: string; procurement?: "in_stock" | "local" | "abroad" | "either"; status?: string; note?: string }`
+- `LaborSpec`: `{ id: string; workType: string; role: string; rateType: "hour" | "day" | "flat"; quantity?: number; unitCost?: number; description?: string }`
+- `SubtaskSpec`: `{ id: string; title: string; description?: string; status?: string; estMinutes?: number; children?: SubtaskSpec[]; taskProjection?: { createTask: boolean; titleOverride?: string } }`
+
+### Agent output schema
+Add an `ItemUpdateOutput` zod schema to `studio-console/convex/lib/zodSchemas.ts`:
+- `itemId`
+- `proposedData: ItemSpecV2`
+- `summaryMarkdown`
+- `changeReason?: string`
+
+## 3. Items API (Convex)
+File: `studio-console/convex/items.ts` (new)
+
+### Queries
+- `items.listApproved(projectId)`
+- `items.listSidebarTree(projectId, { includeTab?: tabScope, includeDrafts?: boolean })`
+- `items.getItem(itemId, { includeTab?: tabScope })`
+- `items.listRevisions(itemId)`
+- `items.listTemplates()`
+
+### Mutations
+- `items.createManual(projectId, { title, typeKey, description? })`
+- `items.createFromTemplate(projectId, templateKey)`
+- `items.createFromConceptCard(projectId, conceptCardId)`
+- `items.renameItem(itemId, newTitle)`
+- `items.upsertRevision(itemId, tabScope, dataOrPatch, changeReason?)`
+- `items.approveRevision(itemId, revisionId)`
+- `items.rejectRevision(itemId, revisionId)`
+- `items.archiveItem(itemId)`
+- `items.restoreItem(itemId)`
+- `items.requestDelete(itemId)`
+- `items.confirmDelete(itemId)`
+
+### Actions
+- `items.generateRevisionDiff(baseApprovedRevisionId, proposedData)`
+- `items.agentProposeItemUpdate(itemId, tabScope, agentOutput)`
+
+### Implementation notes
+- Keep `projectItems.latestRevisionNumber` as the canonical counter (increment per revision insert).
+- On approve: mark prior approved revision as `superseded`, update `projectItems.approvedRevisionId`, set `status: "approved"`, then call projection sync.
+- Validation: always validate `ItemSpecV2` via zod before insert.
+
+## 4. Projection engine
+Files:
+- `studio-console/convex/lib/itemProjections.ts` (new helpers)
+- `studio-console/convex/items.ts` (call into projections)
+
+### Required sync rules
+- `ensureSectionForItem(itemId)`:
+  - Create or update a `sections` row where `sections.itemId = itemId`.
+  - Use `ItemSpecV2.identity.accountingGroup` (or fallback to `projectItems.typeKey`) for `sections.group`.
+  - Use `ItemSpecV2.identity.title` for `sections.name`.
+- `syncMaterialsToMaterialLines(itemId, revisionData)`:
+  - Upsert by `itemMaterialId` if present, else by label + itemId.
+  - Preserve actual quantity/cost unless explicitly set in item.
+  - Set `materialLines.itemId` and `materialLines.itemMaterialId`.
+- `syncLaborToWorkLines(itemId, revisionData)`:
+  - Upsert by `itemLaborId` if present.
+  - Preserve actuals if not overridden.
+  - Set `workLines.itemId` and `workLines.itemLaborId`.
+- `syncSubtasksToTasks(itemId, revisionData)`:
+  - Upsert by `tasks.itemSubtaskId` where provided.
+  - Do not overwrite manual status, dates, assignee unless the item explicitly dictates them.
+  - Set `tasks.itemId` and `tasks.itemSubtaskId`.
+
+### Loop prevention
+- Use `itemProjectionLocks` to track last synced revision id.
+- Only sync if approved revision id differs from the lock.
+
+## 5. Migration and backfill
+File: `studio-console/convex/itemsMigrations.ts` (new)
+
+### M0: Schema only
+- Ship schema additions and empty items API (read-only).
+
+### M1: Backfill from accounting
+Mutation or action: `itemsMigrations.backfillFromAccounting({ projectId?: Id<"projects"> })`
+- For each section: create `projectItem` + approved `itemRevision` with `ItemSpecV2.breakdown` from materialLines/workLines.
+- Set `sections.itemId`, `materialLines.itemId`, `workLines.itemId`, and itemMaterialId/itemLaborId.
+- Use `projectItems.createdFrom.source = "accountingBackfill"`.
+- Idempotent: skip if `sections.itemId` already exists.
+
+### M2: Link tasks to items
+Mutation or action: `itemsMigrations.linkTasksToItems({ projectId })`
+- If `task.accountingSectionId` -> map to `sections.itemId`.
+- If `task.accountingLineId` -> map via line `itemId`.
+- Optionally set `itemSubtaskId` if title matches a subtask in the approved item.
+- Leave tasks unlinked if no match (do not guess unless explicit).
+
+### M3: Optional backfill from ideation
+Action: `itemsMigrations.proposeFromConceptCards({ projectId })`
+- Create `projectItem` with proposed revision for tabScope "ideation".
+
+### Admin trigger
+- Add admin-only trigger in `studio-console/app/admin/page.tsx` or `studio-console/app/management/page.tsx` to run these migrations per project.
+
+## 6. UI components
+New directory: `studio-console/app/projects/[id]/_components/items/`
+- `ItemsTreeSidebar.tsx`: tree + filters + quick-add templates.
+- `ItemEditorPanel.tsx`: form for ItemSpecV2 sections.
+- `ItemBreakdownEditor.tsx`: subtasks/materials/labor editor.
+- `ItemRevisionBanner.tsx`: approve/reject actions for proposed revision.
+- `ItemsContext.tsx`: selected item + tabScope toggle (optional).
+
+Update existing components:
+- `studio-console/app/projects/[id]/_components/images/ImageGeneratorPanel.tsx` and `ImagePicker.tsx` add `EntityType = "projectItem"` support.
+
+## 7. Page updates (Next.js)
+- `studio-console/app/projects/[id]/layout.tsx`: wrap children with ItemsContext provider if needed.
+- `studio-console/app/projects/[id]/clarification/page.tsx`: 3-column layout (ItemsTreeSidebar, AgentChatThread, ItemEditorPanel). Use `items.upsertRevision` with tabScope "clarification".
+- `studio-console/app/projects/[id]/ideation/page.tsx`: add "Create item" button per concept card (calls `items.createFromConceptCard`).
+- `studio-console/app/projects/[id]/planning/page.tsx`: show ItemsTreeSidebar and allow planner to propose item revisions (tabScope "planning").
+- `studio-console/app/projects/[id]/solutioning/page.tsx`: replace material line list with items; update chat calls to new item-based endpoints.
+- `studio-console/app/projects/[id]/accounting/page.tsx` and components:
+  - `AccountingTypes.ts`: include `itemId`/item metadata per section.
+  - `SummaryTab.tsx`, `MaterialsTab.tsx`, `LaborTab.tsx`: group by item, add "Sync to item" and "Sync from item" buttons.
+- `studio-console/app/projects/[id]/tasks/page.tsx` and `tasks/_components/TaskModal.tsx`:
+  - Add item linking fields and filters.
+  - Show item context and item images (via assetLinks).
+- `studio-console/app/projects/[id]/gantt/_components/GanttView.tsx`:
+  - Optionally show item label in task name or group by item.
+- `studio-console/app/projects/[id]/quote/_components/QuoteWizard.tsx`:
+  - Use items list (approved) to build selectable quote lines.
+  - Include item images for PDF if desired.
+- `studio-console/app/api/quote-pdf/route.ts` (optional):
+  - Embed item images into the quote HTML (use assetLinks for item images).
+
+## 8. Agent updates (Convex)
+Update zod schemas first, then agents.
+
+- `studio-console/convex/agents/clarificationV2.ts`:
+  - Load selected item revision; output ItemSpecV2 update and call `items.agentProposeItemUpdate`.
+- `studio-console/convex/agents/ideation.ts`:
+  - Optional: create item proposals directly from generated concepts.
+- `studio-console/convex/agents/planning.ts`:
+  - Optional: allow planning agent to propose item updates for selected items.
+- `studio-console/convex/agents/solutioning.ts` + `solutioningV2.ts`:
+  - Switch inputs from materialLineId to itemId.
+  - Write build plan into ItemSpecV2 (studioWork.buildPlanMarkdown/buildPlanJson).
+- `studio-console/convex/agents/accountingGenerator.ts`:
+  - Generate ItemSpecV2 breakdowns instead of raw sections; approve to trigger projection.
+- `studio-console/convex/agents/accountingFromDeepResearch.ts`:
+  - Same conversion to ItemSpecV2.
+- `studio-console/convex/agents/estimator.ts`:
+  - Accept itemId (preferred) or sectionId (legacy); write item revision and sync.
+- `studio-console/convex/agents/architect.ts` and `convex/lib/architectTaskGeneration.ts`:
+  - Provide item context to the agent; update TaskBreakdownSchema to include `itemRef` or `itemTitle` for linking.
+- `studio-console/convex/agents/taskEditor.ts`:
+  - Optional: patch ItemSpecV2 subtasks when tasks change.
+- `studio-console/convex/agents/quote.ts`:
+  - Use items (approved revisions) rather than tasks for scope and pricing notes.
+
+Update prompts and skills in `studio-console/convex/seed.ts` to reflect item-centric workflows and add any new skills (ex: "item_editor").
+
+## 9. Supporting API updates
+- `studio-console/convex/assets.ts`: add "projectItem" to entityType unions.
+- `studio-console/convex/accounting.ts`: preserve existing API but include itemId info on sections/lines.
+- `studio-console/convex/tasks.ts`: accept `itemId` and `itemSubtaskId` in create/update.
+- `studio-console/convex/quotes.ts`: compute breakdown using item-linked sections or a new `items.quoteView` query.
+- `studio-console/convex/knowledge.ts`: optionally add sourceType "item" and ingest approved item summaries.
+
+## 10. Rollout phases
+1) Phase 0: Schema + zod schemas + items API skeleton (no UI changes).
+2) Phase 1: Backfill from accounting and link tasks; verify totals unchanged.
+3) Phase 2: Read-only ItemsTreeSidebar in clarification and solutioning.
+4) Phase 3: Enable item CRUD + revisions; clarification becomes item authoring hub.
+5) Phase 4: Projection engine on approve; update accounting and solutioning to use items.
+6) Phase 5: Update tasks, gantt, quote, and agents to use items.
+7) Phase 6: UI language cleanup (replace "sections/material lines" with "items" where appropriate).
+
+## 11. Testing and verification
+- Run `npm run lint` in `studio-console/`.
+- Add tests:
+  - `studio-console/tests/convex/itemsProjection.test.ts` for item -> lines/tasks sync.
+  - `studio-console/tests/lib/itemsMerge.test.ts` for ItemSpecV2 patch merge.
+- Manual checks:
+  - Backfill idempotency (re-run migration with no duplicates).
+  - Accounting totals match before and after backfill.
+  - Proposed revisions only visible in their tab.
+  - Approving revision updates sections/materialLines/workLines/tasks without clobbering manual fields.
+  - Item images link and display in solutioning and quote.

@@ -117,3 +117,167 @@ export const TaskEditorPatchSchema = z.object({
         assignee: z.string().nullable().optional(),
     }),
 });
+
+const PurchaseNeedSchema = z.object({
+    id: z.string().optional(),
+    label: z.string(),
+    qty: z.number().optional(),
+    unit: z.string().optional(),
+    notes: z.string().optional(),
+});
+
+const MaterialSpecSchema = z.object({
+    id: z.string(),
+    category: z.string().optional(),
+    label: z.string(),
+    description: z.string().optional(),
+    qty: z.number().optional(),
+    unit: z.string().optional(),
+    unitCostEstimate: z.number().optional(),
+    vendorName: z.string().optional(),
+    procurement: z.enum(["in_stock", "local", "abroad", "either"]).optional(),
+    status: z.string().optional(),
+    note: z.string().optional(),
+});
+
+const LaborSpecSchema = z.object({
+    id: z.string(),
+    workType: z.string(),
+    role: z.string(),
+    rateType: z.enum(["hour", "day", "flat"]),
+    quantity: z.number().optional(),
+    unitCost: z.number().optional(),
+    description: z.string().optional(),
+});
+
+const SubtaskSpecSchema: z.ZodType<{
+    id: string;
+    title: string;
+    description?: string;
+    status?: string;
+    estMinutes?: number;
+    children?: unknown[];
+    taskProjection?: {
+        createTask: boolean;
+        titleOverride?: string;
+    };
+}> = z.lazy(() =>
+    z.object({
+        id: z.string(),
+        title: z.string(),
+        description: z.string().optional(),
+        status: z.string().optional(),
+        estMinutes: z.number().optional(),
+        children: z.array(SubtaskSpecSchema).optional(),
+        taskProjection: z.object({
+            createTask: z.boolean(),
+            titleOverride: z.string().optional(),
+        }).optional(),
+    })
+);
+
+const AlternativeSpecSchema = z.object({
+    title: z.string(),
+    description: z.string().optional(),
+    tradeoffs: z.array(z.string()).optional(),
+});
+
+export const ItemSpecV2Schema = z.object({
+    version: z.literal("ItemSpecV2"),
+    identity: z.object({
+        title: z.string(),
+        typeKey: z.string(),
+        description: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        accountingGroup: z.string().optional(),
+    }),
+    quality: z.object({
+        tier: z.enum(["low", "medium", "high"]),
+        notes: z.string().optional(),
+    }).optional(),
+    budgeting: z.object({
+        estimate: z.object({
+            amount: z.number().optional(),
+            currency: z.literal("ILS"),
+            confidence: z.number().optional(),
+        }).optional(),
+        range: z.object({
+            min: z.number().optional(),
+            max: z.number().optional(),
+        }).optional(),
+        notes: z.string().optional(),
+    }).optional(),
+    procurement: z.object({
+        required: z.boolean(),
+        channel: z.enum(["none", "local", "abroad", "both"]),
+        leadTimeDays: z.number().optional(),
+        purchaseList: z.array(PurchaseNeedSchema).optional(),
+    }).optional(),
+    studioWork: z.object({
+        required: z.boolean(),
+        workTypes: z.array(z.string()).optional(),
+        estMinutes: z.number().optional(),
+        buildPlanMarkdown: z.string().optional(),
+        buildPlanJson: z.string().optional(),
+    }).optional(),
+    logistics: z.object({
+        transportRequired: z.boolean(),
+        packagingNotes: z.string().optional(),
+        storageRequired: z.boolean().optional(),
+    }).optional(),
+    onsite: z.object({
+        installDays: z.number().optional(),
+        shootDays: z.number().optional(),
+        teardownDays: z.number().optional(),
+        operatorDuringEvent: z.boolean().optional(),
+    }).optional(),
+    safety: z.object({
+        publicInteraction: z.boolean().optional(),
+        electrical: z.boolean().optional(),
+        weightBearing: z.boolean().optional(),
+        notes: z.string().optional(),
+    }).optional(),
+    breakdown: z.object({
+        subtasks: z.array(SubtaskSpecSchema).default([]),
+        materials: z.array(MaterialSpecSchema).default([]),
+        labor: z.array(LaborSpecSchema).default([]),
+    }).default({
+        subtasks: [],
+        materials: [],
+        labor: [],
+    }),
+    attachments: z.object({
+        links: z.array(z.object({
+            url: z.string(),
+            label: z.string().optional(),
+        })).optional(),
+    }).optional(),
+    state: z.object({
+        openQuestions: z.array(z.string()).default([]),
+        assumptions: z.array(z.string()).default([]),
+        decisions: z.array(z.string()).default([]),
+        alternatives: z.array(AlternativeSpecSchema).optional(),
+    }).default({
+        openQuestions: [],
+        assumptions: [],
+        decisions: [],
+    }),
+    quote: z.object({
+        includeInQuote: z.boolean(),
+        clientTextOverride: z.string().optional(),
+        milestones: z.array(z.object({
+            name: z.string(),
+            date: z.string().optional(),
+        })).optional(),
+    }).optional(),
+});
+
+export const ItemUpdateOutputSchema = z.object({
+    itemId: z.string(),
+    proposedData: ItemSpecV2Schema,
+    summaryMarkdown: z.string(),
+    changeReason: z.string().optional(),
+});
+
+export type ItemSpecV2 = z.infer<typeof ItemSpecV2Schema>;
+export type ItemUpdateOutput = z.infer<typeof ItemUpdateOutputSchema>;

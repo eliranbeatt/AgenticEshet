@@ -136,6 +136,7 @@ export default defineSchema({
         assetId: v.id("projectAssets"),
         entityType: v.union(
             v.literal("materialLine"),
+            v.literal("projectItem"),
             v.literal("task"),
             v.literal("quote")
         ),
@@ -148,6 +149,86 @@ export default defineSchema({
         .index("by_project_asset_entity", ["projectId", "assetId", "entityType", "entityId"])
         .index("by_asset", ["assetId"]),
 
+    projectItems: defineTable({
+        projectId: v.id("projects"),
+        title: v.string(),
+        typeKey: v.string(),
+        status: v.union(
+            v.literal("draft"),
+            v.literal("approved"),
+            v.literal("archived")
+        ),
+        sortOrder: v.optional(v.number()),
+        tags: v.optional(v.array(v.string())),
+        createdFrom: v.object({
+            source: v.union(
+                v.literal("manual"),
+                v.literal("ideationCard"),
+                v.literal("planning"),
+                v.literal("accountingBackfill"),
+                v.literal("agent")
+            ),
+            sourceId: v.optional(v.string()),
+        }),
+        approvedRevisionId: v.optional(v.id("itemRevisions")),
+        latestRevisionNumber: v.number(),
+        deleteRequestedAt: v.optional(v.number()),
+        archivedAt: v.optional(v.number()),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+        .index("by_project_status", ["projectId", "status"])
+        .index("by_project_sort", ["projectId", "sortOrder"])
+        .index("by_project_type", ["projectId", "typeKey"]),
+
+    itemRevisions: defineTable({
+        projectId: v.id("projects"),
+        itemId: v.id("projectItems"),
+        tabScope: v.union(
+            v.literal("ideation"),
+            v.literal("clarification"),
+            v.literal("planning"),
+            v.literal("solutioning"),
+            v.literal("accounting"),
+            v.literal("tasks"),
+            v.literal("quote")
+        ),
+        state: v.union(
+            v.literal("proposed"),
+            v.literal("approved"),
+            v.literal("rejected"),
+            v.literal("superseded")
+        ),
+        revisionNumber: v.number(),
+        baseApprovedRevisionId: v.optional(v.id("itemRevisions")),
+        data: v.any(),
+        summaryMarkdown: v.optional(v.string()),
+        createdBy: v.object({
+            kind: v.union(v.literal("user"), v.literal("agent")),
+            agentRunId: v.optional(v.id("agentRuns")),
+        }),
+        createdAt: v.number(),
+    })
+        .index("by_item_revision", ["itemId", "revisionNumber"])
+        .index("by_project_tab_state", ["projectId", "tabScope", "state"])
+        .index("by_project_state", ["projectId", "state"]),
+
+    itemTemplates: defineTable({
+        key: v.string(),
+        label: v.string(),
+        typeKey: v.string(),
+        defaultData: v.any(),
+        enabled: v.boolean(),
+        sortOrder: v.number(),
+    }),
+
+    itemProjectionLocks: defineTable({
+        projectId: v.id("projects"),
+        itemId: v.id("projectItems"),
+        lastSyncedRevisionId: v.optional(v.id("itemRevisions")),
+        lastSyncedAt: v.number(),
+    }).index("by_project_item", ["projectId", "itemId"]),
+
     rateLimitBuckets: defineTable({
         key: v.string(),
         windowStart: v.number(),
@@ -158,6 +239,7 @@ export default defineSchema({
     // 16. SECTIONS (Budget Lines)
     sections: defineTable({
         projectId: v.id("projects"),
+        itemId: v.optional(v.id("projectItems")),
         group: v.string(), // e.g., "Studio Elements", "Logistics"
         name: v.string(),
         description: v.optional(v.string()),
@@ -176,6 +258,8 @@ export default defineSchema({
     materialLines: defineTable({
         sectionId: v.id("sections"),
         projectId: v.id("projects"), // Denormalized for easier querying
+        itemId: v.optional(v.id("projectItems")),
+        itemMaterialId: v.optional(v.string()),
         category: v.string(), // e.g., "PVC", "Paint"
         label: v.string(),
         description: v.optional(v.string()),
@@ -221,6 +305,8 @@ export default defineSchema({
     workLines: defineTable({
         sectionId: v.id("sections"),
         projectId: v.id("projects"),
+        itemId: v.optional(v.id("projectItems")),
+        itemLaborId: v.optional(v.string()),
         workType: v.string(), // studio, field, management
         role: v.string(),
         personId: v.optional(v.string()), // Link to user/employee if needed
@@ -327,6 +413,8 @@ export default defineSchema({
         accountingSectionId: v.optional(v.id("sections")),
         accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
+        itemId: v.optional(v.id("projectItems")),
+        itemSubtaskId: v.optional(v.string()),
         // Dependencies
         taskNumber: v.optional(v.number()),
         dependencies: v.optional(v.array(v.id("tasks"))),
@@ -396,6 +484,7 @@ export default defineSchema({
             v.literal("task"),
             v.literal("quest"),
             v.literal("quote"),
+            v.literal("item"),
             v.literal("system_note")
         )),
         sourceRefId: v.optional(v.string()),
@@ -428,6 +517,7 @@ export default defineSchema({
             v.literal("task"),
             v.literal("quest"),
             v.literal("quote"),
+            v.literal("item"),
             v.literal("system_note")
         )),
         clientName: v.optional(v.string()),

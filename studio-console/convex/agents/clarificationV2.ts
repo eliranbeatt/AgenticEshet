@@ -64,6 +64,10 @@ export const send = action({
             projectId: project._id,
         });
 
+        // Fetch model configuration
+        const settings = await ctx.runQuery(internal.settings.getAll);
+        const model = settings.modelConfig?.clarification || "gpt-5.2";
+
         const userMessageId = await ctx.runMutation(internal.chat.createMessage, {
             projectId: project._id,
             scenarioId: scenario._id,
@@ -121,6 +125,7 @@ export const send = action({
         let lastFlushedAt = 0;
         try {
             await streamChatText({
+                model,
                 systemPrompt,
                 userPrompt,
                 thinkingMode: args.thinkingMode,
@@ -152,18 +157,20 @@ export const send = action({
 
             const extracted = analysisLine
                 ? await callChatWithSchema(ClarificationSchema, {
-                      systemPrompt: "Parse the provided ANALYSIS_JSON line into valid JSON only.",
-                      userPrompt: analysisLine.slice("ANALYSIS_JSON:".length),
-                      maxRetries: 2,
-                      language: "en",
-                  })
+                    model,
+                    systemPrompt: "Parse the provided ANALYSIS_JSON line into valid JSON only.",
+                    userPrompt: analysisLine.slice("ANALYSIS_JSON:".length),
+                    maxRetries: 2,
+                    language: "en",
+                })
                 : await callChatWithSchema(ClarificationSchema, {
-                      systemPrompt:
-                          "Extract a briefSummary, openQuestions, and suggestedNextPhase from the assistant message.",
-                      userPrompt: finalContent,
-                      maxRetries: 2,
-                      language: project.defaultLanguage === "en" ? "en" : "he",
-                  });
+                    model,
+                    systemPrompt:
+                        "Extract a briefSummary, openQuestions, and suggestedNextPhase from the assistant message.",
+                    userPrompt: finalContent,
+                    maxRetries: 2,
+                    language: project.defaultLanguage === "en" ? "en" : "he",
+                });
 
             await ctx.runMutation(internal.agents.clarificationV2.saveOutcome, {
                 projectId: project._id,

@@ -113,6 +113,41 @@ export default defineSchema({
         createdBy: v.string(),
     }).index("by_project_createdAt", ["projectId", "createdAt"]),
 
+    projectAssets: defineTable({
+        projectId: v.id("projects"),
+        kind: v.union(v.literal("image")),
+        storageId: v.string(),
+        mimeType: v.string(),
+        filename: v.optional(v.string()),
+        source: v.union(v.literal("upload"), v.literal("generated")),
+        prompt: v.optional(v.string()),
+        provider: v.optional(v.string()),
+        model: v.optional(v.string()),
+        width: v.optional(v.number()),
+        height: v.optional(v.number()),
+        createdAt: v.number(),
+        createdBy: v.string(),
+    })
+        .index("by_project_createdAt", ["projectId", "createdAt"])
+        .index("by_storageId", ["storageId"]),
+
+    assetLinks: defineTable({
+        projectId: v.id("projects"),
+        assetId: v.id("projectAssets"),
+        entityType: v.union(
+            v.literal("materialLine"),
+            v.literal("task"),
+            v.literal("quote")
+        ),
+        entityId: v.string(),
+        role: v.optional(v.string()),
+        createdAt: v.number(),
+        createdBy: v.string(),
+    })
+        .index("by_project_entity", ["projectId", "entityType", "entityId"])
+        .index("by_project_asset_entity", ["projectId", "assetId", "entityType", "entityId"])
+        .index("by_asset", ["assetId"]),
+
     // 16. SECTIONS (Budget Lines)
     sections: defineTable({
         projectId: v.id("projects"),

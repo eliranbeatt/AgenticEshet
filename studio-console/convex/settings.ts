@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 
 type ImageProvider = "openai" | "gemini";
+export type ModelConfig = Record<string, string>;
 
 const SETTINGS_KEYS = {
     imageProvider: "image_provider",
@@ -10,6 +11,7 @@ const SETTINGS_KEYS = {
     geminiImageModel: "gemini_image_model",
     brandingLogoStorageId: "branding_logo_storage_id",
     quoteFooterHebrew: "quote_footer_hebrew",
+    modelConfig: "model_config",
 } as const;
 
 function safeParseJson<T>(valueJson: string | undefined, fallback: T): T {
@@ -61,6 +63,10 @@ export const getAll = query({
             (await getSetting(ctx, SETTINGS_KEYS.quoteFooterHebrew))?.valueJson,
             ""
         );
+        const modelConfig = safeParseJson<ModelConfig>(
+            (await getSetting(ctx, SETTINGS_KEYS.modelConfig))?.valueJson,
+            {}
+        );
 
         const brandingLogoUrl = brandingLogoStorageId ? await ctx.storage.getUrl(brandingLogoStorageId) : null;
 
@@ -71,6 +77,7 @@ export const getAll = query({
             brandingLogoStorageId,
             brandingLogoUrl,
             quoteFooterHebrew,
+            modelConfig,
         };
     },
 });
@@ -82,6 +89,7 @@ export const setMany = mutation({
         geminiImageModel: v.optional(v.string()),
         brandingLogoStorageId: v.optional(v.union(v.string(), v.null())),
         quoteFooterHebrew: v.optional(v.string()),
+        modelConfig: v.optional(v.string()), // JSON string for ModelConfig
     },
     handler: async (ctx, args) => {
         const entries = [
@@ -92,6 +100,7 @@ export const setMany = mutation({
                 ? [SETTINGS_KEYS.brandingLogoStorageId, args.brandingLogoStorageId]
                 : null,
             args.quoteFooterHebrew !== undefined ? [SETTINGS_KEYS.quoteFooterHebrew, args.quoteFooterHebrew] : null,
+            args.modelConfig !== undefined ? [SETTINGS_KEYS.modelConfig, JSON.parse(args.modelConfig)] : null,
         ].filter(Boolean) as Array<[string, unknown]>;
 
         for (const [key, value] of entries) {

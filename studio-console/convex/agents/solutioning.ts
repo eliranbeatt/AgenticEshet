@@ -160,6 +160,10 @@ export const chat = action({
             itemId: args.itemId,
         });
 
+        // Fetch model configuration
+        const settings = await ctx.runQuery(internal.settings.getAll);
+        const model = settings.modelConfig?.solutioning || "gpt-5.2";
+
         if (!item) throw new Error("Item not found");
 
         let messages: Message[] = [];
@@ -205,6 +209,7 @@ export const chat = action({
 
         // 3. LLM Call
         const result = await callChatWithSchema(SolutioningResponseSchema, {
+            model,
             systemPrompt,
             userPrompt: args.message, // Last message
             additionalMessages: recentMessages.slice(0, -1), // History

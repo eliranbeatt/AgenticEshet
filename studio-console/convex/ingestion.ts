@@ -92,7 +92,7 @@ export const retryJob = mutation({
         const job = await ctx.db.get(args.jobId);
         if (!job) throw new Error("Job not found");
         const progress = job.progress ?? { totalFiles: 0, doneFiles: 0, failedFiles: 0 };
-        
+
         // Reset failed files to 'uploaded'/'received' so they can be picked up again
         const failedFiles = await ctx.db
             .query("ingestionFiles")
@@ -124,13 +124,13 @@ export const retryFile = mutation({
     handler: async (ctx, args) => {
         const file = await ctx.db.get(args.fileId);
         if (!file) throw new Error("File not found");
-        
+
         await ctx.db.patch(args.fileId, {
             status: "uploaded",
             stage: "received",
             error: undefined,
         });
-        
+
         // We might want to trigger the job run here or let the user do it
     },
 });
@@ -173,7 +173,7 @@ export const updateJobStatus = internalMutation({
         if (args.errorSummary) update.errorSummary = args.errorSummary;
         if (args.status === "processing" || args.status === "running") update.startedAt = Date.now();
         if (args.status === "ready" || args.status === "failed") update.finishedAt = Date.now();
-        
+
         await ctx.db.patch(args.jobId, update);
     },
 });
@@ -223,12 +223,12 @@ export const updateFileStatus = internalMutation({
         })),
     },
     handler: async (ctx, args) => {
-        const update: Record<string, unknown> = { 
+        const update: Record<string, unknown> = {
             status: args.status,
             stage: args.stage,
             updatedAt: Date.now()
         };
-        
+
         if (args.rawText !== undefined) update.rawText = args.rawText;
         if (args.enrichedText !== undefined) update.enrichedText = args.enrichedText;
         if (args.summary !== undefined) update.summary = args.summary;
@@ -255,18 +255,18 @@ export const runJob = action({
         // Use public query via api since we changed getJob to public
         const job = await ctx.runQuery(api.ingestion.getJob, { jobId: args.jobId });
         if (!job) throw new Error("Job not found");
-        
+
         if (job.status === "cancelled") return;
 
-        await ctx.runMutation(internal.ingestion.updateJobStatus, { 
-            jobId: args.jobId, 
+        await ctx.runMutation(internal.ingestion.updateJobStatus, {
+            jobId: args.jobId,
             status: "running",
             stage: "parsed" // Start with parsing
         });
 
         const files: Doc<"ingestionFiles">[] = await ctx.runQuery(api.ingestion.listFiles, { jobId: args.jobId });
         const progress = job.progress ?? { totalFiles: 0, doneFiles: 0, failedFiles: 0 };
-        
+
         let doneFiles = progress.doneFiles;
         let failedFiles = progress.failedFiles;
 
@@ -287,7 +287,7 @@ export const runJob = action({
                 });
                 failedFiles++;
             }
-            
+
             // Update progress after each file
             await ctx.runMutation(internal.ingestion.updateJobStatus, {
                 jobId: args.jobId,
@@ -337,13 +337,12 @@ async function processSingleFile(
             rawText,
             parsed: { textBytes: rawText.length }
         });
-        
+
         // Update local file object for next steps
         file.rawText = rawText;
     }
 
     // 2. ENRICH
-    // ... (Logic similar to existing, but using new stages)
     const isExcel = file.originalFilename.toLowerCase().endsWith(".xlsx") || file.originalFilename.toLowerCase().endsWith(".xls") || file.mimeType.includes("spreadsheet") || file.mimeType.includes("excel");
 
     const promptSections = [
@@ -364,7 +363,12 @@ async function processSingleFile(
     promptSections.push("Document content:");
     promptSections.push(file.rawText!.slice(0, 12000));
 
+    // Fetch model configuration
+    const settings = await ctx.runQuery(internal.settings.getAll);
+    const model = settings.modelConfig?.summarizing || "gpt-5.2";
+
     const enriched = await callChatWithSchema(EnhancerSchema, {
+        model,
         systemPrompt: "Extract structured knowledge.",
         userPrompt: promptSections.filter(Boolean).join("\n\n"),
         thinkingMode,
@@ -385,13 +389,10 @@ async function processSingleFile(
         language: enriched.language ?? undefined,
     });
 
-    // 3. CHUNK & EMBED & COMMIT (Combined for now as "Ready")
-    // In the plan, "Ready" means searchable in RAG.
-    // So we should create the knowledgeDoc and chunks here.
-    
+    // 3. CHUNK & EMBED & COMMIT
     const textSource = enriched.normalizedText ?? file.rawText!;
     const tags = Array.from(new Set([...(job.defaultTags || []), ...(enriched.suggestedTags || [])]));
-    
+
     const docId = await ctx.runMutation(internal.knowledge.createDocRecord, {
         projectId: file.projectId ?? job.projectId,
         title: file.originalFilename,
@@ -428,7 +429,7 @@ async function processSingleFile(
 
     await ctx.runMutation(internal.knowledge.insertChunks, { chunks: chunkPayload });
     await ctx.runMutation(internal.knowledge.updateDocStatus, { docId, status: "ready" });
-    
+
     await ctx.runMutation(internal.ingestion.updateFileStatus, {
         fileId: file._id,
         status: "ready",

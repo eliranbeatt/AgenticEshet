@@ -91,12 +91,14 @@ function shouldFallbackFromJsonSchema(error: unknown): boolean {
 
 function supportsTemperature(model: string): boolean {
     // gpt-5 reasoning models currently reject the temperature parameter.
-    if (model.toLowerCase().startsWith("gpt-5")) return false;
+    const lower = model.toLowerCase();
+    if (lower.startsWith("gpt-5") || lower.startsWith("gpt5")) return false;
     return true;
 }
 
 function supportsReasoningEffort(model: string): boolean {
-    return model.toLowerCase().startsWith("gpt-5");
+    const lower = model.toLowerCase();
+    return lower.startsWith("gpt-5") || lower.startsWith("gpt5");
 }
 
 export async function callChatWithSchema<T>(
@@ -114,10 +116,10 @@ export async function callChatWithSchema<T>(
     const languageOverride =
         params.language === "en"
             ? [
-                  "Language override:",
-                  "- All user-facing text must be in English.",
-                  "- If returning JSON, keep keys exactly as required by the schema; do not translate keys.",
-              ].join("\n")
+                "Language override:",
+                "- All user-facing text must be in English.",
+                "- If returning JSON, keep keys exactly as required by the schema; do not translate keys.",
+            ].join("\n")
             : null;
 
     const systemInstructions = [
@@ -191,8 +193,7 @@ export async function callChatWithSchema<T>(
     }
 
     throw new Error(
-        `OpenAI chat completion failed after ${maxRetries} attempts: ${
-            lastError instanceof Error ? lastError.message : "Unknown error"
+        `OpenAI chat completion failed after ${maxRetries} attempts: ${lastError instanceof Error ? lastError.message : "Unknown error"
         }`
     );
 }
@@ -208,10 +209,10 @@ export async function streamChatText(
     const languageOverride =
         params.language === "en"
             ? [
-                  "Language override:",
-                  "- All user-facing text must be in English.",
-                  "- Keep user-facing content in English even if other instructions mention Hebrew.",
-              ].join("\n")
+                "Language override:",
+                "- All user-facing text must be in English.",
+                "- Keep user-facing content in English even if other instructions mention Hebrew.",
+            ].join("\n")
             : null;
 
     const systemInstructions = [
@@ -300,8 +301,7 @@ export async function embedText(
     }
 
     throw new Error(
-        `OpenAI embeddings failed after ${maxRetries} attempts: ${
-            lastError instanceof Error ? lastError.message : "Unknown error"
+        `OpenAI embeddings failed after ${maxRetries} attempts: ${lastError instanceof Error ? lastError.message : "Unknown error"
         }`
     );
 }

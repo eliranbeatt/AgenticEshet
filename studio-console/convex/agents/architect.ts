@@ -340,6 +340,10 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
     handler: async (ctx, args) => {
         const agentRunId = args.agentRunId;
 
+        // Fetch model configuration
+        const settings = await ctx.runQuery(internal.settings.getAll);
+        const model = settings.modelConfig?.tasks || "gpt-5.2";
+
         if (agentRunId) {
             await ctx.runMutation(internal.agentRuns.setStatus, {
                 runId: agentRunId,
@@ -482,6 +486,7 @@ When relevant, set accountingSectionName to one of the Accounting Sections above
             }
 
             const result = await callChatWithSchema(TaskBreakdownSchema, {
+                model,
                 systemPrompt,
                 userPrompt,
                 thinkingMode: args.thinkingMode,

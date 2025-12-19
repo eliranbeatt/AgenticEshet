@@ -75,6 +75,10 @@ export const send = action({
             projectId: project._id,
         });
 
+        // Fetch model configuration
+        const settings = await ctx.runQuery(internal.settings.getAll);
+        const model = settings.modelConfig?.ideation || "gpt-5.2";
+
         const userMessageId = await ctx.runMutation(internal.chat.createMessage, {
             projectId: project._id,
             scenarioId: scenario._id,
@@ -104,9 +108,9 @@ export const send = action({
 
         const relatedLines = relatedProjects.length
             ? [
-                  "Related past projects (for inspiration, do not copy blindly):",
-                  ...relatedProjects.map((p) => `- ${p.name}: ${p.overviewSummary ?? p.details.notes ?? ""}`.trim()),
-              ]
+                "Related past projects (for inspiration, do not copy blindly):",
+                ...relatedProjects.map((p) => `- ${p.name}: ${p.overviewSummary ?? p.details.notes ?? ""}`.trim()),
+            ]
             : ["Related past projects: none"];
 
         const transcript = [
@@ -141,6 +145,7 @@ export const send = action({
         let lastFlushedAt = 0;
         try {
             await streamChatText({
+                model,
                 systemPrompt,
                 userPrompt,
                 thinkingMode: args.thinkingMode,
@@ -166,6 +171,7 @@ export const send = action({
             });
 
             const extracted = await callChatWithSchema(IdeationConceptsSchema, {
+                model,
                 systemPrompt:
                     "Extract exactly 3 concept cards from the assistant markdown. Use the same language as the content.",
                 userPrompt: finalContent,

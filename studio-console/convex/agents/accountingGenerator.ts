@@ -57,6 +57,8 @@ function buildPrompt(args: {
         "- If a section has no work, set work to an empty array [].",
         "- If a description is unknown/empty, set description to null.",
         "- Labor roles allowed: Art worker and Art manager only.",
+        "- Do NOT include studio management, producer, project management, budgeting, coordination, account management, meetings, reporting, or admin labor lines. Those are covered by profit/overhead and must not be double-counted.",
+        "- Only include Art manager labor if the plan explicitly requests billing manager labor for a specific task; otherwise omit manager labor lines even if such tasks appear in the plan.",
         "- Role cost rates (hourly cost): Art worker=100 ILS/hour, Art manager=200 ILS/hour.",
         "- Use rateType hour/day/flat; for 'day' unitCost is ILS/day; for 'hour' unitCost is ILS/hour.",
         "- Keep counts realistic and detailed enough for budgeting.",

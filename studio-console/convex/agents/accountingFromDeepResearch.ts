@@ -58,6 +58,8 @@ function buildPrompt(args: {
         "- If a section has no materials, set materials to an empty array [].",
         "- If a section has no work, set work to an empty array [].",
         "- If a description is unknown/empty, set description to null.",
+        "- Do NOT include studio management, producer, project management, budgeting, coordination, account management, meetings, reporting, or admin labor lines. Those are covered by profit/overhead and must not be double-counted.",
+        "- Only include explicit manager labor if the report clearly requests billing manager labor for a specific task; otherwise omit any manager/producer/PM roles even if such tasks appear in the report.",
         "- rateType: hour/day/flat; for 'day' unitCost is ILS/day; for 'hour' unitCost is ILS/hour; for 'flat' unitCost is ILS for the whole line.",
         "",
         "Deep-Research Markdown:",

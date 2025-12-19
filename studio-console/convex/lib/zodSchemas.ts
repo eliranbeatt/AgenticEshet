@@ -71,3 +71,13 @@ export const EnhancerSchema = z.object({
     clientName: z.string().nullable().default(null),
     language: z.string().nullable().default(null),
 });
+
+export const IdeationConceptsSchema = z.object({
+    concepts: z.array(
+        z.object({
+            title: z.string(),
+            oneLiner: z.string(),
+            detailsMarkdown: z.string(),
+        })
+    ),
+});

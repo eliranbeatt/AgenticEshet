@@ -9,6 +9,11 @@ import Link from "next/link";
 
 type DetailsFormState = {
     status: "lead" | "planning" | "production" | "archived";
+    stage: "ideation" | "planning" | "production" | "done";
+    budgetTier: "low" | "medium" | "high" | "unknown";
+    defaultLanguage: "he" | "en";
+    projectTypes: Array<"dressing" | "studio_build" | "print_install" | "big_install_takedown" | "photoshoot">;
+    relatedPastProjectIds: Id<"projects">[];
     eventDate: string;
     budgetCap: string;
     location: string;
@@ -23,6 +28,16 @@ type RecentDocUpload = {
 };
 
 const statusOptions: DetailsFormState["status"][] = ["lead", "planning", "production", "archived"];
+const stageOptions: DetailsFormState["stage"][] = ["ideation", "planning", "production", "done"];
+const budgetTierOptions: DetailsFormState["budgetTier"][] = ["low", "medium", "high", "unknown"];
+const languageOptions: DetailsFormState["defaultLanguage"][] = ["he", "en"];
+const projectTypeOptions: Array<{ value: DetailsFormState["projectTypes"][number]; label: string }> = [
+    { value: "dressing", label: "Dressing" },
+    { value: "studio_build", label: "Studio build" },
+    { value: "print_install", label: "Print / install" },
+    { value: "big_install_takedown", label: "Big install / takedown" },
+    { value: "photoshoot", label: "Photoshoot" },
+];
 
 export default function ProjectOverviewPage() {
     const params = useParams();
@@ -31,6 +46,7 @@ export default function ProjectOverviewPage() {
     const project = useQuery(api.projects.getProject, { projectId });
     const tasks = useQuery(api.tasks.listByProject, { projectId });
     const planMeta = useQuery(api.projects.getPlanPhaseMeta, { projectId });
+    const allProjects = useQuery(api.projects.listProjects, {});
     const recentDocUploads = useQuery(api.knowledge.listRecentDocs, {
         projectId,
         limit: 6,
@@ -56,6 +72,11 @@ export default function ProjectOverviewPage() {
 
     const [formState, setFormState] = useState<DetailsFormState>({
         status: "lead",
+        stage: "ideation",
+        budgetTier: "unknown",
+        defaultLanguage: "he",
+        projectTypes: [],
+        relatedPastProjectIds: [],
         eventDate: "",
         budgetCap: "",
         location: "",
@@ -73,6 +94,11 @@ export default function ProjectOverviewPage() {
         if (project) {
             setFormState({
                 status: project.status,
+                stage: project.stage ?? "ideation",
+                budgetTier: project.budgetTier ?? "unknown",
+                defaultLanguage: project.defaultLanguage ?? "he",
+                projectTypes: project.projectTypes ?? [],
+                relatedPastProjectIds: project.relatedPastProjectIds ?? [],
                 eventDate: project.details.eventDate || "",
                 budgetCap: project.details.budgetCap ? String(project.details.budgetCap) : "",
                 location: project.details.location || "",
@@ -111,6 +137,11 @@ export default function ProjectOverviewPage() {
             await updateProject({
                 projectId,
                 status: formState.status,
+                stage: formState.stage,
+                budgetTier: formState.budgetTier,
+                defaultLanguage: formState.defaultLanguage,
+                projectTypes: formState.projectTypes,
+                relatedPastProjectIds: formState.relatedPastProjectIds,
                 details: {
                     eventDate: formState.eventDate || undefined,
                     budgetCap: formState.budgetCap ? Number(formState.budgetCap) : undefined,
@@ -311,6 +342,130 @@ export default function ProjectOverviewPage() {
                             </select>
                         </div>
                         <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Stage</label>
+                            <select
+                                value={formState.stage}
+                                onChange={(e) =>
+                                    setFormState((prev) => ({ ...prev, stage: e.target.value as DetailsFormState["stage"] }))
+                                }
+                                className="w-full border rounded px-3 py-2 text-sm"
+                            >
+                                {stageOptions.map((stage) => (
+                                    <option key={stage} value={stage}>
+                                        {stage}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Project Types</label>
+                            <div className="flex flex-wrap gap-3 border rounded px-3 py-2">
+                                {projectTypeOptions.map((opt) => {
+                                    const checked = formState.projectTypes.includes(opt.value);
+                                    return (
+                                        <label key={opt.value} className="flex items-center gap-2 text-sm text-gray-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={(event) => {
+                                                    if (event.target.checked) {
+                                                        setFormState((prev) => ({
+                                                            ...prev,
+                                                            projectTypes: [...prev.projectTypes, opt.value],
+                                                        }));
+                                                    } else {
+                                                        setFormState((prev) => ({
+                                                            ...prev,
+                                                            projectTypes: prev.projectTypes.filter((t) => t !== opt.value),
+                                                        }));
+                                                    }
+                                                }}
+                                            />
+                                            <span>{opt.label}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-1">Budget Tier</label>
+                                <select
+                                    value={formState.budgetTier}
+                                    onChange={(e) =>
+                                        setFormState((prev) => ({
+                                            ...prev,
+                                            budgetTier: e.target.value as DetailsFormState["budgetTier"],
+                                        }))
+                                    }
+                                    className="w-full border rounded px-3 py-2 text-sm"
+                                >
+                                    {budgetTierOptions.map((tier) => (
+                                        <option key={tier} value={tier}>
+                                            {tier}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-1">Default Language</label>
+                                <select
+                                    value={formState.defaultLanguage}
+                                    onChange={(e) =>
+                                        setFormState((prev) => ({
+                                            ...prev,
+                                            defaultLanguage: e.target.value as DetailsFormState["defaultLanguage"],
+                                        }))
+                                    }
+                                    className="w-full border rounded px-3 py-2 text-sm"
+                                >
+                                    {languageOptions.map((lang) => (
+                                        <option key={lang} value={lang}>
+                                            {lang}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">Related Past Projects</label>
+                            <div className="border rounded px-3 py-2 max-h-40 overflow-y-auto space-y-2">
+                                {allProjects
+                                    ?.filter((p: Doc<"projects">) => p._id !== projectId)
+                                    .map((p: Doc<"projects">) => {
+                                        const checked = formState.relatedPastProjectIds.includes(p._id);
+                                        return (
+                                            <label key={p._id} className="flex items-center gap-2 text-sm text-gray-700">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={(event) => {
+                                                        if (event.target.checked) {
+                                                            setFormState((prev) => ({
+                                                                ...prev,
+                                                                relatedPastProjectIds: [...prev.relatedPastProjectIds, p._id],
+                                                            }));
+                                                        } else {
+                                                            setFormState((prev) => ({
+                                                                ...prev,
+                                                                relatedPastProjectIds: prev.relatedPastProjectIds.filter(
+                                                                    (id) => id !== p._id
+                                                                ),
+                                                            }));
+                                                        }
+                                                    }}
+                                                />
+                                                <span className="truncate">{p.name}</span>
+                                            </label>
+                                        );
+                                    })}
+                                {allProjects && allProjects.length <= 1 && (
+                                    <div className="text-xs text-gray-500">No other projects available.</div>
+                                )}
+                                {allProjects === undefined && <div className="text-xs text-gray-500">Loading…</div>}
+                            </div>
+                        </div>
+                        <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">Event Date</label>
                             <input
                                 type="date"
@@ -378,6 +533,12 @@ export default function ProjectOverviewPage() {
 
             {/* Quick Actions */}
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                <QuickLink
+                    href={`/projects/${projectId}/ideation`}
+                    title="Ideation"
+                    description="Generate concept directions and moodboards."
+                    accent="purple"
+                />
                 <QuickLink
                     href={`/projects/${projectId}/clarification`}
                     title="Clarification"

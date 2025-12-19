@@ -13,6 +13,7 @@ type ChatParams = {
     additionalMessages?: ChatMessage[];
     temperature?: number;
     thinkingMode?: boolean;
+    language?: "he" | "en";
     maxRetries?: number;
     retryDelayMs?: number;
 };
@@ -110,12 +111,22 @@ export async function callChatWithSchema<T>(
 
     const additionalMessages = params.additionalMessages || [];
 
+    const languageOverride =
+        params.language === "en"
+            ? [
+                  "Language override:",
+                  "- All user-facing text must be in English.",
+                  "- If returning JSON, keep keys exactly as required by the schema; do not translate keys.",
+              ].join("\n")
+            : null;
+
     const systemInstructions = [
         params.systemPrompt,
         ...additionalMessages
             .filter((message) => message.role === "system")
             .map((message) => message.content),
         GLOBAL_LANGUAGE_INSTRUCTIONS,
+        languageOverride,
     ]
         .filter(Boolean)
         .join("\n\n");
@@ -184,6 +195,63 @@ export async function callChatWithSchema<T>(
             lastError instanceof Error ? lastError.message : "Unknown error"
         }`
     );
+}
+
+export async function streamChatText(
+    params: ChatParams & { onDelta: (delta: string) => Promise<void> }
+): Promise<string> {
+    if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+
+    const model = params.model || DEFAULT_CHAT_MODEL;
+    const additionalMessages = params.additionalMessages || [];
+
+    const languageOverride =
+        params.language === "en"
+            ? [
+                  "Language override:",
+                  "- All user-facing text must be in English.",
+                  "- Keep user-facing content in English even if other instructions mention Hebrew.",
+              ].join("\n")
+            : null;
+
+    const systemInstructions = [
+        params.systemPrompt,
+        ...additionalMessages
+            .filter((message) => message.role === "system")
+            .map((message) => message.content),
+        GLOBAL_LANGUAGE_INSTRUCTIONS,
+        languageOverride,
+    ]
+        .filter(Boolean)
+        .join("\n\n");
+
+    const transcriptMessages: ChatMessage[] = [
+        ...additionalMessages.filter((message) => message.role !== "system"),
+        { role: "user", content: params.userPrompt },
+    ];
+
+    const stream = openai.responses.stream({
+        model,
+        instructions: systemInstructions,
+        input: formatConversation(transcriptMessages),
+        ...(supportsTemperature(model) ? { temperature: params.temperature ?? 0 } : {}),
+        ...(supportsReasoningEffort(model)
+            ? { reasoning: { effort: params.thinkingMode ? "high" : "low" } }
+            : {}),
+        text: { format: { type: "text" }, verbosity: params.thinkingMode ? "medium" : "low" },
+        parallel_tool_calls: true,
+    });
+
+    let lastSnapshot = "";
+    stream.on("response.output_text.delta", async (event) => {
+        lastSnapshot = event.snapshot;
+        if (event.delta) {
+            await params.onDelta(event.delta);
+        }
+    });
+
+    const final = await stream.finalResponse();
+    return final.output_text ?? lastSnapshot;
 }
 
 export function normalizeEmbedding(embedding: number[]): number[] {

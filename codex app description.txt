@@ -1,0 +1,260 @@
+diff --git a/studio-console/docs/MagneticStudioSystemSpec.md b/studio-console/docs/MagneticStudioSystemSpec.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..33bd33d057f4db84b3cac1230b3027c1a9d9ed5e
+--- /dev/null
++++ b/studio-console/docs/MagneticStudioSystemSpec.md
+@@ -0,0 +1,254 @@
++# Magnetic Studio Console — System Specification
++
++## Step 1: Discovered Inventory
++- **Frontend routes (App Router)**: `/` (redirects to `/projects`), `/projects`, `/projects/[id]/overview`, `/projects/[id]/clarification`, `/projects/[id]/planning`, `/projects/[id]/solutioning`, `/projects/[id]/tasks`, `/projects/[id]/quests`, `/projects/[id]/quote`, `/projects/[id]/accounting`, `/projects/[id]/gantt`, `/projects/[id]/history`, `/projects/[id]/knowledge`, `/projects/[id]/trello-view`, `/projects/[id]/inbox`, `/rag-chat`, `/ingestion`, `/ingestion/[jobId]`, `/ingestion/connectors`, `/management`, `/admin`, `/admin/skills`, `/admin/enrichment`.
++- **Core UI components**: layout sidebar with tabs (Projects, RAG Chat, Ingestion, Management, Admin); project-scoped components such as `AgentActivityPanel`, accounting tabs (Summary/Materials/Labor/DeepResearch), `GanttView`, `BuyingAssistantPanel`, `PriceHistoryTable`, ingestion `UploadComponent`, RAG chat controls.
++- **Convex schema tables**: projects, sections, materialLines, workLines, vendors, materialCatalog, laborRates, employees, purchases, tasks, trelloMappings, plans, knowledgeDocs, knowledgeChunks, quotes, deepResearchRuns, agentRuns, conversations, quests, ingestionJobs, ingestionFiles, inboxItems, connectorAccounts, connectorWatches, enrichmentProfiles, retrievalLogs, skills, settings, priceObservations, canonicalItems, itemNormalizationMap, buyingSuggestions, researchRuns.
++- **Convex functions**: queries/mutations/actions across domains (projects, tasks, quests, accounting, knowledge, ingestion, trelloSync, buying, management, research, inbox, prices, conversations, agentRuns, admin, drive, migrations, backfill, etc.). See section D for the complete table.
++- **Agents**: Clarification, Planning, Architect (task generator), Estimator, Quote, AccountingGenerator, Solutioning chat, DeepResearch, AccountingFromDeepResearch. Enhancer (ingestion enrichment) defined via `EnhancerSchema` and enrichment profiles.
++- **RAG pipeline code**: `convex/knowledge.ts` for document creation, chunking, embeddings, search, logging, normalization utilities; `convex/ingestion.ts` for job orchestration; `convex/lib/textChunker.ts`, `convex/lib/openai.ts` for embeddings; retrieval logging via `retrievalLogs` table.
++- **Trello integration**: `convex/trelloSync.ts` for config storage, mapping, board snapshot, sync actions; UI at `app/projects/[id]/trello-view/page.tsx`.
++
++---
++
++## A) Executive Overview
++Magnetic Studio Console is a Next.js (App Router) + Convex-powered console for studio production projects. Producers manage projects, generate agent-authored plans/tasks/quotes, ingest documents into a RAG corpus, and sync tasks to Trello. Convex hosts persistence, LLM-facing actions, and ingestion pipelines; the frontend offers project-scoped tabs with live agent activity and accounting tooling.
++
++```mermaid
++flowchart LR
++    UI[Next.js App Router
++    (Projects/RAG/Agents)] -->|Convex client| Convex[(Convex backend
++    queries/mutations/actions)]
++    Convex -->|LLM calls
++    (OpenAI etc.)| LLM[LLM Providers]
++    Convex -->|Vector search
++    embeddings| RAG[(knowledgeDocs
++    knowledgeChunks)]
++    Convex -->|Trello API| Trello[Trello Boards]
++    Convex -->|External sources| Connectors[Drive/Email/WhatsApp]
++```
++
++### Top 10 Features (code-backed)
++1. **Project dashboard with AI summary & quick ingestion** (`app/projects/[id]/overview/page.tsx`).
++2. **Clarification agent to build brief & questions** (`convex/agents/clarification.ts`).
++3. **Planning agent producing phased plans** (`convex/agents/planning.ts`).
++4. **Architect agent auto-generating tasks with accounting links** (`convex/agents/architect.ts` + tasks UI).
++5. **Solutioning chat tied to plans and sections** (`convex/agents/solutioning.ts` with chat UI under `/solutioning`).
++6. **Accounting workspace with materials/labor/summary and price memory** (`app/projects/[id]/accounting/*`, `convex/accounting.ts`, `convex/prices.ts`).
++7. **Quote generation from accounting plus buyer assistant** (`convex/agents/quote.ts`, `app/projects/[id]/quote/*`).
++8. **RAG chat scoped to projects with vector search and retrieval logging** (`app/rag-chat/page.tsx`, `convex/knowledge.ts`).
++9. **Ingestion jobs with enhancer, chunking, embeddings, and connector setup** (`app/ingestion/*`, `convex/ingestion.ts`, `convex/knowledge.ts`).
++10. **Trello sync for tasks with idempotent mappings** (`convex/trelloSync.ts`, `app/projects/[id]/trello-view/page.tsx`).
++
++## B) Information Architecture: Tabs & Pages
++### Tabs Inventory
++| Tab | Route(s) | Purpose | Key UI Components | Backend Calls | Data Tables | Notes/Edge Cases |
++| --- | --- | --- | --- | --- | --- | --- |
++| Projects | `/projects`, `/projects/[id]/...` | Project list and per-project workspace | Project cards; per-project sidebar tabs; AgentActivityPanel | `projects.listProjects`, `projects.getProject`, per-page calls | projects, tasks, plans, conversations, knowledgeDocs, quests, quotes, trelloMappings, accounting tables | Project layout handles missing IDs with fallback states. |
++| RAG Chat | `/rag-chat` | Ad-hoc retrieval QA | Chat form, scope selectors | `knowledge.dynamicSearch`, `knowledge.logRetrieval` | knowledgeChunks, knowledgeDocs, retrievalLogs | Requires project selection for scoped search. |
++| Ingestion | `/ingestion`, `/ingestion/[jobId]`, `/ingestion/connectors` | Manage ingestion jobs, upload files, configure connectors | UploadComponent, job tables, connector status cards | `ingestion.listJobs`, `ingestion.createJob`, `ingestion.generateUploadUrl`, `ingestion.addFilesToJob`, `ingestion.runJob`, `ingestion.listFiles`, `drive.*` | ingestionJobs, ingestionFiles, connectorAccounts, connectorWatches | Handles stage/status transitions; alerts on failures. |
++| Management | `/management` | Vendor/employee/material/purchase admin | CRUD tables + PriceHistoryTable | `management.listManagementData`, vendor/material/employee/purchase mutations | vendors, materialCatalog, employees, purchases | Uses optimistic forms; minimal validation. |
++| Admin | `/admin`, `/admin/skills`, `/admin/enrichment` | Manage skills/prompts and enrichment profiles | Skills list/editor, enrichment profile editor | `admin.listSkills`, `admin.saveSkill`, `admin.deleteSkill`, `admin.listEnrichmentProfiles`, `admin.saveEnrichmentProfile`, `admin.deleteEnrichmentProfile` | skills, enrichmentProfiles | No auth guards in code; assumes trusted use. |
++
++### Pages Inventory & Specs (selected highlights)
++For brevity, representative pages are detailed; others follow the same pattern with projectId param and Convex hooks.
++
++| Route | Page | Layout | Sections | User Actions | Data Fetching | Mutations/Actions | Loading/Error | Permissions |
++| --- | --- | --- | --- | --- | --- | --- | --- | --- |
++| `/projects` | Project list | RootLayout | Grid of project cards + “New Project” form | Create project | `projects.listProjects` | `projects.createProject` | Inline “Loading projects…”; alerts on create errors | None enforced |
++| `/projects/[id]/overview` | Overview | Project layout | Summary, stats, plan badges, recent uploads, clarification/planning history, Trello state, quotes, detail form, quick doc upload | Update details; upload docs (creates ingestion job + run) | `projects.getProject`, `tasks.listByProject`, `projects.getPlanPhaseMeta`, `knowledge.listRecentDocs`, `conversations.recentByPhase`, `trelloSync.getSyncState`, `agents.quote.listQuotes` | `projects.updateProject`, `ingestion.createJob`, `ingestion.generateUploadUrl`, `ingestion.addFilesToJob`, `ingestion.runJob` | Shows loading or “Project not found” | None enforced |
++| `/projects/[id]/clarification` | Clarification | Project layout | Prompt, context cards, prior conversations | Run Clarification agent | `projects.getProject`, `agents.clarification.getContext` | `agents.clarification.run` | Button disabled while running; errors surfaced via alert | None enforced |
++| `/projects/[id]/planning` | Planning | Project layout | Active/draft plans, run Planning agent, plan history | Generate plan, set active | `projects.getProject`, `agents.planning.listPlans` | `agents.planning.run`, `projects.setPlanActive` | Loading placeholders; basic error alerts | None enforced |
++| `/projects/[id]/solutioning` | Solutioning | Project layout | Chat threads per section, accounting context | Send messages to Solutioning agent | `agents.solutioning.getPlanningItems`, `agents.solutioning.getConversation` | `agents.solutioning.chat`, `agents.solutioning.updateSolution`, `agents.solutioning.saveChatHistory` | Shows “Loading…” before data | None enforced |
++| `/projects/[id]/tasks` | Tasks | Project layout | Kanban columns with filters/sorts; accounting linking; generate/regenerate buttons | Drag/drop status; create/edit/delete; auto-generate | `tasks.listByProject`, `accounting.getProjectAccounting` | `agents.architect.run`, `tasks.updateTask`, `tasks.createTask`, `tasks.deleteTask`, `tasks.clearTasks`, `tasks.ensureTaskNumbers` | Loading when queries undefined; alert on errors | None enforced |
++| `/projects/[id]/quote` | Quote | Project layout | Latest quote summary, regenerate button, buying assistant panel | Generate quote; run buying assistant for materials | `agents.quote.getRun`, `agents.quote.listQuotes`, `accounting.getProjectAccounting`, `prices.getHistory` | `agents.quote.startProject`, `agents.quote.pollRun`, `buying.generateSuggestions` | Displays status banners; error toasts | None enforced |
++| `/projects/[id]/accounting` | Accounting | Project layout | Tabs: Summary, Materials, Labor, Deep Research | CRUD sections/lines; run deep research | `accounting.getProjectAccounting`, `prices.getHistory` | `accounting.addSection/update/delete`, `accounting.addMaterialLine/update/delete`, `accounting.addWorkLine/update/delete`, `accounting.ensureVendor/saveToCatalog`, `research.startOnlineResearch` | Loading states per tab | None enforced |
++| `/projects/[id]/gantt` | Gantt | Project layout | Gantt chart | Edit task dates/durations | `tasks.listByProject` | `tasks.updateTask` | Basic loading text | None enforced |
++| `/projects/[id]/knowledge` | Knowledge | Project layout | List of docs/chunks | View docs | `knowledge.listDocs`, `knowledge.getDocDetail` | — | Shows processing status | None enforced |
++| `/projects/[id]/trello-view` | Trello View | Project layout | Config form, board snapshot, mapping stats | Save Trello config; snapshot board; run sync | `trelloSync.getConfig`, `trelloSync.getSyncState`, `trelloSync.snapshotBoard` | `trelloSync.saveConfig`, `trelloSync.sync` | Alerts on errors | None enforced |
++| `/ingestion` | Ingestion home | RootLayout | Job table, create job, upload widget | Create job, upload files, start processing | `ingestion.listJobs` | `ingestion.createJob`, `ingestion.generateUploadUrl`, `ingestion.addFilesToJob`, `ingestion.runJob` | Inline statuses | None enforced |
++| `/ingestion/[jobId]` | Job detail | RootLayout | File list with statuses | Retry file/job, cancel | `ingestion.getJob`, `ingestion.listFiles` | `ingestion.retryFile`, `ingestion.retryJob`, `ingestion.cancelJob` | Shows missing job text | None enforced |
++| `/ingestion/connectors` | Connector setup | RootLayout | Google Drive account + watched folders | Connect/disconnect, add watch | `drive.getDriveAccount`, `drive.listWatchesByProject` | `drive.upsertDriveAccountFromOAuth`, `drive.disconnectDriveAccount`, `drive.watchDriveFolder`, `drive.setWatchEnabled`, `drive.updateWatchCursor` | Shows connect prompts | None enforced |
++| `/rag-chat` | RAG Chat | RootLayout | Query input, scope toggles, results list | Submit queries | `knowledge.dynamicSearch` | `knowledge.logRetrieval` via action internally | Shows loading spinner | None enforced |
++| `/management` | Management | RootLayout | Vendor/material/employee/purchase tables | CRUD operations | `management.listManagementData` | `management.createVendor/updateVendor/deleteVendor`, etc. | Basic error alerts | None enforced |
++| `/admin/skills` | Skills admin | Admin layout | Skills list with edit modal | Save/delete skills | `admin.listSkills` | `admin.saveSkill`, `admin.deleteSkill` | Shows loading text | None enforced |
++| `/admin/enrichment` | Enrichment admin | Admin layout | Enrichment profile list/editor | Save/delete profiles | `admin.listEnrichmentProfiles` | `admin.saveEnrichmentProfile`, `admin.deleteEnrichmentProfile` | Shows loading text | None enforced |
++| `/admin` | Admin home | Admin layout | Links to skills/enrichment | Navigation only | — | — | — | — |
++
++Detailed per-page interactions mirror the table above: pages use `useParams` for `projectId`, `useQuery`/`useMutation`/`useAction` from Convex, maintain local React state for forms and loading flags, and handle errors via alerts or inline text. Drag/drop (tasks) uses `@dnd-kit`. Agents are triggered via buttons that call Convex actions; statuses are reflected in UI cards or alerts.
++
++## C) Data Model (Convex Schema)
++See `convex/schema.ts` for full definitions.
++
++### Entities (selected)
++- **projects**: core project metadata + accounting defaults (currency, overhead/risk/profit). Indexed by status.
++- **plans**: versioned plan documents with phase/isDraft/isActive; indexed by project, draft flag, phase.
++- **tasks**: canonical tasks with status/category/priority, quest and accounting links, dependencies, scheduling, AI metadata, timestamps. Indexed by project.
++- **trelloMappings**: task↔card mapping with hashes and lastSyncedAt; indexes by project and card ID.
++- **knowledgeDocs / knowledgeChunks**: RAG storage with sourceType, metadata, processingStatus, embeddings (1536 dims) and vector index; indexed by project.
++- **quotes**: versioned quotes per project.
++- **quests**: milestones list per project.
++- **ingestionJobs / ingestionFiles**: ingestion orchestration with sourceType/stage/progress/status, per-file parsing/enrichment metadata and links to ragDocId.
++- **agentRuns / deepResearchRuns / conversations**: telemetry and live run feedback.
++- **accounting domain**: sections, materialLines, workLines, vendors, materialCatalog, laborRates, employees, purchases, priceObservations, canonicalItems, itemNormalizationMap, buyingSuggestions, researchRuns.
++- **admin/config**: skills (prompts), enrichmentProfiles (enhancer schema/model), settings (e.g., Trello config), retrievalLogs (RAG observability), connectorAccounts/watches, inboxItems.
++
++```mermaid
++erDiagram
++    projects ||--o{ plans : has
++    projects ||--o{ tasks : has
++    projects ||--o{ quests : has
++    projects ||--o{ knowledgeDocs : scopes
++    knowledgeDocs ||--o{ knowledgeChunks : chunked
++    tasks ||--o{ trelloMappings : maps
++    projects ||--o{ ingestionJobs : ingests
++    ingestionJobs ||--o{ ingestionFiles : files
++    projects ||--o{ sections : budget
++    sections ||--o{ materialLines : includes
++    sections ||--o{ workLines : includes
++    projects ||--o{ quotes : priced
++    projects ||--o{ conversations : transcripts
++    projects ||--o{ agentRuns : runs
++```
++
++Lifecycle highlights: agent actions write plans/tasks/quotes/conversations, ingestion jobs create files then knowledge docs/chunks, Trello sync writes mappings, accounting CRUD populates sections/lines and price observations, admin saves skills/enrichment profiles.
++
++## D) Backend (Convex): API Surface & Pipelines
++### Convex Function Inventory (abridged)
++| Name | Type | Inputs | Outputs | Tables | Called from |
++| --- | --- | --- | --- | --- | --- |
++| projects.listProjects/getProject/createProject/updateProject/setPlanActive/getPlans/getPlanPhaseMeta | query/mutation | project filters/ids | project docs/ids | projects, plans | Projects pages |
++| tasks.listByProject/createTask/updateTask/deleteTask/clearTasks/ensureTaskNumbers | query/mutation | project/task params | task lists | tasks | Tasks UI, Architect agent |
++| quests.list/create/deleteQuest/updateQuest/reorderQuests/getStats | query/mutation | projectId etc. | quest lists/stats | quests | Planning/quests UI |
++| accounting.getProjectAccounting/searchVendors/searchMaterialCatalog/addSection/updateSection/deleteSection/addMaterialLine/updateMaterialLine/deleteMaterialLine/addWorkLine/updateWorkLine/deleteWorkLine/ensureVendor/saveToCatalog | query/mutation | project/section/line args | composite accounting data | sections, materialLines, workLines, vendors, materialCatalog | Accounting UI |
++| knowledge.createDoc/createDocRecord/insertChunks/updateDocStatus/generateEmbeddings/search/dynamicSearch/ingestArtifact/normalizeChunkEmbeddings/logRetrieval/overwriteChunkEmbedding/setDocSourceType/list... | mutation/action/query | doc metadata/text/query embeddings | doc/chunk/search results | knowledgeDocs, knowledgeChunks, retrievalLogs | RAG chat, ingestion, agents |
++| ingestion.createJob/addFilesToJob/cancelJob/retryJob/retryFile/updateJobStatus/updateFileStatus/runJob/getJob/listJobs/listFiles/generateUploadUrl | mutation/action/query | job/file payloads | ids/status | ingestionJobs, ingestionFiles | Ingestion pages, overview quick upload |
++| trelloSync.saveConfig/updateMapping/removeMapping/getConfig/getMappings/getSyncState/fetchLists/snapshotBoard/sync | mutation/action/query | project + Trello auth | config/snapshots/sync log | settings, trelloMappings, tasks | Trello view, sync button |
++| agents.clarification.getContext/saveResult/runInBackground/run | internalQuery/internalMutation/internalAction/action | projectId | run status | plans, conversations, knowledgeDocs | Clarification page |
++| agents.planning.* (context/save/run) | similar | projectId | plan versions | plans, conversations | Planning page |
++| agents.architect.getContext/saveTasks/runInBackground/run | internalQuery/internalMutation/internalAction/action | projectId | generates tasks | tasks, quests, knowledgeDocs | Tasks page |
++| agents.quote.getRun/updateRun/startProject/pollRun/listQuotes | action/query/internalMutation | projectId | quote versions/status | quotes, agentRuns | Quote page |
++| agents.solutioning.getPlanningItems/getConversation/getChatContext/saveChatHistory/updateSolution/chat | query/action | projectId/section etc. | chat responses | conversations, sections, materialLines | Solutioning page |
++| agents.accountingGenerator.getContext/applyGeneratedAccounting/runInBackground/run | internalQuery/internalMutation/internalAction/action | projectId | writes sections/material/work | sections, materialLines, workLines | Accounting UI (automation) |
++| agents.estimator/quote/deepResearch/accountingFromDeepResearch | actions | project context | research/estimation | various | Quote/Research flows |
++| admin.listSkills/saveSkill/deleteSkill/listEnrichmentProfiles/saveEnrichmentProfile/deleteEnrichmentProfile | query/mutation | skill data | saved rows | skills, enrichmentProfiles | Admin pages |
++| management.* | CRUD for vendors/materialCatalog/employees/purchases | lists/ids | rows | respective tables | Management page |
++| buying.generateSuggestions/saveSuggestions/getMaterialLineContext/getSuggestions | action/query | materialLineId/freeform | suggestions | buyingSuggestions, priceObservations, materialLines | Quote buying assistant |
++| research.* | online research runs | run status/results | researchRuns | Deep research tab |
++| inbox.* | ingest inbound items | status updates | inboxItems | Inbox page |
++| drive.* | connector accounts/watches | lists/cursor updates | connectorAccounts/watches | Connectors page |
++| conversations.* | recent transcripts | lists | conversations | overview/history |
++| agentRuns.* | create/append/setStatus/get/list | run telemetry | agentRuns | agent status UI |
++| prices.normalizeItemName/ingestFromPurchase/addManualObservation/getHistory/listLatestObservations/getBestEstimate | mutations/queries | price data | price history | priceObservations, canonicalItems, itemNormalizationMap | Price memory widgets |
++| trelloSync.sync | action | projectId | sync log | tasks, trelloMappings | Trello view |
++
++### RAG Ingestion Pipeline
++1. **Job creation**: `ingestion.createJob` stores ingestionJobs with sourceType/stage/status.
++2. **Upload**: client requests `ingestion.generateUploadUrl`, uploads to storage, then `ingestion.addFilesToJob` to register ingestionFiles.
++3. **Run job**: `ingestion.runJob` action iterates files, updates job/file stage via `updateJobStatus`/`updateFileStatus` while reading text (includes parsing placeholders) and optional enhancer (LLM via `EnhancerSchema`/enrichmentProfiles).
++4. **Doc creation**: `knowledge.createDocRecord` or `knowledge.ingestArtifact` writes knowledgeDocs with metadata and invokes `knowledge.generateEmbeddings` via scheduler.
++5. **Chunk & embed**: `generateEmbeddings` uses `chunkText` then `embedText`; inserts via `knowledge.insertChunks`, sets doc status ready/failed.
++6. **Normalization**: `knowledge.normalizeChunkEmbeddings` and `overwriteChunkEmbedding` repair legacy chunks.
++7. **Observability**: job/file stages tracked; errors captured in job/file error fields.
++
++```mermaid
++sequenceDiagram
++    participant UI
++    participant Ingestion as convex/ingestion.runJob
++    participant Knowledge as convex/knowledge
++    UI->>Ingestion: createJob + addFilesToJob
++    UI->>Ingestion: runJob(jobId)
++    Ingestion->>Knowledge: ingestArtifact/createDocRecord(text, metadata)
++    Knowledge-->>Ingestion: docId
++    Knowledge->>Knowledge: generateEmbeddings (chunkText + embedText)
++    Knowledge->>DB: insertChunks + updateDocStatus
++    Ingestion->>DB: updateFileStatus/updateJobStatus
++```
++
++### Retrieval Pipeline
++1. UI submits query with scope/project filters (`knowledge.dynamicSearch`).
++2. Action embeds query text (`embedText`), optionally normalizes embeddings.
++3. Vector search on `knowledgeChunks` index `by_embedding` with filters (projectId, sourceType, clientName, domain, phase) and limit/minScore.
++4. Merge chunks with docs (`getChunksWithDocs`), filter ready docs, dedupe by docId, and format citations.
++5. Log query via `knowledge.logRetrieval` to `retrievalLogs` with scope/filters/results.
++
++```mermaid
++sequenceDiagram
++    participant UI
++    participant Knowledge as convex/knowledge.dynamicSearch
++    participant Vector as knowledgeChunks index
++    UI->>Knowledge: query, filters, scope
++    Knowledge->>LLM: embedText(query)
++    Knowledge->>Vector: vectorSearch(vector, filters)
++    Vector-->>Knowledge: chunk matches
++    Knowledge->>DB: logRetrieval(scope, count)
++    Knowledge-->>UI: results with doc metadata
++```
++
++## E) LLM & Agents
++### Agent Roster
++| Agent | File | Trigger | Inputs/Context | Tools | Outputs | Persistence | Failure Handling |
++| --- | --- | --- | --- | --- | --- | --- | --- |
++| Clarification | `convex/agents/clarification.ts` | “Run Clarification” on clarification page | Project details, recent conversations, tasks, knowledge context | `callChatWithSchema` (LLM) | Clarification doc (summary/questions) | Saves plan/conversation via `saveResult` and `conversations` | agentRuns events; errors set status failed |
++| Planning | `convex/agents/planning.ts` | “Generate Plan” on planning page | Project info, clarification outputs | LLM | Plan markdown with phases | Inserts into `plans`, conversation logs | Uses agentRuns; errors captured |
++| Architect | `convex/agents/architect.ts` | “Auto-generate Tasks” | Active plan, quests, accounting context, knowledge | LLM + chunk retrieval | Task list with numbering | Inserts tasks via `saveTasks` | agentRuns status; dedupe via task titles/hash |
++| Estimator | `convex/agents/estimator.ts` | Internal for cost estimation | Plan + tasks | LLM | Estimation JSON | Writes to accounting tables | Error sets run failed |
++| Quote | `convex/agents/quote.ts` | “Generate Quote” | Accounting snapshot, materials/work lines | LLM; may call web search? | Quote versions (internal + client text) | Inserts quotes, updates `agentRuns` | Polling via `pollRun`; errors stored |
++| Solutioning Chat | `convex/agents/solutioning.ts` | Chat UI under solutioning page | Planning items, conversation history, accounting sections/lines | `callChatWithSchema` | Chat turn + updated solution plans | Saves conversations; updates material/work solution fields | Errors surfaced in UI alerts |
++| AccountingGenerator | `convex/agents/accountingGenerator.ts` | Accounting page automation | Project + plan context | LLM | Sections/material/work suggestions | Writes sections/lines | agentRuns log |
++| DeepResearch | `convex/agents/deepResearch.ts` + `convex/research.ts` | Deep Research tab | Material queries | External Gemini Deep Research | Research report/options | `deepResearchRuns`, `researchRuns` | Polling status; errors recorded |
++| AccountingFromDeepResearch | `convex/agents/accountingFromDeepResearch.ts` | Follow-up to deep research | Research outputs | LLM | Accounting lines | Writes sections/material/work | Errors logged |
++| Enhancer | `convex/lib/zodSchemas.ts` & enrichment profiles | Ingestion pipeline | Raw text + enrichment profile schema | LLM structured output | Enriched text/metadata | Stored in ingestionFiles/knowledgeDocs fields | Job/file status marks failures |
++
++Context assembly uses helper queries (e.g., `getContext` in each agent) pulling plans, quests, tasks, recent conversations, and knowledge. Structured outputs validated with Zod schemas (TaskBreakdown, Clarification, Plan, Quote, Estimation, Enhancer). Agent progress tracked with `agentRuns` and events appended via `agentRuns.appendEvent`; UI consumes via AgentActivityPanel and polling queries.
++
++## F) Trello Integration
++- **Config** stored per project in `settings` keyed `project_trello_${projectId}` with apiKey/token/boardId/listMap (`trelloSync.saveConfig`, `getConfig`).
++- **Mapping** uses `trelloMappings` table keyed by project/task; contentHash derived from task fields (`calculateHash`) prevents duplicate updates. `updateMapping` upserts mapping with lastSyncedAt.
++- **Sync flow**: `trelloSync.sync` action fetches config and tasks, derives list IDs via `deriveListId`, builds payload (`buildCardPayload`), creates/updates/moves cards via Trello API, then writes mappings. Retry logs collected; failures throw.
++- **Board snapshot**: `trelloSync.snapshotBoard` action fetches lists+cards for read-only preview.
++
++```mermaid
++sequenceDiagram
++    participant UI
++    participant Sync as convex/trelloSync.sync
++    participant Trello
++    UI->>Sync: Run sync(projectId)
++    Sync->>DB: getConfig + getMappings + tasks
++    Sync->>Trello: create/update cards (idempotent via contentHash)
++    Trello-->>Sync: card ids/list ids
++    Sync->>DB: updateMapping(lastSyncedAt, hash)
++    Sync-->>UI: stats/retry log
++```
++
++## G) Frontend Architecture (Next.js App Router)
++- **Root layout** (`app/layout.tsx`) renders sidebar tabs and wraps children in `ConvexClientProvider` and `ThinkingModeProvider` (thinking mode toggle affects agents). Global styles in `app/globals.css`.
++- **Project layout** (`app/projects/[id]/layout.tsx`) provides project header/nav links to sub-tabs and `AgentActivityPanel` for live run events.
++- **State management**: client components with `"use client"`, React state for form fields/loading flags; server state via Convex hooks (`useQuery`, `useMutation`, `useAction`). URL params supply `projectId`.
++- **UI patterns**: Tailwind classes, cards/tables, `@dnd-kit` for drag/drop tasks, `lucide-react` icons, forms with minimal validation. Upload flows use `generateUploadUrl` + `fetch` POST.
++- **Performance**: queries re-render via Convex live updates; no explicit caching beyond Convex hooks. Suspense not used; loading states rely on `undefined` checks.
++
++## H) Security, Config, Ops
++- **Auth**: No authentication layer in code; assumes trusted environment.
++- **Secrets**: Trello API keys stored in `settings`; LLM keys read from environment in Convex actions (`convex/lib/openai.ts`). `.env.local` expected for NEXT_PUBLIC_CONVEX_URL, CONVEX_DEPLOYMENT, OPENAI_API_KEY, Trello.
++- **Rate limiting**: None implemented.
++- **Observability**: agentRuns/retrievalLogs tables provide telemetry; ingestion job/file status captures errors; Trello sync retryLog.
++
++## I) How to Run / Extend
++- **Local run**: `npm install` (root) then `npm run dev` in `studio-console/` alongside `npx convex dev` with `.env.local` set.
++- **Add a new page/tab**: create route under `app/`, add sidebar link if top-level; wrap in RootLayout/Project layout as needed, use Convex hooks for data.
++- **Add a new agent skill**: define schema in `convex/lib/zodSchemas.ts`, implement action/internalAction in `convex/agents/`, add UI trigger with `useAction`, and register prompt in `skills` via admin page or seed.
++- **Add Convex table/function**: extend `convex/schema.ts`, regenerate types (`npx convex codegen`), add query/mutation/action file, and hook from UI.
++- **Add ingestion source**: update `ingestionJobs`/`ingestionFiles` sourceType enums, expand `runJob` parsing branch, and add connector UI as needed.
++
++## J) Gap Analysis & Recommendations
++- **Authentication/authorization missing** → add NextAuth or Convex auth; guard admin routes. (Reason: no auth checks in layouts or mutations.)
++- **Error handling/UI toasts inconsistent** → centralize toast system; wrap agent actions with status banners. (Observed: alerts in multiple pages like overview/tasks.)
++- **Agent prompt configurability limited** → surface skills selection per agent run; persist model choices. (Skills table exists but not wired into agent actions.)
++- **Ingestion enhancer not exposed in UI** → connectors and enrichment profiles exist; add UI to choose profile per upload. (Enrichment admin only configures profiles.)
++- **Trello sync lacks background polling** → add scheduled sync or webhook to keep mappings fresh; currently manual button. (trelloSync.sync only action-triggered.)
++- **RAG chat lacks project switcher defaults** → add project selector + saved scopes; currently requires manual entry. (rag-chat page relies on state only.)
++- **No testing/CI** → add lint/test workflows and sample tests for Convex actions. (Repo contains Vitest config but no tests for agents.)
++- **Observability** → extend retrievalLogs/agentRuns to include token/cost metrics. (openai util supports models but no cost logging.)
++- **Schema migrations** → migrations.ts contains assignTaskNumbers; formal migration strategy recommended.
++- **Docs**: Add onboarding for Trello API keys and connector auth flows.

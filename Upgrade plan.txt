@@ -1,0 +1,513 @@
+Below is a **full, phase-by-phase implementation plan** (front + back + Convex DB changes + refactors) for your Magnetic Studio Console (Next.js App Router + Convex + agentRuns/events, current routes like `/projects/[id]/clarification`, `/planning`, `/solutioning`, `/tasks`, `/quote`, etc.). 
+
+---
+
+## 0) Target end-state
+
+### New project “metadata” (overview-config)
+
+* **Project status** (metadata only; shown in Projects tab + filters): `ideation | planning | production | done`
+* **Project types** (multi-select, 0..N):
+  `dressing`, `studio_build`, `print_install`, `big_install_takedown`, `photoshoot`
+* **Budget tier**: `low | medium | high | unknown`
+
+  * ideation chat can temporarily “talk in another tier” and generate **2–3 concept options**.
+* **Related past projects**: multi-select of projects → agents can reference them.
+* **Language**: default **Hebrew** for all agents unless user explicitly asks otherwise.
+
+### UX changes you asked for
+
+1. **New Ideation tab**: agent does Q&A + deep reasoning + web search; flow changes by budget tier and project types.
+2. **“Planning stage” moves into Clarification tab**: Clarification becomes a **Solutioning-like chat + right sidebar plan** experience. Planning tab stays (history/versions/advanced). 
+3. **Streaming tokens** for all agents (UI shows incremental output).
+4. **All API errors appear inside the main chat thread** (not just alerts/toasts).
+5. **Solution page right-side agent produces a structured plan** (materials/qty/types/equipment/work tasks), saved in DB and reusable for tasks/gantt/accounting/plan-change conversations.
+6. **Task modal**: “Open task” button → popup with editable fields + AI chat bar to patch the task.
+7. **Quote tab**: user-facing quotes with pre-selection wizard + “copy text” + **PDF** (clean template + configurable footer + configurable logo in settings). Quote agent **never sees** profit/risk/overheads; it only sees final prices.
+8. **Configurable Image generation provider** in Settings: Gemini (Nano Banana / Gemini image) OR OpenAI GPT Image 1.5; each image request uses a **structured JSON prompt**; per tab choose image type:
+   A) technical sketch / engineering drawing with measurements
+   B) “how it will look” customer visual
+9. **All generated images saved to project data** and attachable to solution/tasks/quote; retrievable via GET.
+
+Image generation/editing support is available for both Gemini and OpenAI models per their docs. ([Google AI for Developers][1])
+Convex file storage will be used to store/serve images. ([Convex Developer Hub][2])
+
+---
+
+## 1) Repo/file plan (what you’ll create/change)
+
+### Frontend (Next.js)
+
+* `app/projects/[id]/ideation/page.tsx` **(new)**
+* `app/projects/[id]/clarification/page.tsx` **(rebuild into chat + plan sidebar)**
+* `app/projects/[id]/planning/page.tsx` **(refactor to “plan versions & tools”)**
+* `app/projects/[id]/solutioning/page.tsx` **(add structured plan panel + image gen)**
+* `app/projects/[id]/tasks/page.tsx` **(task modal + AI edit + image attachments)**
+* `app/projects/[id]/quote/page.tsx` **(quote wizard + preview + copy + pdf + image attachments)**
+* `app/projects/[id]/overview/page.tsx` **(add status/type/budget/related projects)**
+* `app/settings/page.tsx` (or existing settings UI) **(image provider + quote footer + logo)**
+
+Shared UI/components
+
+* `components/chat/AgentChatThread.tsx` (streaming + error-as-message)
+* `components/chat/ChatComposer.tsx`
+* `components/plan/PlanSidebar.tsx` (structured plan render + version switch)
+* `components/images/ImagePicker.tsx` (attach existing project images)
+* `components/images/ImageGeneratorPanel.tsx` (A/B mode + provider/model + generate)
+* `components/tasks/TaskModal.tsx` (editable + AI patch chat + images)
+* `components/quote/QuoteWizard.tsx`
+* `components/quote/QuotePreview.tsx`
+* `components/quote/QuotePdfPreview.tsx` (HTML→PDF trigger)
+
+### Backend (Convex)
+
+Schema & domain
+
+* `convex/schema.ts` **(add tables/fields)**
+* `convex/projects.ts` **(overview metadata updates + related projects)**
+* `convex/conversations.ts` **(scenario threads + message append + error messages)**
+* `convex/agentRuns.ts` **(streaming delta events helpers)**
+
+Agents
+
+* `convex/agents/ideation.ts` **(new)**
+* `convex/agents/clarification.ts` **(refactor: chat-based + generates structured plan versions)**
+* `convex/agents/planning.ts` **(align with new plan objects; mostly history)**
+* `convex/agents/solutioning.ts` **(emit/patch structured solution plan)**
+* `convex/agents/taskEditor.ts` **(new: patch task via instructions)**
+* `convex/agents/quote.ts` **(refactor: wizard inputs, privacy for pricing, pdf-ready output)**
+
+Images
+
+* `convex/images.ts` **(store metadata, serve URLs, link/unlink, list by project/entity)**
+* `convex/lib/imageProviders/openai.ts`
+* `convex/lib/imageProviders/gemini.ts`
+* `convex/lib/imageSpec.ts` (shared JSON schema builder + validation)
+
+PDF
+
+* `convex/quotePdf.ts` (render HTML → PDF using a server-capable approach; see Phase 7)
+
+---
+
+## 2) Database changes (Convex schema)
+
+### A) Extend `projects` table (metadata/config)
+
+Add fields:
+
+* `status: "ideation"|"planning"|"production"|"done"`
+* `projectTypes: ("dressing"|"studio_build"|"print_install"|"big_install_takedown"|"photoshoot")[]`
+* `budgetTier: "low"|"medium"|"high"|"unknown"`
+* `relatedProjectIds: Id<"projects">[]`
+* `language: "he"|"en"` (default `"he"`)
+* `activeScenarioByPhase: Record<Phase,string>` (optional convenience)
+
+This aligns with your “status is metadata shown on Projects tab” and “types affect flows”. 
+
+### B) Add `projectScenarios` table (new)
+
+Purpose: “start a clean scenario” but optionally reference previous conversation.
+
+* `projectId`
+* `phase: "ideation"|"clarification"|"solutioning"|"tasks"|"quote"`
+* `title`
+* `basedOnScenarioId?: Id<"projectScenarios">`
+* `snapshotSummary?: string` (short summary of previous scenario to seed context)
+* `createdAt`
+
+### C) Upgrade `conversations` table (or add `conversationMessages`)
+
+If current `conversations` is coarse, split into:
+
+* `conversationThreads`: `{ projectId, phase, scenarioId, title, createdAt, updatedAt }`
+* `conversationMessages`: `{ threadId, role, content, createdAt, meta?, error? }`
+
+**Key rule**: API failures get written as a `role="system"` message with `error=true` and full error payload.
+
+### D) Add `solutionPlans` table (structured plan artifacts)
+
+* `projectId`
+* `phaseSource: "clarification"|"solutioning"`
+* `scenarioId`
+* `version: number`
+* `isActive: boolean`
+* `plan: SolutionPlanV1` (Convex “object”)
+* `createdAt`
+* `createdByRunId?: Id<"agentRuns">`
+
+`SolutionPlanV1` (Zod validated) includes:
+
+* `workstreams[]` (studio work / purchases / contractors / moving / installs / teardown)
+* `materials[]` (name, spec, qty, unit, notes, preferred vendor)
+* `equipment[]`
+* `tasks[]` (task title, est hours, role, dependencies, steps)
+* `assumptions`, `risks`, `openQuestions`
+
+### E) Extend `tasks` table
+
+Add/editable fields needed by modal:
+
+* `estimatedMinutes?: number`
+* `steps?: string[]`
+* `subtasks?: { title: string; done: boolean }[]`
+* `attachments?: { imageId: Id<"images"> }[]`
+* `source?: { fromSolutionPlanId?, workstreamId?, itemId? }`
+
+### F) Add `images` table + link tables
+
+* `images`:
+
+  * `projectId`, `storageId: Id<"_storage">`, `provider`, `model`, `kind: "technical"|"concept"|"other"`,
+  * `promptJson`, `width`, `height`, `mimeType`, `createdAt`,
+  * `tags?: string[]`
+* `imageLinks` (optional if you don’t want polymorphic arrays):
+
+  * `imageId`, `entityType: "task"|"quote"|"solutionPlan"|"message"`, `entityId`
+
+Store actual bytes in Convex file storage and reference by `storageId`. ([Convex Developer Hub][2])
+
+### G) Settings
+
+In your existing `settings` table (already used for configs like Trello)  add keys:
+
+* `image_provider_default` = `"openai"|"gemini"`
+* `image_model_openai` (default `gpt-image-1.5`)
+* `image_model_gemini` (default `gemini-3-pro-image-preview` or your chosen)
+* `quote_footer_text` (Hebrew)
+* `quote_logo_storage_id` (Convex storage id)
+
+---
+
+## 3) Cross-cutting refactor: streaming + “errors into chat”
+
+### A) Standardize agent execution pipeline
+
+Create a shared helper `runAgentWithEvents(...)` that:
+
+1. Creates an `agentRuns` row
+2. Creates/locates the correct `conversationThread` (projectId+phase+scenario)
+3. Appends user message
+4. Runs the model **streaming**
+5. Flushes deltas as `agentRuns.appendEvent({type:"delta", textChunk})`
+6. Also appends/patches an “assistant message” in DB as it grows (so chat UI doesn’t rely only on agentRuns)
+7. On error:
+
+   * writes a `role="system"` **error message** into the same thread
+   * sets run status = failed
+   * includes provider error body (quota, invalid key, etc.)
+
+UI: `AgentChatThread` subscribes to both messages and run deltas; renders live.
+
+This matches your current architecture where `agentRuns` already exists and is used for live run feedback. 
+
+### B) Streaming implementation detail
+
+* For OpenAI image/text: use streaming responses and buffer flush (e.g., every 250ms or 40–80 tokens) to reduce DB writes.
+* For Gemini: if streaming is limited, simulate streaming by chunking final text into timed deltas; still better UX consistency.
+
+---
+
+## 4) Phase-by-phase build plan (what to implement first → last)
+
+### Phase 1 — Project metadata & overview UI (foundation)
+
+**Backend**
+
+* Add new fields to `projects` + mutations:
+
+  * `projects.updateProjectMeta({status, projectTypes, budgetTier, relatedProjectIds, language})`
+* Add query `projects.listProjects({status?, type?})` for filters.
+
+**Frontend**
+
+* Update `/projects` list: show status badge + filters by status/type.
+* Update `/projects/[id]/overview`:
+
+  * status dropdown (ideation/planning/production/done)
+  * multi-select project types
+  * budget tier selector
+  * related past projects selector (searchable)
+  * language toggle (default Hebrew)
+
+Acceptance criteria
+
+* You can set metadata and see it in Projects tab and overview.
+
+---
+
+### Phase 2 — Scenarios + unified chat component
+
+**Backend**
+
+* Implement `projectScenarios` CRUD:
+
+  * create scenario (clean)
+  * “new scenario from previous” (stores snapshotSummary)
+* Implement `conversationThreads/messages` if needed (or extend current)
+* Implement `conversations.appendSystemError(...)`
+
+**Frontend**
+
+* Add scenario selector + “New scenario” button in each tab that has chat (Ideation/Clarification/Solutioning/Quote/Task modal)
+* Introduce `AgentChatThread` component and replace existing per-page chat UIs progressively
+
+Acceptance criteria
+
+* Every tab can start clean scenario; previous scenario can be referenced via summary.
+
+---
+
+### Phase 3 — Ideation tab + ideation agent
+
+**Frontend**
+
+* Add `/projects/[id]/ideation`
+* UI:
+
+  * chat thread
+  * budget mode selector:
+
+    * “Follow project budget (low/med/high)”
+    * “Temporarily discuss another tier”
+    * “Generate 2–3 alternative concepts”
+  * quick buttons: “Ask me clarifying questions”, “Give 5 concepts”, “Give 3 concepts for 3 budgets”
+
+**Backend**
+
+* New `convex/agents/ideation.ts`
+* Context includes:
+
+  * project metadata + types + budget tier + related projects summary
+  * optionally RAG snippets
+  * web search tool usage (already in your stack)
+* Output:
+
+  * conversation response
+  * optional `IdeationArtifactsV1` (concept cards) saved to DB for reuse later
+
+Acceptance criteria
+
+* Ideation produces structured concept options, consistent with selected project types and budget behavior.
+
+---
+
+### Phase 4 — Clarification tab becomes “planning chat + plan sidebar”
+
+This is your biggest UX shift: move “planning stage” behavior here while keeping Planning tab.
+
+**Frontend**
+
+* Rebuild `/clarification` to match Solutioning-like layout:
+
+  * left: chat
+  * right: **PlanSidebar** (structured plan render)
+  * top controls:
+
+    * “Generate/Update plan”
+    * “Mark this plan version active”
+    * “Create tasks preview”
+    * “Apply to accounting preview”
+* Sidebar sections (work types): studio build, purchases, contractors, logistics/moving, install, teardown, management.
+
+**Backend**
+
+* Refactor `agents.clarification`:
+
+  * instead of only Q&A output, it can create/update `solutionPlans` (phaseSource="clarification")
+  * supports “change requests”: user says “replace X with Y”, agent outputs a **patch** against last active plan
+* Add:
+
+  * `solutionPlans.listByProjectPhase(projectId, phaseSource)`
+  * `solutionPlans.setActive(planId)`
+  * `solutionPlans.applyPatch(planId, patch)`
+
+Acceptance criteria
+
+* Clarification tab *is now the primary planning experience* with versioned structured plans.
+
+---
+
+### Phase 5 — Solutioning: structured plan, materials/tasks/equipment, and persistence
+
+You already have Solutioning chat tied to planning items. 
+Now we make the right-side agent output **structured** and reusable.
+
+**Frontend**
+
+* In `/solutioning`:
+
+  * add “Generate Images” panel (technical vs concept)
+  * add “Structured plan” view (same PlanSidebar component) that shows the latest solution plan
+  * add buttons:
+
+    * “Create tasks from plan”
+    * “Sync accounting items from plan”
+    * “Attach images to plan items”
+
+**Backend**
+
+* Update `agents.solutioning`:
+
+  * chat response + `SolutionPlanV1` output (or patch)
+  * writes `solutionPlans` with `phaseSource="solutioning"`
+* Add conversion actions:
+
+  * `solutionPlans.createTasksFromPlan(planId)`
+  * `solutionPlans.createAccountingFromPlan(planId)` (sections/materialLines/workLines)
+  * `solutionPlans.linkImageToPlanItem(imageId, planId, workstreamId/itemId)`
+
+Acceptance criteria
+
+* A solution plan can drive tasks/gantt/accounting without manual copy/paste.
+
+---
+
+### Phase 6 — Tasks: modal editing + AI patch + images
+
+**Frontend**
+
+* Add “Open” button per task → `TaskModal`
+* Modal includes:
+
+  * editable: title, description, estimated time, steps, subtasks, status, assignee/role
+  * image attachments (pick existing or generate new)
+  * AI chat bar: “Change this task: …” (returns patch + applies)
+
+**Backend**
+
+* Extend tasks schema and mutations
+* New `agents/taskEditor.ts`:
+
+  * input: current task + instruction
+  * output: `TaskPatchV1`
+* Add image linking endpoints: `images.linkToTask(taskId, imageId)`
+
+Acceptance criteria
+
+* You can edit tasks manually or via AI chat; attach images.
+
+---
+
+### Phase 7 — Quote: wizard + privacy + PDF + logo/footer
+
+**Key constraint**: quote agent never sees profit/risk/overhead internals; it only sees **final client prices**.
+
+**Frontend (`/quote`)**
+
+* Add Quote Wizard (stepper / checklist):
+
+  1. Short project description (editable)
+  2. Items of work (select from solution plan + tasks + clarification plan)
+  3. Pricing (final prices only; line items + totals)
+  4. Terms & conditions (template + edits)
+  5. Dates/milestones (approved design, install, event date, teardown)
+* Buttons:
+
+  * “Generate customer quote” (right side preview)
+  * “Copy text”
+  * “Export PDF”
+  * “Attach images” (from project images; also generate new)
+* Output language: Hebrew by default.
+
+**Backend**
+
+* `agents.quote` refactor:
+
+  * `quotes.buildClientContext(projectId, wizardSelections)`:
+
+    * pulls items from solutionPlans/tasks
+    * pulls accounting totals **already computed**
+    * emits only `{lineItems: [{title, qty, unit, finalUnitPrice, finalTotal}], totals, schedule, terms}` (no cost fields)
+  * `agents.quote.generateFromClientContext(clientContext)`:
+
+    * returns `{quoteTextHebrew, structuredQuoteV1}`
+* PDF generation:
+
+  * store a “clean HTML template” and render → PDF
+  * include `quote_logo_storage_id` and `quote_footer_text` from settings
+  * save the PDF as Convex file storage + link to quote version
+
+(Convex can store/serve generated files through file storage patterns.) ([Convex Developer Hub][2])
+
+Acceptance criteria
+
+* Quote agent cannot access cost/profit knobs.
+* You can produce copyable text + PDF with configurable logo/footer.
+
+---
+
+### Phase 8 — Image generation system (providers, JSON prompts, reuse everywhere)
+
+**Backend**
+
+* `images.generateImage({projectId, kind, specJson, providerOverride?})`
+
+  * validates `ImageSpecV1` (Zod)
+  * routes to provider:
+
+    * OpenAI GPT Image 1.5 ([OpenAI Platform][3])
+    * Gemini image generation/editing ([Google AI for Developers][1])
+  * stores bytes in Convex storage + `images` table metadata ([Convex Developer Hub][2])
+* `images.listByProject(projectId)`
+* `images.getUrl(imageId)` (serving URL) ([Convex Developer Hub][4])
+* `images.link(entityType, entityId, imageId)` / `unlink`
+
+**Frontend**
+
+* Settings:
+
+  * choose default provider/model
+* In Solutioning tab:
+
+  * choose A/B mode:
+
+    * A) technical / measurements / drawing style
+    * B) customer concept render
+* In Quote tab:
+
+  * attach existing images
+  * generate quote-specific images
+* In Task modal:
+
+  * show/attach/generate images per task
+
+Acceptance criteria
+
+* Images are first-class project assets and reusable across stages.
+
+---
+
+### Phase 9 — Hardening & polish (recommended)
+
+From your system spec gaps: auth, unified error UX, rate limiting, test harness. 
+
+Do:
+
+* Add a simple auth guard (even basic) for admin/settings
+* Add cost/token logging per agentRun
+* Add minimal tests for:
+
+  * schema validation
+  * quote privacy checks (ensure no internal pricing leaks)
+  * image storage pipeline
+
+---
+
+## 5) “Strict” flow rules you requested (encode into prompts + UI)
+
+* Default language Hebrew unless user asks otherwise.
+* Project types + budget tier always included in agent context.
+* Agents are user-triggered only (no auto-run on status change).
+* Quote agent sees **final prices only**; never sees margin inputs.
+* Errors always appear as chat messages in the relevant thread.
+
+---
+
+## 6) Extra improvements worth adding (small effort, high value)
+
+* **Plan diff viewer** between plan versions (clarification/solutioning)
+* **One-click “Create tasks + accounting + gantt skeleton”** from active solution plan
+* **Image “prompt history”** with “regenerate” and “edit this image” flow (both providers support edits). ([Google AI for Developers][1])
+* **Permission-lite mode**: lock quote after sending (creates an immutable version)
+

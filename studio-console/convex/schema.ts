@@ -12,6 +12,35 @@ export default defineSchema({
             v.literal("production"),
             v.literal("archived")
         ),
+        stage: v.optional(
+            v.union(
+                v.literal("ideation"),
+                v.literal("planning"),
+                v.literal("production"),
+                v.literal("done")
+            )
+        ),
+        projectTypes: v.optional(
+            v.array(
+                v.union(
+                    v.literal("dressing"),
+                    v.literal("studio_build"),
+                    v.literal("print_install"),
+                    v.literal("big_install_takedown"),
+                    v.literal("photoshoot")
+                )
+            )
+        ),
+        budgetTier: v.optional(
+            v.union(
+                v.literal("low"),
+                v.literal("medium"),
+                v.literal("high"),
+                v.literal("unknown")
+            )
+        ),
+        relatedPastProjectIds: v.optional(v.array(v.id("projects"))),
+        defaultLanguage: v.optional(v.union(v.literal("he"), v.literal("en"))),
         details: v.object({
             eventDate: v.optional(v.string()), // ISO
             budgetCap: v.optional(v.number()),
@@ -27,7 +56,62 @@ export default defineSchema({
         overheadPercent: v.optional(v.number()), // 0.15
         riskPercent: v.optional(v.number()),     // 0.10
         profitPercent: v.optional(v.number()),   // 0.30
-    }).index("by_status", ["status"]),
+    })
+        .index("by_status", ["status"])
+        .index("by_stage", ["stage"]),
+
+    projectScenarios: defineTable({
+        projectId: v.id("projects"),
+        phase: v.union(
+            v.literal("ideation"),
+            v.literal("clarification"),
+            v.literal("planning"),
+            v.literal("solutioning"),
+            v.literal("tasks"),
+            v.literal("quote")
+        ),
+        scenarioKey: v.string(), // e.g. "default"
+        title: v.optional(v.string()),
+        metadataJson: v.optional(v.string()),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        updatedAt: v.optional(v.number()),
+    })
+        .index("by_project_phase_key", ["projectId", "phase", "scenarioKey"])
+        .index("by_project_phase", ["projectId", "phase"]),
+
+    chatThreads: defineTable({
+        projectId: v.id("projects"),
+        scenarioId: v.id("projectScenarios"),
+        title: v.optional(v.string()),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        updatedAt: v.optional(v.number()),
+    })
+        .index("by_project", ["projectId"])
+        .index("by_scenario", ["scenarioId"]),
+
+    chatMessages: defineTable({
+        projectId: v.id("projects"),
+        scenarioId: v.id("projectScenarios"),
+        threadId: v.id("chatThreads"),
+        role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")),
+        content: v.string(),
+        status: v.optional(v.union(v.literal("streaming"), v.literal("final"), v.literal("error"))),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        updatedAt: v.optional(v.number()),
+    }).index("by_thread_createdAt", ["threadId", "createdAt"]),
+
+    ideationConceptCards: defineTable({
+        projectId: v.id("projects"),
+        threadId: v.id("chatThreads"),
+        title: v.string(),
+        oneLiner: v.string(),
+        detailsMarkdown: v.string(),
+        createdAt: v.number(),
+        createdBy: v.string(),
+    }).index("by_project_createdAt", ["projectId", "createdAt"]),
 
     // 16. SECTIONS (Budget Lines)
     sections: defineTable({
@@ -84,6 +168,7 @@ export default defineSchema({
         // Solutioning Agent Fields
         solutioned: v.optional(v.boolean()),
         solutionPlan: v.optional(v.string()), // The "how to" text
+        solutionPlanJson: v.optional(v.string()), // JSON string for structured plan
         lastUpdatedBy: v.optional(v.string()),
         updatedAt: v.optional(v.number()),
     })

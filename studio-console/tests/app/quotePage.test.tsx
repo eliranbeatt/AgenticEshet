@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import QuotePage from "../../app/projects/[id]/quote/page";
+import { ThinkingModeProvider } from "../../app/ThinkingModeContext";
 
 const mockUseQuery = vi.fn();
 const mockUseAction = vi.fn();
@@ -67,7 +68,11 @@ describe("QuotePage", () => {
     });
 
     it("allows selecting historical quotes to update preview", async () => {
-        render(<QuotePage />);
+        render(
+            <ThinkingModeProvider>
+                <QuotePage />
+            </ThinkingModeProvider>
+        );
 
         expect(screen.getByText(/Quote Breakdown \(v2\)/)).toBeInTheDocument();
         await userEvent.click(screen.getByText(/Version 1/));
@@ -76,7 +81,11 @@ describe("QuotePage", () => {
     });
 
     it("copies the selected quote when exporting", async () => {
-        render(<QuotePage />);
+        render(
+            <ThinkingModeProvider>
+                <QuotePage />
+            </ThinkingModeProvider>
+        );
 
         await userEvent.click(screen.getByText("Export"));
 

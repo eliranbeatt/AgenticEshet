@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 type ThinkingModeContextValue = {
     thinkingMode: boolean;
@@ -21,12 +21,14 @@ export function ThinkingModeProvider({ children }: { children: React.ReactNode }
             const raw = localStorage.getItem(STORAGE_KEY);
             if (raw === "true") setThinkingModeState(true);
             if (raw === "false") setThinkingModeState(false);
+        } catch {
+            // Ignore storage failures (e.g., restricted test environments).
         } finally {
             setHydrated(true);
         }
     }, []);
 
-    const setThinkingMode = (value: boolean) => {
+    const setThinkingMode = useCallback((value: boolean) => {
         setThinkingModeState(value);
         if (hydrated) {
             try {
@@ -35,9 +37,9 @@ export function ThinkingModeProvider({ children }: { children: React.ReactNode }
                 // Ignore storage failures (e.g., private browsing).
             }
         }
-    };
+    }, [hydrated]);
 
-    const toggleThinkingMode = () => setThinkingMode(!thinkingMode);
+    const toggleThinkingMode = useCallback(() => setThinkingMode(!thinkingMode), [setThinkingMode, thinkingMode]);
 
     const value = useMemo(
         () => ({
@@ -45,7 +47,7 @@ export function ThinkingModeProvider({ children }: { children: React.ReactNode }
             setThinkingMode,
             toggleThinkingMode,
         }),
-        [thinkingMode, hydrated]
+        [thinkingMode, setThinkingMode, toggleThinkingMode]
     );
 
     return (
@@ -62,4 +64,3 @@ export function useThinkingMode(): ThinkingModeContextValue {
     }
     return value;
 }
-

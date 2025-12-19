@@ -16,6 +16,7 @@ type PlanningItem = {
     note?: string;
     solutioned?: boolean;
     solutionPlan?: string;
+    solutionPlanJson?: string;
     plannedQuantity: number;
     unit: string;
 };

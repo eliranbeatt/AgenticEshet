@@ -7,6 +7,7 @@ import { ReactNode } from "react";
 const navItems = [
     { href: "/admin/skills", label: "Skills" },
     { href: "/admin/enrichment", label: "Enrichment Profiles" },
+    { href: "/admin/settings", label: "Settings" },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {

@@ -67,6 +67,7 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
     };
 
     const tabs = [
+        { name: "Ideation", href: "ideation" },
         { name: "Overview", href: "overview" },
         { name: "Clarification", href: "clarification", phaseKey: "clarification" as const },
         { name: "Planning", href: "planning", phaseKey: "planning" as const },
@@ -138,7 +139,7 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
                         )}
                         {nameError && <p className="text-xs text-red-600">{nameError}</p>}
                         <div className="text-sm text-gray-500">
-                            {project.clientName} - {project.status}
+                            {project.clientName} - {project.stage ?? project.status}
                         </div>
                     </div>
                     <div>

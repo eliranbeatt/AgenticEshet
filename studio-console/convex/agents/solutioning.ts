@@ -37,6 +37,7 @@ export const getPlanningItems = query({
             note: line.note,
             solutioned: line.solutioned,
             solutionPlan: line.solutionPlan,
+            solutionPlanJson: line.solutionPlanJson,
             plannedQuantity: line.plannedQuantity,
             unit: line.unit,
         }));
@@ -120,6 +121,7 @@ export const updateSolution = mutation({
     args: {
         itemId: v.id("materialLines"),
         solutionPlan: v.string(),
+        solutionPlanJson: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
         const normalizedPlan = args.solutionPlan.trim();
@@ -131,6 +133,7 @@ export const updateSolution = mutation({
         await ctx.db.patch(args.itemId, {
             solutioned: true,
             solutionPlan: lockedPlan,
+            solutionPlanJson: args.solutionPlanJson,
             note: lockedPlan,
             description: lockedPlan,
             lastUpdatedBy: "solutioning_agent", // or user

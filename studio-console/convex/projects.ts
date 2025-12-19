@@ -1,10 +1,49 @@
 import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
+import { filterProjects } from "./lib/projects";
 
 export const listProjects = query({
-    args: {},
-    handler: async (ctx) => {
-        return await ctx.db.query("projects").collect();
+    args: {
+        stage: v.optional(
+            v.union(
+                v.literal("ideation"),
+                v.literal("planning"),
+                v.literal("production"),
+                v.literal("done")
+            )
+        ),
+        budgetTier: v.optional(
+            v.union(
+                v.literal("low"),
+                v.literal("medium"),
+                v.literal("high"),
+                v.literal("unknown")
+            )
+        ),
+        projectTypesAny: v.optional(
+            v.array(
+                v.union(
+                    v.literal("dressing"),
+                    v.literal("studio_build"),
+                    v.literal("print_install"),
+                    v.literal("big_install_takedown"),
+                    v.literal("photoshoot")
+                )
+            )
+        ),
+        status: v.optional(
+            v.union(
+                v.literal("lead"),
+                v.literal("planning"),
+                v.literal("production"),
+                v.literal("archived")
+            )
+        ),
+        search: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const projects = await ctx.db.query("projects").order("desc").collect();
+        return filterProjects(projects, args);
     },
 });
 
@@ -25,12 +64,46 @@ export const createProject = mutation({
             location: v.optional(v.string()),
             notes: v.optional(v.string()),
         }),
+        stage: v.optional(
+            v.union(
+                v.literal("ideation"),
+                v.literal("planning"),
+                v.literal("production"),
+                v.literal("done")
+            )
+        ),
+        projectTypes: v.optional(
+            v.array(
+                v.union(
+                    v.literal("dressing"),
+                    v.literal("studio_build"),
+                    v.literal("print_install"),
+                    v.literal("big_install_takedown"),
+                    v.literal("photoshoot")
+                )
+            )
+        ),
+        budgetTier: v.optional(
+            v.union(
+                v.literal("low"),
+                v.literal("medium"),
+                v.literal("high"),
+                v.literal("unknown")
+            )
+        ),
+        relatedPastProjectIds: v.optional(v.array(v.id("projects"))),
+        defaultLanguage: v.optional(v.union(v.literal("he"), v.literal("en"))),
     },
     handler: async (ctx, args) => {
         const projectId = await ctx.db.insert("projects", {
             name: args.name,
             clientName: args.clientName,
             status: "lead",
+            stage: args.stage ?? "ideation",
+            projectTypes: args.projectTypes ?? [],
+            budgetTier: args.budgetTier ?? "unknown",
+            relatedPastProjectIds: args.relatedPastProjectIds ?? [],
+            defaultLanguage: args.defaultLanguage ?? "he",
             details: args.details,
             createdAt: Date.now(),
             createdBy: "user", // TODO: auth
@@ -58,6 +131,35 @@ export const updateProject = mutation({
                 v.literal("archived")
             )
         ),
+        stage: v.optional(
+            v.union(
+                v.literal("ideation"),
+                v.literal("planning"),
+                v.literal("production"),
+                v.literal("done")
+            )
+        ),
+        projectTypes: v.optional(
+            v.array(
+                v.union(
+                    v.literal("dressing"),
+                    v.literal("studio_build"),
+                    v.literal("print_install"),
+                    v.literal("big_install_takedown"),
+                    v.literal("photoshoot")
+                )
+            )
+        ),
+        budgetTier: v.optional(
+            v.union(
+                v.literal("low"),
+                v.literal("medium"),
+                v.literal("high"),
+                v.literal("unknown")
+            )
+        ),
+        relatedPastProjectIds: v.optional(v.array(v.id("projects"))),
+        defaultLanguage: v.optional(v.union(v.literal("he"), v.literal("en"))),
         currency: v.optional(v.string()),
         overheadPercent: v.optional(v.number()),
         riskPercent: v.optional(v.number()),

@@ -1,0 +1,564 @@
+Magnetic Studio Console - Upgrade Plan (Codex)
+Last updated: 2025-12-19
+
+Purpose
+- Replace/upgrade the existing "Upgrade plan.txt" with a repo-accurate, implementation-ready Phase 3D plan.
+- This plan is written against the current repository structure:
+  - Next.js App Router frontend: `studio-console/app/**`
+  - Convex backend: `studio-console/convex/**`
+  - Do not edit generated Convex code: `studio-console/convex/_generated/**`
+
+Core Target End-State (Phase 3D)
+1) Project metadata (stored on `projects`) + filters in Projects list:
+   - Project stage: ideation | planning | production | done
+   - Project types (multi-select): dressing | studio_build | print_install | big_install_takedown | photoshoot
+   - Budget tier: low | medium | high | unknown
+   - Related past projects: list of project IDs (agents can reference)
+   - Default language: he (Hebrew), unless user explicitly requests otherwise
+2) UX:
+   - Add a new "Ideation" tab per project.
+   - Move "planning-stage behavior" into Clarification tab (chat + plan sidebar). Planning tab remains as history/versions/tools.
+   - Streaming output for agents (incremental assistant text in UI).
+   - Errors must be shown as messages inside the relevant chat thread (not only alert/toast).
+   - Solutioning: right panel produces structured, reusable per-item solution plans + image generation/attachment.
+   - Tasks: per-task modal editor + AI patch chat + image attachments.
+   - Quote: wizard (select scope + prices) + copy text + PDF export; enforce privacy boundary (quote agent never sees internal cost/overhead/risk/profit).
+   - Image generation: configurable provider (OpenAI or Gemini) in Admin settings; images are first-class project assets and attachable across Solutioning/Tasks/Quote.
+
+
+Repository Snapshot (what exists today)
+
+Frontend (selected)
+- Project nav & tabs: `studio-console/app/projects/[id]/layout.tsx`
+- Projects list: `studio-console/app/projects/page.tsx`
+- Overview: `studio-console/app/projects/[id]/overview/page.tsx`
+- Clarification chat + doc editor + transcript: `studio-console/app/projects/[id]/clarification/page.tsx`
+- Planning versions + approval + markdown editor: `studio-console/app/projects/[id]/planning/page.tsx`
+- Solutioning: per-materialLine chat + markdown plan editor: `studio-console/app/projects/[id]/solutioning/page.tsx`
+- Tasks: kanban + filters + generator: `studio-console/app/projects/[id]/tasks/page.tsx`
+- Gantt: `studio-console/app/projects/[id]/gantt/_components/GanttView.tsx`
+- Quote: basic list + preview + clipboard export: `studio-console/app/projects/[id]/quote/page.tsx`
+- Agent run activity panel: `studio-console/app/projects/[id]/_components/AgentActivityPanel.tsx`
+- Admin area (prompts/skills): `studio-console/app/admin/**`
+
+Backend (selected)
+- Schema: `studio-console/convex/schema.ts`
+- Projects: `studio-console/convex/projects.ts`
+- Conversation log (legacy, messagesJson): `studio-console/convex/conversations.ts`
+- Plans table used for planning + clarification docs: `studio-console/convex/schema.ts` (table `plans`)
+- Agent runs + events: `studio-console/convex/agentRuns.ts` + `agentRuns` table
+- Agents:
+  - clarification: `studio-console/convex/agents/clarification.ts`
+  - planning: `studio-console/convex/agents/planning.ts`
+  - solutioning: `studio-console/convex/agents/solutioning.ts`
+  - architect (tasks generator): `studio-console/convex/agents/architect.ts`
+  - accountingGenerator: `studio-console/convex/agents/accountingGenerator.ts`
+  - quote: `studio-console/convex/agents/quote.ts`
+- Quote from accounting (non-agent): `studio-console/convex/quotes.ts`
+- Knowledge/RAG plumbing exists: `studio-console/convex/knowledge.ts`, `studio-console/app/rag-chat/page.tsx`
+- Online research plumbing exists (Gemini + google search): `studio-console/convex/research.ts`, `studio-console/convex/lib/gemini.ts`
+- Settings table exists (key/valueJson), used for Trello config: `studio-console/convex/schema.ts` (table `settings`), `studio-console/convex/trelloSync.ts`
+
+
+High-Level Architecture Decision (recommended)
+
+To meet streaming + error-in-thread + scenarios cleanly, introduce a new Chat V2 data model while keeping legacy `conversations` during migration:
+- Keep `conversations` table and `studio-console/convex/conversations.ts` unchanged initially (to avoid breaking existing tabs).
+- Add new tables:
+  - `projectScenarios` (per project+phase scenario metadata)
+  - `chatThreads` (one per scenario; binds phase + scenario + project)
+  - `chatMessages` (one row per message; supports streaming via patching assistant message)
+- New pages (Ideation, new modal chat surfaces) use Chat V2 immediately.
+- Existing pages migrate to Chat V2 incrementally (Clarification first, then Solutioning, then Quote, then Task modal).
+
+
+Data Model / Schema Changes (Convex) - `studio-console/convex/schema.ts`
+
+0) Migration strategy for breaking fields
+- Do not immediately replace unions used by existing data.
+- Use a staged approach:
+  - Step A: expand union to include new values (temporary superset)
+  - Step B: run migration to rewrite existing docs
+  - Step C: narrow union to final set after data is clean
+
+1) Projects table: add metadata/config
+File: `studio-console/convex/schema.ts` (table `projects`)
+Add (initially optional, then backfill to non-optional if desired):
+- `stage`: optional union: "ideation" | "planning" | "production" | "done"
+  - Later: optionally deprecate/replace `projects.status` with `stage`.
+  - If you want to repurpose `status`, do a 3-step schema migration (superset -> migrate -> narrow).
+- `projectTypes`: optional array of union literals:
+  - "dressing" | "studio_build" | "print_install" | "big_install_takedown" | "photoshoot"
+- `budgetTier`: optional union: "low" | "medium" | "high" | "unknown"
+- `relatedProjectIds`: optional array of `v.id("projects")`
+- `language`: optional union: "he" | "en" (default "he" at write-time)
+
+Backend updates required:
+- Update `studio-console/convex/projects.ts`:
+  - Extend `createProject` default values
+  - Add `updateProjectMeta` mutation (or extend existing `updateProject`)
+  - Add `listProjects` filter args (status/stage/type/tier)
+
+Frontend updates required:
+- Update `studio-console/app/projects/page.tsx` (badges + filters)
+- Update `studio-console/app/projects/[id]/overview/page.tsx` (metadata editors)
+- Update `studio-console/app/projects/[id]/layout.tsx` (display stage instead of status, if desired)
+- Update any other UI that references `project.status` (e.g. `studio-console/app/ingestion/connectors/page.tsx`)
+
+2) Chat V2 tables (new)
+File: `studio-console/convex/schema.ts`
+
+2.1) `projectScenarios`
+- `projectId`: v.id("projects")
+- `phase`: v.union("ideation","clarification","planning","solutioning","tasks","quote") (literals)
+- `title`: v.string()
+- `basedOnScenarioId`: optional v.id("projectScenarios")
+- `snapshotSummary`: optional v.string() (short carryover context)
+- `createdAt`: v.number()
+- `createdBy`: v.string() (until auth exists, use "system"/"user")
+Indexes:
+- by_project_phase_createdAt: ["projectId","phase","createdAt"]
+
+2.2) `chatThreads`
+- `projectId`: v.id("projects")
+- `phase`: same union as above
+- `scenarioId`: v.id("projectScenarios")
+- `title`: v.string()
+- `createdAt`: v.number()
+- `updatedAt`: v.number()
+Indexes:
+- by_project_phase_updatedAt: ["projectId","phase","updatedAt"]
+- by_scenario: ["scenarioId"]
+
+2.3) `chatMessages`
+- `threadId`: v.id("chatThreads")
+- `role`: v.union("user","assistant","system")
+- `content`: v.string()
+- `createdAt`: v.number()
+- `updatedAt`: optional v.number() (for streaming patches)
+- `isError`: optional v.boolean()
+- `errorCode`: optional v.string() (provider-specific / convex error)
+- `metaJson`: optional v.string() (tool calls, citations, attachments refs)
+- `agentRunId`: optional v.id("agentRuns") (bind message to a run)
+Indexes:
+- by_thread_createdAt: ["threadId","createdAt"]
+
+3) Agent run streaming support (minimal schema change)
+Current schema: `agentRuns.events[]` has {ts,level,message,stage?}.
+Recommendation:
+- Keep schema unchanged; use events as logs only (not as token stream).
+- Implement streaming by patching the assistant message in `chatMessages` (preferred).
+Optional enhancement (if you want to render token deltas separately):
+- Add optional `kind` to each event: "log"|"delta" (requires schema change)
+- Or create `agentRunDeltas` table (avoid enlarging agentRuns rows)
+
+4) Structured per-item solution plan
+Current system stores `materialLines.solutionPlan` (string) + `solutioned` (boolean).
+Upgrade (recommended):
+- Extend `materialLines` with:
+  - `solutionPlanJson`: optional v.string() (JSON for `SolutionItemPlanV1`)
+  - Keep `solutionPlan` as markdown for human readability/backwards compatibility.
+Alternative:
+- Create a new table `solutionItemPlans` (versioned per materialLine); only do this if you need version history per item.
+
+Define `SolutionItemPlanV1` in code (Zod) and store JSON string to avoid Convex schema churn:
+- steps[]: { title, description?, estMinutes?, role?, tools?[] }
+- materials[]: { name, spec?, qty?, unit?, notes? }
+- equipment[]: { name, qty?, notes? }
+- risks[] / assumptions[] / openQuestions[]
+- attachments: { imageIds: Id<"images">[] } (or keep attachments in imageLinks table)
+
+5) Tasks table: modal editing + AI patch + attachments
+Current tasks fields are minimal.
+Extend `tasks` table with optional fields:
+- `estimatedMinutes`: v.optional(v.number())
+- `steps`: v.optional(v.array(v.string()))
+- `subtasks`: v.optional(v.array(v.object({ title: v.string(), done: v.boolean() })))
+- `assignee`: v.optional(v.string()) (role/person name; auth later)
+- `attachments`: v.optional(v.array(v.object({ imageId: v.id("images") })))
+- `sourceRef`: optional v.object({
+    fromPlanId: v.optional(v.id("plans")),
+    fromMaterialLineId: v.optional(v.id("materialLines")),
+    fromChatMessageId: v.optional(v.id("chatMessages")),
+  })
+
+6) Images: first-class project assets
+Add tables:
+
+6.1) `images`
+- `projectId`: v.id("projects")
+- `storageId`: v.string() (Convex file storage id)
+- `provider`: v.union("openai","gemini")
+- `model`: v.string()
+- `kind`: v.union("technical","concept","other")
+- `promptJson`: v.string() (validated by Zod at runtime)
+- `width`: v.optional(v.number())
+- `height`: v.optional(v.number())
+- `mimeType`: v.string()
+- `createdAt`: v.number()
+- `createdBy`: v.string()
+- `tags`: v.optional(v.array(v.string()))
+Indexes:
+- by_project_createdAt: ["projectId","createdAt"]
+
+6.2) `imageLinks` (generic linking)
+- `imageId`: v.id("images")
+- `projectId`: v.id("projects") (denormalized for querying)
+- `entityType`: v.union("materialLine","task","quote","plan","chatMessage")
+- `entityId`: v.string() (store as string because polymorphic)
+- `createdAt`: v.number()
+Indexes:
+- by_project_entity: ["projectId","entityType","entityId"]
+- by_image: ["imageId"]
+
+7) Quotes: wizard state + PDF + attachments + privacy boundary
+Current `quotes` table stores internalBreakdownJson + clientDocumentText + totals.
+Extend `quotes` table with:
+- `wizardStateJson`: optional v.string() (selected items, dates, terms, images)
+- `clientLineItemsJson`: optional v.string() (final-only numbers)
+- `pdfStorageId`: optional v.string()
+- `imageIds`: optional v.array(v.id("images")) (or rely solely on imageLinks)
+
+8) Settings: image provider + quote branding
+Reuse existing `settings` table (key/valueJson).
+Add documented keys (all JSON encoded):
+- "image_provider_default": { provider: "openai"|"gemini" }
+- "image_model_openai": { model: "gpt-image-1" | ... }
+- "image_model_gemini": { model: "gemini-*" | ... }
+- "quote_footer_text": { textHe: "..." }
+- "quote_logo_storage_id": { storageId: "..." }
+
+
+Backend Implementation Plan (Convex)
+
+Phase 1 - Project metadata
+Files:
+- Update: `studio-console/convex/schema.ts`
+- Update: `studio-console/convex/projects.ts`
+- Add: `studio-console/convex/migrations.ts` (extend with new migration functions)
+Work:
+- Add new optional fields to `projects`.
+- Add `projects.updateProjectMeta` mutation (or extend `updateProject` args).
+- Add `projects.listProjects` query with filter args:
+  - stage/status, projectTypes, budgetTier, clientName search (optional)
+- Add migration (if changing `projects.status`):
+  - `migrations.migrateProjectStatusToStage()`:
+    - lead -> ideation
+    - planning -> planning
+    - production -> production
+    - archived -> done (or keep archived as separate)
+
+Phase 2 - Chat V2 + scenarios + system error messages
+Files:
+- Add: `studio-console/convex/scenarios.ts`
+- Add: `studio-console/convex/chat.ts` (Chat V2 threads/messages)
+- Update: `studio-console/convex/schema.ts`
+Key APIs:
+- `scenarios.create({ projectId, phase, title, basedOnScenarioId? }) -> scenarioId`
+- `scenarios.listByPhase({ projectId, phase }) -> scenarios[]`
+- `chat.getOrCreateThread({ projectId, phase, scenarioId }) -> thread`
+- `chat.listMessages({ threadId, limit? }) -> messages[]`
+- `chat.appendMessage({ threadId, role, content, metaJson? })`
+- `chat.patchMessage({ messageId, content, updatedAt })` (streaming)
+- `chat.appendSystemError({ threadId, errorCode?, content, metaJson? })`
+
+Phase 2b - Agent runner helper (standardize background runs + streaming)
+Files:
+- Add: `studio-console/convex/lib/agentRunner.ts`
+- Update: `studio-console/convex/lib/openai.ts` (streaming helper)
+- Update: `studio-console/convex/lib/gemini.ts` (optional streaming/simulated)
+Responsibilities:
+- Create agentRun row via `internal.agentRuns.createRun`
+- Create scenario/thread if missing
+- Append user message row
+- Insert placeholder assistant message row
+- Run model:
+  - stream tokens into `chat.patchMessage` (assistant content)
+  - write logs into `agentRuns.appendEvent`
+- On success:
+  - finalize assistant message content
+  - set agentRuns status succeeded
+- On error:
+  - append a system error message into the same thread
+  - set agentRuns status failed
+
+Phase 3 - Ideation agent + artifacts
+Files:
+- Add: `studio-console/convex/agents/ideation.ts`
+- Update: `studio-console/convex/lib/zodSchemas.ts` (add `IdeationArtifactsSchema`)
+- (Optional) Add: `studio-console/convex/ideationArtifacts.ts` if not using plans table
+Agent inputs:
+- projectId, scenarioId, chatHistory (or threadId), budgetOverride?, useWebSearch?
+Agent outputs (store as JSON):
+- `replyText`
+- `concepts[]` each: { title, oneLiner, moodKeywords[], materials[], roughBudgetTier, keyRisks[], references[]? }
+Implementation:
+- Use `agentRunner` and Chat V2.
+- Use Gemini google_search (via `generateJsonWithGemini`) when web search is enabled.
+- Always include project metadata in prompt: stage, projectTypes, budgetTier, language, related projects summary.
+
+Phase 4 - Clarification becomes planning-chat + plan sidebar
+Files:
+- Update: `studio-console/convex/agents/clarification.ts` (optional: split into clarification Q&A vs plan builder)
+- Update: `studio-console/convex/agents/planning.ts` (optionally add patch mode)
+- Update: `studio-console/convex/projects.ts` (add plan meta helpers for multiple phases if needed)
+- Update: `studio-console/convex/schema.ts` (if adding structured plan JSON on `plans`)
+Key design:
+- Keep planning versions in `plans` table (phase "planning") as today.
+- Add optional `plans.contentJson` (v.optional(v.string())) for `PlanV1` structured object.
+- Clarification tab:
+  - left = Chat V2 thread (phase "clarification")
+  - right = plan sidebar rendering the active planning plan (phase "planning") + version switcher
+  - "Generate/Update Plan" button triggers planning agent with context from clarification thread + project metadata.
+Acceptance criteria:
+- User can do planning updates without leaving Clarification tab; Planning tab remains for full history/approval.
+
+Phase 5 - Solutioning structured per-item plan + persistence
+Files:
+- Update: `studio-console/convex/agents/solutioning.ts`
+- Update: `studio-console/convex/schema.ts` (add `materialLines.solutionPlanJson`)
+- Add: `studio-console/convex/images.ts` (used by solutioning UI)
+- Update: `studio-console/convex/lib/zodSchemas.ts` (add `SolutionItemPlanSchema`)
+Implementation:
+- Keep existing per-item conversation strategy, but migrate to Chat V2:
+  - phase "solutioning"
+  - scenario per project, and one thread per (scenarioId + materialLineId) OR encode materialLineId in metaJson.
+- Extend solutioning agent to output:
+  - conversational response (Hebrew)
+  - suggestedPlanMarkdown (optional)
+  - suggestedPlanJson (optional SolutionItemPlanV1)
+- Update mutation `updateSolution` to write both markdown and JSON to `materialLines`.
+
+Phase 6 - Task modal + AI patch + images
+Files:
+- Update: `studio-console/convex/schema.ts` (tasks fields + attachments)
+- Update: `studio-console/convex/tasks.ts` (support new fields in create/update)
+- Add: `studio-console/convex/agents/taskEditor.ts`
+- Update: `studio-console/convex/lib/zodSchemas.ts` (add `TaskPatchSchema`)
+TaskEditor agent contract:
+- input: { task: TaskSnapshot, instruction: string }
+- output: { patch: Partial<TaskEditableFields>, explanationHe: string }
+Frontend:
+- `TaskModal` uses Chat V2 for "task edit chat" OR a lightweight local chat with server calls; either way, errors must render as system messages in the modal thread.
+
+Phase 7 - Quote wizard + privacy boundary + PDF + branding
+Files:
+- Update: `studio-console/convex/schema.ts` (quote extensions)
+- Add/Update: `studio-console/convex/quoteWizard.ts` (store wizard state, build client context)
+- Update: `studio-console/convex/agents/quote.ts` (split into client-only generator)
+- Add: `studio-console/app/api/quote-pdf/route.ts` (server-side PDF generation)
+- Add: `studio-console/convex/files.ts` (generate upload URLs for pdf/logo/images as needed)
+Privacy boundary implementation (hard rule):
+- Build a "client context" object that contains ONLY final prices:
+  - Use existing `studio-console/convex/lib/costing.ts` outputs (plannedClientPrice) and/or `quotes.generateFromAccounting`.
+  - Never pass `overheadPercent`, `riskPercent`, `profitPercent` or raw costs into quote LLM prompt.
+Wizard flow:
+- Step 1: description (editable)
+- Step 2: select items (from accounting sections + tasks + optionally ideation concepts)
+- Step 3: pricing (final numbers only)
+- Step 4: terms (template in Hebrew)
+- Step 5: schedule/dates
+Outputs:
+- `structuredQuoteV1` JSON + `clientDocumentText` Hebrew
+- PDF render of a deterministic HTML template (logo + footer from settings)
+Store:
+- quote version row with wizardStateJson + pdfStorageId and image links
+
+Phase 8 - Image generation system (OpenAI/Gemini) + reuse everywhere
+Files:
+- Add: `studio-console/convex/images.ts`
+- Add: `studio-console/convex/lib/imageProviders/openai.ts`
+- Add: `studio-console/convex/lib/imageProviders/gemini.ts`
+- Add: `studio-console/convex/lib/imageSpec.ts` (Zod spec + helpers)
+- Update: `studio-console/convex/schema.ts` (images + imageLinks)
+Core APIs:
+- `images.generate({ projectId, kind, specJson, providerOverride? }) -> imageId`
+- `images.listByProject({ projectId }) -> images[]`
+- `images.getUrl({ imageId }) -> url`
+- `images.link({ projectId, imageId, entityType, entityId })`
+- `images.unlink({ imageId, entityType, entityId })`
+Provider notes:
+- OpenAI: use `openai` package; generate image bytes/base64; store in Convex storage.
+- Gemini: use REST or SDK; generate image bytes; store in Convex storage.
+- All requests must validate `ImageSpecV1` (JSON) before calling provider.
+
+Phase 9 - Hardening
+- Tests:
+  - Add Vitest tests for privacy boundary (quote context builder must not include cost/margins).
+  - Add tests for image spec validation.
+  - Add tests for task patch schema application.
+- Rate limiting:
+  - In Convex, track per-user daily run counts (pattern exists in `studio-console/convex/research.ts`).
+- Auth guard (minimal):
+  - Add a simple server-side check for Admin settings routes (even if it's a shared secret for now).
+- Telemetry:
+  - Extend agentRuns events to include token counts and estimated cost where available.
+
+
+Frontend Implementation Plan (Next.js)
+
+Phase 1 - Project metadata UI
+Files:
+- Update: `studio-console/app/projects/page.tsx`
+  - Add filter UI: stage/status, type, budget tier
+  - Display badges for stage + budget tier
+- Update: `studio-console/app/projects/[id]/overview/page.tsx`
+  - Add fields: stage selector, projectTypes multiselect, budgetTier selector, relatedProjectIds picker, language toggle
+- Update: `studio-console/app/projects/[id]/layout.tsx`
+  - Display stage badge next to project header
+
+Phase 2 - Shared Chat UI (Chat V2)
+Recommended shared component location:
+- Add: `studio-console/app/projects/[id]/_components/chat/AgentChatThread.tsx`
+- Add: `studio-console/app/projects/[id]/_components/chat/ChatComposer.tsx`
+Responsibilities:
+- Subscribe to `chat.listMessages(threadId)` (Convex query)
+- Render messages with:
+  - RTL/dir="rtl" for Hebrew
+  - system errors clearly styled
+  - streaming updates (assistant message content updates via patch)
+- Composer supports Enter-to-send, shift-enter newline, disable while running, and "use web search" toggle where relevant.
+
+Phase 3 - Ideation tab
+Files:
+- Add: `studio-console/app/projects/[id]/ideation/page.tsx`
+- Update: `studio-console/app/projects/[id]/layout.tsx` (add tab)
+UI:
+- Scenario selector (dropdown) + "New scenario" button
+- Chat thread (Chat V2)
+- Controls:
+  - follow project budget vs temporary override
+  - quick actions: ask clarifying questions, generate 3 concepts, generate 3 budgets
+- Concept cards panel reading stored artifacts (if persisted)
+
+Phase 4 - Clarification tab refactor (planning in clarification)
+Files:
+- Update: `studio-console/app/projects/[id]/clarification/page.tsx`
+- Add: `studio-console/app/projects/[id]/_components/plan/PlanSidebar.tsx`
+UI:
+- Left: Chat V2
+- Right: Plan sidebar:
+  - active planning plan selector (by version)
+  - "Generate/Update Plan" button
+  - "Approve plan" shortcut (calls existing `projects.setPlanActive`)
+  - (Optional) buttons: run accounting generator, run architect tasks generator
+Notes:
+- Keep existing clarification doc editor as a separate panel or integrate as a plan "notes" section.
+
+Phase 5 - Solutioning upgrades
+Files:
+- Update: `studio-console/app/projects/[id]/solutioning/page.tsx`
+- Add: `studio-console/app/projects/[id]/_components/images/ImageGeneratorPanel.tsx`
+- Add: `studio-console/app/projects/[id]/_components/images/ImagePicker.tsx`
+UI changes:
+- Keep left list of material lines + chat.
+- Replace right markdown-only editor with:
+  - structured plan editor/view (render from SolutionItemPlanV1)
+  - markdown fallback editor (optional)
+  - image attach/generate panel
+
+Phase 6 - Tasks modal
+Files:
+- Add: `studio-console/app/projects/[id]/tasks/_components/TaskModal.tsx`
+- Update: `studio-console/app/projects/[id]/tasks/page.tsx` (open modal, pass selected task)
+Modal content:
+- Editable fields: title, description, status, category, priority, estimatedMinutes, steps, subtasks, assignee
+- Image picker + generate
+- AI edit bar (calls taskEditor agent, renders assistant/system messages in-thread)
+
+Phase 7 - Quote wizard + PDF
+Files:
+- Add: `studio-console/app/projects/[id]/quote/_components/QuoteWizard.tsx`
+- Add: `studio-console/app/projects/[id]/quote/_components/QuotePreview.tsx`
+- Update: `studio-console/app/projects/[id]/quote/page.tsx` (replace current layout)
+- Add: `studio-console/app/api/quote-pdf/route.ts`
+UI:
+- Wizard stepper + right preview
+- Copy-to-clipboard button
+- Export PDF button:
+  - Calls route handler to generate PDF for selected quote version
+  - Uploads to Convex storage and associates with quote row
+
+Phase 8 - Admin settings UI (image provider + branding)
+Files:
+- Add: `studio-console/app/admin/settings/page.tsx`
+- Update: `studio-console/app/admin/layout.tsx` (nav item)
+UI:
+- Provider select (OpenAI/Gemini), model inputs
+- Upload logo (uses upload URL + saves storageId in settings)
+- Quote footer text editor (Hebrew)
+
+
+Detailed Phase Execution Checklist (recommended order)
+
+Phase 1 - Project metadata (backend + UI)
+1. Update schema (add optional fields).
+2. Update `projects.ts` (mutations/queries).
+3. Update Projects list + Overview UI.
+4. Add migration/backfill if changing existing `status` semantics.
+Verification:
+- Create a project and set types/budget/language; ensure values persist and appear in list filters.
+
+Phase 2 - Chat V2 foundation + agent runner
+1. Add new tables to schema.
+2. Implement `scenarios.ts` and `chat.ts`.
+3. Add `agentRunner.ts` and update OpenAI wrapper to support streaming callback.
+4. Add `AgentChatThread` + `ChatComposer` components (front-end).
+Verification:
+- Create a scenario, send a message, see it persist; force an error, see a system error message in-thread.
+
+Phase 3 - Ideation tab
+1. Add route + tab.
+2. Implement ideation agent using Chat V2 + streaming.
+3. Persist concept cards.
+Verification:
+- Generate 3 concepts, override budget tier, verify the agent respects projectTypes and outputs Hebrew by default.
+
+Phase 4 - Clarification becomes main planning experience
+1. Migrate Clarification tab chat to Chat V2.
+2. Build PlanSidebar using existing `plans` (planning phase).
+3. Add "Generate/Update plan" actions that call planning agent and then refresh PlanSidebar.
+Verification:
+- Run clarification chat, generate plan, approve plan, see active version reflected.
+
+Phase 5 - Solutioning structured plan + images
+1. Extend materialLines schema (solutionPlanJson).
+2. Migrate solutioning conversation to Chat V2 (or keep legacy temporarily but add structured plan write).
+3. Add images backend + generator UI panel.
+Verification:
+- For a material line, generate plan JSON + attach an image; reload and confirm persistence.
+
+Phase 6 - Tasks modal + AI patch
+1. Extend tasks schema.
+2. Implement taskEditor agent.
+3. Add TaskModal UI; integrate with Tasks board.
+Verification:
+- Open task, add steps/subtasks, attach image, run AI patch, confirm DB updates.
+
+Phase 7 - Quote wizard + PDF + privacy boundary
+1. Add quote wizard state storage + client-only context builder.
+2. Refactor quote agent to consume client context only.
+3. Build PDF route and store PDF in Convex storage.
+Verification:
+- Generate quote; confirm prompt context excludes margins/costs; export PDF; confirm logo/footer.
+
+Phase 8 - Image provider configuration + reuse
+1. Add settings mutations/queries.
+2. Wire ImageGeneratorPanel to read defaults from settings.
+3. Allow attach images in Quote + Task modal + Solutioning.
+Verification:
+- Switch provider in Admin settings; generate images in each tab; confirm stored and reusable.
+
+Phase 9 - Hardening
+1. Add tests (Vitest).
+2. Add basic rate limit counters per user/session.
+3. Add minimal Admin guard.
+Verification:
+- `npm run lint` and `npm run test` under `studio-console/` pass.
+
+
+Non-Goals (explicitly out of scope for Phase 3D unless requested)
+- Full authentication/role-based authorization (only basic guard is planned).
+- Full data migration removing legacy `conversations` table (kept for gradual migration).
+- Full accounting schema redesign (reuse existing sections/materialLines/workLines).
+

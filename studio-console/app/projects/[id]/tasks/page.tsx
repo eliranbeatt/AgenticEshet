@@ -17,6 +17,7 @@ import {
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
+import { TaskModal } from "./_components/TaskModal";
 
 type UpdateTaskInput = {
     taskId: Id<"tasks">;
@@ -75,6 +76,7 @@ export default function TasksPage() {
     const [sortField, setSortField] = useState<SortField>("updatedAt");
     const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
     const [activeTaskId, setActiveTaskId] = useState<Id<"tasks"> | null>(null);
+    const [selectedTaskId, setSelectedTaskId] = useState<Id<"tasks"> | null>(null);
 
     useEffect(() => {
         if (!tasks) return;
@@ -119,6 +121,11 @@ export default function TasksPage() {
         }
         return map;
     }, [tasks]);
+
+    const selectedTask = useMemo(() => {
+        if (!tasks || !selectedTaskId) return null;
+        return tasks.find((t) => t._id === selectedTaskId) ?? null;
+    }, [selectedTaskId, tasks]);
 
     const filteredTasks = useMemo(() => {
         if (!tasks) return null;
@@ -296,6 +303,7 @@ export default function TasksPage() {
                                 column={col}
                                 tasks={tasksByStatus[col.id]}
                                 activeTaskId={activeTaskId}
+                                onOpenTask={(taskId) => setSelectedTaskId(taskId)}
                                 onUpdate={async (input) => {
                                     await updateTask(input);
                                 }}
@@ -317,6 +325,15 @@ export default function TasksPage() {
                 tasks={tasks ?? []}
                 sectionLabelById={sectionLabelById}
             />
+
+            {selectedTask && (
+                <TaskModal
+                    key={selectedTask._id}
+                    projectId={projectId}
+                    task={selectedTask}
+                    onClose={() => setSelectedTaskId(null)}
+                />
+            )}
         </div>
     );
 }
@@ -324,6 +341,7 @@ export default function TasksPage() {
 function KanbanColumn({
     column,
     tasks,
+    onOpenTask,
     onUpdate,
     onDelete,
     sections,
@@ -334,6 +352,7 @@ function KanbanColumn({
 }: {
     column: (typeof columns)[number];
     tasks: Doc<"tasks">[];
+    onOpenTask: (taskId: Id<"tasks">) => void;
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
     onDelete: (input: DeleteTaskInput) => Promise<void>;
     sections: AccountingSectionRow[];
@@ -362,6 +381,7 @@ function KanbanColumn({
                         accountingItemById={accountingItemById}
                         onUpdate={onUpdate}
                         onDelete={onDelete}
+                        onOpen={() => onOpenTask(task._id)}
                         isDragging={activeTaskId === task._id}
                         taskNumberById={taskNumberById}
                     />
@@ -378,6 +398,7 @@ function TaskCard({
     accountingItemById,
     onUpdate,
     onDelete,
+    onOpen,
     isDragging,
     taskNumberById,
 }: {
@@ -387,6 +408,7 @@ function TaskCard({
     accountingItemById: Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>;
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
     onDelete: (input: DeleteTaskInput) => Promise<void>;
+    onOpen: () => void;
     isDragging: boolean;
     taskNumberById: Map<Id<"tasks">, number>;
 }) {
@@ -457,15 +479,24 @@ function TaskCard({
                         {task.category}
                     </span>
                 </div>
-                <button
-                    type="button"
-                    className="text-gray-400 hover:text-gray-700"
-                    {...listeners}
-                    {...attributes}
-                    aria-label="Drag task"
-                >
-                    <GripVertical className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        className="text-xs text-blue-600 hover:text-blue-800"
+                        onClick={onOpen}
+                    >
+                        Edit
+                    </button>
+                    <button
+                        type="button"
+                        className="text-gray-400 hover:text-gray-700"
+                        {...listeners}
+                        {...attributes}
+                        aria-label="Drag task"
+                    >
+                        <GripVertical className="h-4 w-4" />
+                    </button>
+                </div>
             </div>
 
             <p className="text-sm font-medium text-gray-800 mb-1">{task.title}</p>

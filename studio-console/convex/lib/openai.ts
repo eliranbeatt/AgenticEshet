@@ -180,9 +180,12 @@ export async function callChatWithSchema<T>(
                 throw new Error("OpenAI returned an empty response");
             }
 
-            const parsed = schema.safeParse(extractJson(outputText));
+            const extracted = extractJson(outputText);
+            const parsed = schema.safeParse(extracted);
             if (!parsed.success) {
-                throw new Error(`Failed to validate OpenAI JSON: ${parsed.error.message}`);
+                console.error("OpenAI Validation Error:", parsed.error.format());
+                console.error("Raw Output:", outputText);
+                throw new Error(`Failed to validate OpenAI JSON: ${parsed.error.message}. Received: ${JSON.stringify(extracted).slice(0, 200)}`);
             }
             return parsed.data;
         } catch (error) {

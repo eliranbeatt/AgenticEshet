@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { action, internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { generateImageBase64Png } from "./lib/openaiImages";
+import { generateImageBase64WithGemini } from "./lib/geminiImages";
 
 type EntityType = "materialLine" | "task" | "quote";
 
@@ -222,24 +223,55 @@ export const generateImage = action({
         ),
     },
     handler: async (ctx, args) => {
-        const { base64Png, model } = await generateImageBase64Png({
-            prompt: args.prompt,
-            size: args.size,
+        await ctx.runMutation(internal.rateLimit.consume, {
+            key: `image:${args.projectId}`,
+            limit: 8,
+            windowMs: 60_000,
         });
 
-        const bytes = Buffer.from(base64Png, "base64");
-        const blob = new Blob([bytes], { type: "image/png" });
+        const settings = await ctx.runQuery(internal.settings.getAll);
+
+        const provider = settings.imageProvider ?? "openai";
+        const desiredSize = args.size ?? "1024x1024";
+
+        let base64: string;
+        let mimeType: string;
+        let model: string;
+
+        if (provider === "gemini") {
+            const result = await generateImageBase64WithGemini({
+                prompt: args.prompt,
+                model: settings.geminiImageModel || "imagen-3.0-generate-002",
+                sampleCount: 1,
+            });
+            base64 = result.base64;
+            mimeType = result.mimeType || "image/png";
+            model = result.model;
+        } else {
+            const result = await generateImageBase64Png({
+                prompt: args.prompt,
+                model: settings.openaiImageModel || "gpt-image-1",
+                size: desiredSize,
+            });
+            base64 = result.base64Png;
+            mimeType = "image/png";
+            model = result.model;
+        }
+
+        const binary = atob(base64);
+        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+        const blob = new Blob([bytes], { type: mimeType });
         const storageId = await ctx.storage.store(blob);
 
         const assetId = await ctx.runMutation(internal.assets.createGeneratedImageAsset, {
             projectId: args.projectId,
             storageId,
-            mimeType: "image/png",
+            mimeType,
             prompt: args.prompt,
-            provider: "openai",
+            provider,
             model,
-            width: args.size === "1536x1024" ? 1536 : 1024,
-            height: args.size === "1024x1536" ? 1536 : 1024,
+            width: desiredSize === "1536x1024" ? 1536 : 1024,
+            height: desiredSize === "1024x1536" ? 1536 : 1024,
         });
 
         if (args.linkTo) {

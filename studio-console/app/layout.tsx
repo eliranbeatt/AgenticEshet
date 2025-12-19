@@ -4,6 +4,7 @@ import Link from "next/link";
 import ConvexClientProvider from "./ConvexClientProvider";
 import { ThinkingModeProvider } from "./ThinkingModeContext";
 import ThinkingModeToggle from "./ThinkingModeToggle";
+import SidebarAgentActivity from "./SidebarAgentActivity";
 import "./globals.css";
 
 /*
@@ -70,6 +71,7 @@ export default function RootLayout({
                                         Admin
                                     </Link>
                                 </nav>
+                                <SidebarAgentActivity />
                                 <div className="border-t border-sidebar-border p-4 space-y-3">
                                     <ThinkingModeToggle />
                                     <div className="text-xs text-muted-foreground">

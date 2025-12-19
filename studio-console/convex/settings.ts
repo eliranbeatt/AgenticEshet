@@ -49,7 +49,7 @@ export const getAll = query({
         );
         const openaiImageModel = safeParseJson<string>(
             (await getSetting(ctx, SETTINGS_KEYS.openaiImageModel))?.valueJson,
-            "gpt-image-1"
+            "gpt-image-1.5"
         );
         const geminiImageModel = safeParseJson<string>(
             (await getSetting(ctx, SETTINGS_KEYS.geminiImageModel))?.valueJson,

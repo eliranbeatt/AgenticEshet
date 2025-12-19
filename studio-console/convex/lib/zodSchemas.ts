@@ -81,3 +81,39 @@ export const IdeationConceptsSchema = z.object({
         })
     ),
 });
+
+export const SolutionItemPlanV1Schema = z.object({
+    version: z.literal("SolutionItemPlanV1"),
+    title: z.string(),
+    summary: z.string().optional(),
+    steps: z.array(
+        z.object({
+            id: z.string(),
+            title: z.string(),
+            details: z.string(),
+            estimatedMinutes: z.number().optional(),
+            materials: z.array(z.string()).optional(),
+            tools: z.array(z.string()).optional(),
+        })
+    ),
+});
+
+export const SolutioningExtractedPlanSchema = z.object({
+    plan: SolutionItemPlanV1Schema,
+    markdown: z.string(),
+});
+
+export const TaskEditorPatchSchema = z.object({
+    summary: z.string().describe("Short summary of what was changed/applied."),
+    patch: z.object({
+        title: z.string().optional(),
+        description: z.string().optional(),
+        status: z.enum(["todo", "in_progress", "blocked", "done"]).optional(),
+        category: z.enum(["Logistics", "Creative", "Finance", "Admin", "Studio"]).optional(),
+        priority: z.enum(["High", "Medium", "Low"]).optional(),
+        estimatedMinutes: z.number().optional(),
+        steps: z.array(z.string()).optional(),
+        subtasks: z.array(z.object({ title: z.string(), done: z.boolean() })).optional(),
+        assignee: z.string().nullable().optional(),
+    }),
+});

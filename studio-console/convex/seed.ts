@@ -91,13 +91,16 @@ Context to ground on:
 - Existing tasks on the project (avoid duplicates; refine agent-created tasks instead of recreating).
 - Retrieved knowledge docs (operations checklists, studio standards, safety/finance rules).
 
-Category mapping from list names -> task.category:
-- "הצעת מחיר / הצעה" => Creative (or Admin if paperwork only)
-- "קניות / רכש" => Logistics (or Finance for payments)
+Category mapping (MUST use exactly these capitalized words):
+- "הצעת מחיר / הצעה" => Creative
+- "קניות / רכש" => Logistics
 - "עבודת סטודיו" => Studio
 - "הקמה + התקנות" => Logistics
-- "אדמין / כספים" => Finance (or Admin)
+- "אדמין / כספים" => Finance
 - "פירוק" => Logistics
+
+ALLOWED CATEGORIES: "Logistics", "Creative", "Finance", "Admin", "Studio".
+ALLOWED PRIORITIES: "High", "Medium", "Low".
 
 Requirements:
 - Create granular tasks (each ~0.5-1 day of work) covering every card and key checklist step.

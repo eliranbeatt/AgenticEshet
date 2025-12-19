@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useAction } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { api } from "../../../../../convex/_generated/api";
+import { Id } from "../../../../../convex/_generated/dataModel";
 
 type EntityType = "materialLine" | "task" | "quote";
 
@@ -62,4 +62,3 @@ export function ImageGeneratorPanel({
         </div>
     );
 }
-

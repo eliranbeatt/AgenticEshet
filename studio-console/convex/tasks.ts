@@ -65,6 +65,12 @@ export const createTask = mutation({
         // Gantt fields
         estimatedDuration: v.optional(v.number()), // in milliseconds
         dependencies: v.optional(v.array(v.id("tasks"))),
+
+        // Task details
+        estimatedMinutes: v.optional(v.union(v.number(), v.null())),
+        steps: v.optional(v.array(v.string())),
+        subtasks: v.optional(v.array(v.object({ title: v.string(), done: v.boolean() }))),
+        assignee: v.optional(v.union(v.string(), v.null())),
     },
     handler: async (ctx, args) => {
         const existingTasks = await ctx.db
@@ -92,6 +98,10 @@ export const createTask = mutation({
             taskNumber,
             estimatedDuration: args.estimatedDuration,
             dependencies: args.dependencies,
+            estimatedMinutes: args.estimatedMinutes,
+            steps: args.steps,
+            subtasks: args.subtasks,
+            assignee: args.assignee,
             createdAt: Date.now(),
             updatedAt: Date.now(),
         });
@@ -136,6 +146,12 @@ export const updateTask = mutation({
         startDate: v.optional(v.number()),
         endDate: v.optional(v.number()),
         dependencies: v.optional(v.array(v.id("tasks"))),
+
+        // Task details
+        estimatedMinutes: v.optional(v.union(v.number(), v.null())),
+        steps: v.optional(v.array(v.string())),
+        subtasks: v.optional(v.array(v.object({ title: v.string(), done: v.boolean() }))),
+        assignee: v.optional(v.union(v.string(), v.null())),
     },
     handler: async (ctx, args) => {
         const { taskId, ...patches } = args;

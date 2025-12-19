@@ -148,6 +148,13 @@ export default defineSchema({
         .index("by_project_asset_entity", ["projectId", "assetId", "entityType", "entityId"])
         .index("by_asset", ["assetId"]),
 
+    rateLimitBuckets: defineTable({
+        key: v.string(),
+        windowStart: v.number(),
+        count: v.number(),
+        updatedAt: v.number(),
+    }).index("by_key", ["key"]),
+
     // 16. SECTIONS (Budget Lines)
     sections: defineTable({
         projectId: v.id("projects"),
@@ -329,6 +336,19 @@ export default defineSchema({
         endDate: v.optional(v.number()),
         estimatedDuration: v.optional(v.number()), // in milliseconds
 
+        // Task details (modal editor)
+        estimatedMinutes: v.optional(v.union(v.number(), v.null())),
+        steps: v.optional(v.array(v.string())),
+        subtasks: v.optional(
+            v.array(
+                v.object({
+                    title: v.string(),
+                    done: v.boolean(),
+                })
+            )
+        ),
+        assignee: v.optional(v.union(v.string(), v.null())),
+
         // AI metadata
         source: v.union(v.literal("user"), v.literal("agent")),
         confidenceScore: v.optional(v.number()),
@@ -431,6 +451,7 @@ export default defineSchema({
         clientDocumentText: v.string(),
         currency: v.string(),
         totalAmount: v.number(),
+        pdfStorageId: v.optional(v.string()),
         createdAt: v.number(),
         createdBy: v.string(),
     }).index("by_project", ["projectId"]),

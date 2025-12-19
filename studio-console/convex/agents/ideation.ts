@@ -68,6 +68,12 @@ export const send = action({
         thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
+        await ctx.runMutation(internal.rateLimit.consume, {
+            key: `ideation:${args.threadId}`,
+            limit: 15,
+            windowMs: 60_000,
+        });
+
         const { project, scenario, messages } = await ctx.runQuery(internal.chat.getThreadContext, {
             threadId: args.threadId,
         });

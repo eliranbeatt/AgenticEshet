@@ -468,6 +468,10 @@ REQUIRED: Dependencies & Estimations
    - Use the exact string from the "Accounting Sections" list or a close match (e.g. "[Studio Elements] Paint").
    - If a specific material or work role applies, include it.
 
+4. **Categories & Priorities (CRITICAL)**:
+   - You MUST use exactly one of these categories: "Logistics", "Creative", "Finance", "Admin", "Studio".
+   - You MUST use exactly one of these priorities: "High", "Medium", "Low".
+
 Dependency test checklist (do this before answering):
 1) For each task, check if it relies on a previous task completing. Link it explicitly using definitions.
 2) Ensure there are no cycles and no forward references.

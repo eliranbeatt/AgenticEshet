@@ -17,6 +17,7 @@ type WizardItem = {
 type AccountingSectionRow = {
     section: Doc<"sections">;
     stats: { plannedClientPrice?: number };
+    item?: Doc<"projectItems"> | null;
 };
 
 export function QuoteWizard({
@@ -27,6 +28,7 @@ export function QuoteWizard({
     onCreated?: (quoteId: Id<"quotes">) => void;
 }) {
     const accounting = useQuery(api.accounting.getProjectAccounting, { projectId });
+    const itemsWithSpecs = useQuery(api.items.listApprovedWithSpecs, { projectId });
     const createFromWizard = useMutation(api.quotes.createFromWizard);
 
     const currency = (accounting?.project.currency as string | undefined) ?? "ILS";
@@ -34,21 +36,62 @@ export function QuoteWizard({
     const baseItems = useMemo<Array<Omit<WizardItem, "selected" | "notes"> & { notes: string }>>(() => {
         if (!accounting?.sections) return [];
         const rows = accounting.sections as unknown as AccountingSectionRow[];
-        return rows
-            .map((row) => {
-                const section = row.section;
-                const stats = row.stats;
-                const amount = Number(stats?.plannedClientPrice ?? 0);
+        const itemTotals = new Map<string, number>();
+        const itemLabelFallback = new Map<string, string>();
+        const unlinkedSections: AccountingSectionRow[] = [];
+
+        for (const row of rows) {
+            const amount = Number(row.stats?.plannedClientPrice ?? 0);
+            if (amount <= 0) continue;
+            if (row.section.itemId) {
+                const key = String(row.section.itemId);
+                itemTotals.set(key, (itemTotals.get(key) ?? 0) + amount);
+                if (row.item?.title) {
+                    itemLabelFallback.set(key, row.item.title);
+                }
+            } else {
+                unlinkedSections.push(row);
+            }
+        }
+
+        const itemsById = new Map(
+            (itemsWithSpecs ?? []).map((entry) => [entry.item._id, entry]),
+        );
+
+        const itemLines = Array.from(itemTotals.entries())
+            .map(([itemId, amount]) => {
+                const entry = itemsById.get(itemId);
+                const includeInQuote = entry?.spec.quote?.includeInQuote ?? true;
+                if (!includeInQuote || amount <= 0) return null;
+                const label =
+                    entry?.spec.quote?.clientTextOverride?.trim() ||
+                    entry?.item.title ||
+                    itemLabelFallback.get(itemId) ||
+                    "Item";
                 return {
-                    key: String(section._id),
-                    label: `${section.group}: ${section.name}`,
+                    key: `item:${itemId}`,
+                    label,
                     amount,
                     currency,
                     notes: "",
                 };
             })
-            .filter((item) => item.amount > 0);
-    }, [accounting?.sections, currency]);
+            .filter(Boolean) as Array<Omit<WizardItem, "selected" | "notes"> & { notes: string }>;
+
+        const sectionLines = unlinkedSections.map((row) => {
+            const section = row.section;
+            const amount = Number(row.stats?.plannedClientPrice ?? 0);
+            return {
+                key: `section:${section._id}`,
+                label: `${section.group}: ${section.name}`,
+                amount,
+                currency,
+                notes: "",
+            };
+        });
+
+        return [...itemLines, ...sectionLines].filter((item) => item.amount > 0);
+    }, [accounting?.sections, currency, itemsWithSpecs]);
 
     const [excludedKeys, setExcludedKeys] = useState<Set<string>>(() => new Set());
     const [amountOverrides, setAmountOverrides] = useState<Record<string, number>>({});

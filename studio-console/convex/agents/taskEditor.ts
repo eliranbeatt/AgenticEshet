@@ -1,8 +1,9 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
-import { TaskEditorPatchSchema } from "../lib/zodSchemas";
+import { ItemSpecV2Schema, TaskEditorPatchSchema, type ItemSpecV2 } from "../lib/zodSchemas";
+import type { Doc } from "../_generated/dataModel";
 
 const FALLBACK_SYSTEM_PROMPT = [
     "You are a task editor assistant for a creative studio project.",
@@ -10,6 +11,47 @@ const FALLBACK_SYSTEM_PROMPT = [
     "Be concise, specific, and only change what the user asked for.",
     "Default to the project's default language unless the user explicitly requests otherwise.",
 ].join("\n");
+
+function updateSubtaskById(
+    subtasks: ItemSpecV2["breakdown"]["subtasks"],
+    subtaskId: string,
+    patch: Partial<ItemSpecV2["breakdown"]["subtasks"][number]>,
+): { updated: boolean; subtasks: ItemSpecV2["breakdown"]["subtasks"] } {
+    let updated = false;
+    const next = subtasks.map((subtask) => {
+        if (subtask.id === subtaskId) {
+            updated = true;
+            return { ...subtask, ...patch };
+        }
+        if (subtask.children && subtask.children.length > 0) {
+            const childResult = updateSubtaskById(subtask.children, subtaskId, patch);
+            if (childResult.updated) {
+                updated = true;
+                return { ...subtask, children: childResult.subtasks };
+            }
+        }
+        return subtask;
+    });
+    return { updated, subtasks: next };
+}
+
+function resolveBaseSpec(item: Doc<"projectItems">, revisions: Doc<"itemRevisions">[]) {
+    const draft = revisions
+        .filter((rev) => rev.tabScope === "tasks" && rev.state === "proposed")
+        .sort((a, b) => b.revisionNumber - a.revisionNumber)[0] ?? null;
+    const approved = item.approvedRevisionId
+        ? revisions.find((rev) => rev._id === item.approvedRevisionId) ?? null
+        : null;
+    const active = draft ?? approved;
+    if (active) {
+        const parsed = ItemSpecV2Schema.safeParse(active.data);
+        if (parsed.success) return parsed.data;
+    }
+    return ItemSpecV2Schema.parse({
+        version: "ItemSpecV2",
+        identity: { title: item.title, typeKey: item.typeKey },
+    });
+}
 
 export const getContext = internalQuery({
     args: { taskId: v.id("tasks") },
@@ -55,6 +97,41 @@ export const applyPatch = internalMutation({
     },
     handler: async (ctx, args) => {
         await ctx.db.patch(args.taskId, { ...args.patch, updatedAt: Date.now() });
+
+        const task = await ctx.db.get(args.taskId);
+        if (!task?.itemId || !task.itemSubtaskId) return;
+
+        const item = await ctx.db.get(task.itemId);
+        if (!item) return;
+
+        const revisions = await ctx.db
+            .query("itemRevisions")
+            .withIndex("by_item_revision", (q) => q.eq("itemId", item._id))
+            .collect();
+
+        const baseSpec = resolveBaseSpec(item, revisions);
+        const { updated, subtasks } = updateSubtaskById(baseSpec.breakdown.subtasks, task.itemSubtaskId, {
+            status: task.status,
+            estMinutes: task.estimatedMinutes ?? undefined,
+        });
+
+        if (!updated) return;
+
+        const nextSpec = ItemSpecV2Schema.parse({
+            ...baseSpec,
+            breakdown: {
+                ...baseSpec.breakdown,
+                subtasks,
+            },
+        });
+
+        await ctx.runMutation(api.items.upsertRevision, {
+            itemId: item._id,
+            tabScope: "tasks",
+            dataOrPatch: nextSpec,
+            changeReason: "Synced from task editor.",
+            createdByKind: "agent",
+        });
     },
 });
 

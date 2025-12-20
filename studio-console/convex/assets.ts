@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import { generateImageBase64Png } from "./lib/openaiImages";
 import { generateImageBase64WithGemini } from "./lib/geminiImages";
 
-type EntityType = "materialLine" | "task" | "quote";
+type EntityType = "materialLine" | "projectItem" | "task" | "quote";
 
 export const generateUploadUrl = mutation({
     args: {},
@@ -59,7 +59,7 @@ export const listProjectAssets = query({
 export const listEntityAssets = query({
     args: {
         projectId: v.id("projects"),
-        entityType: v.union(v.literal("materialLine"), v.literal("task"), v.literal("quote")),
+        entityType: v.union(v.literal("materialLine"), v.literal("projectItem"), v.literal("task"), v.literal("quote")),
         entityId: v.string(),
     },
     handler: async (ctx, args) => {
@@ -86,7 +86,7 @@ export const linkAsset = mutation({
     args: {
         projectId: v.id("projects"),
         assetId: v.id("projectAssets"),
-        entityType: v.union(v.literal("materialLine"), v.literal("task"), v.literal("quote")),
+        entityType: v.union(v.literal("materialLine"), v.literal("projectItem"), v.literal("task"), v.literal("quote")),
         entityId: v.string(),
         role: v.optional(v.string()),
     },
@@ -122,7 +122,7 @@ export const unlinkAsset = mutation({
     args: {
         projectId: v.id("projects"),
         assetId: v.id("projectAssets"),
-        entityType: v.union(v.literal("materialLine"), v.literal("task"), v.literal("quote")),
+        entityType: v.union(v.literal("materialLine"), v.literal("projectItem"), v.literal("task"), v.literal("quote")),
         entityId: v.string(),
     },
     handler: async (ctx, args) => {
@@ -147,7 +147,7 @@ export const linkAssetInternal = internalMutation({
     args: {
         projectId: v.id("projects"),
         assetId: v.id("projectAssets"),
-        entityType: v.union(v.literal("materialLine"), v.literal("task"), v.literal("quote")),
+        entityType: v.union(v.literal("materialLine"), v.literal("projectItem"), v.literal("task"), v.literal("quote")),
         entityId: v.string(),
         role: v.optional(v.string()),
     },
@@ -216,7 +216,7 @@ export const generateImage = action({
         size: v.optional(v.union(v.literal("1024x1024"), v.literal("1024x1536"), v.literal("1536x1024"))),
         linkTo: v.optional(
             v.object({
-                entityType: v.union(v.literal("materialLine"), v.literal("task"), v.literal("quote")),
+                entityType: v.union(v.literal("materialLine"), v.literal("projectItem"), v.literal("task"), v.literal("quote")),
                 entityId: v.string(),
                 role: v.optional(v.string()),
             })

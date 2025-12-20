@@ -8,20 +8,20 @@ import { Id } from "@/convex/_generated/dataModel";
 import { AgentChatThread } from "../_components/chat/AgentChatThread";
 import { ImageGeneratorPanel } from "../_components/images/ImageGeneratorPanel";
 import { ImagePicker } from "../_components/images/ImagePicker";
+import { ItemsTreeSidebar } from "../_components/items/ItemsTreeSidebar";
+import { ItemEditorPanel } from "../_components/items/ItemEditorPanel";
+import { useItemsContext } from "../_components/items/ItemsContext";
 
 type PlanningItem = {
-    _id: Id<"materialLines">;
-    label: string;
-    category: string;
-    sectionName: string;
-    group: string;
-    status: string;
-    note?: string;
-    solutioned?: boolean;
-    solutionPlan?: string;
-    solutionPlanJson?: string;
-    plannedQuantity: number;
-    unit: string;
+    _id: Id<"projectItems">;
+    title: string;
+    typeKey: string;
+    status: "draft" | "approved" | "archived";
+    description?: string;
+    tags?: string[];
+    planMarkdown?: string;
+    planJson?: string;
+    planState?: "draft" | "approved" | "none";
 };
 
 type SolutionItemPlanV1 = {
@@ -107,6 +107,7 @@ function renderPlanMarkdown(plan: SolutionItemPlanV1): string {
 export default function SolutioningPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
+    const { selectedItemId } = useItemsContext();
 
     const items = useQuery(api.agents.solutioning.getPlanningItems, { projectId });
     const ensureThread = useMutation(api.chat.ensureThread);
@@ -114,7 +115,6 @@ export default function SolutioningPage() {
     const extractPlan = useAction(api.agents.solutioningV2.extractPlanFromThread);
     const updateSolutionMutation = useMutation(api.agents.solutioning.updateSolution);
 
-    const [selectedItemId, setSelectedItemId] = useState<Id<"materialLines"> | null>(null);
     const [threadId, setThreadId] = useState<Id<"chatThreads"> | null>(null);
     const [scenarioId, setScenarioId] = useState<Id<"projectScenarios"> | null>(null);
 
@@ -122,23 +122,6 @@ export default function SolutioningPage() {
     const [markdownDraft, setMarkdownDraft] = useState("");
     const [isSaving, setIsSaving] = useState(false);
     const previousSelectedItemIdRef = useRef<string | null>(null);
-
-    useEffect(() => {
-        if (!items || items.length === 0) return;
-        if (selectedItemId) return;
-
-        const storedSelected =
-            typeof window === "undefined" ? null : window.localStorage.getItem(`solutioning:selected:${projectId}`);
-        if (!storedSelected) return;
-        if (!items.some((item) => String(item._id) === storedSelected)) return;
-
-        setSelectedItemId(storedSelected as Id<"materialLines">);
-    }, [items, projectId, selectedItemId]);
-
-    useEffect(() => {
-        if (!selectedItemId) return;
-        window.localStorage.setItem(`solutioning:selected:${projectId}`, String(selectedItemId));
-    }, [projectId, selectedItemId]);
 
     useEffect(() => {
         if (!selectedItemId) return;
@@ -149,16 +132,16 @@ export default function SolutioningPage() {
         previousSelectedItemIdRef.current = selectedItemIdString;
 
         const item = items.find((i) => i._id === selectedItemId) ?? null;
-        const title = item ? `${item.label} (${item.category})` : "Solution Plan";
-        setPlanDraft(safeParsePlanJson(item?.solutionPlanJson, title));
-        setMarkdownDraft(item?.solutionPlan || "");
+        const title = item ? `${item.title} (${item.typeKey})` : "Solution Plan";
+        setPlanDraft(safeParsePlanJson(item?.planJson, title));
+        setMarkdownDraft(item?.planMarkdown || "");
 
         void (async () => {
             const result = await ensureThread({
                 projectId,
                 phase: "solutioning",
-                scenarioKey: `materialLine:${selectedItemIdString}`,
-                title: item?.label,
+                scenarioKey: `item:${selectedItemIdString}`,
+                title: item?.title,
             });
             setThreadId(result.threadId);
             setScenarioId(result.scenarioId);
@@ -197,48 +180,11 @@ export default function SolutioningPage() {
         <div className="flex flex-col gap-4 h-full">
             <div className="flex items-center justify-between">
                 <h1 className="text-xl font-semibold text-gray-900">Solutioning</h1>
-                <div className="text-xs text-gray-500">Structured plans + images per material line</div>
+                <div className="text-xs text-gray-500">Structured plans + images per item</div>
             </div>
 
-            <div className="grid gap-4 grid-cols-[220px_minmax(0,1fr)] h-[calc(100vh-180px)]">
-                <div className="bg-white border rounded shadow-sm flex flex-col overflow-hidden min-h-0">
-                    <div className="p-3 border-b bg-gray-50 font-semibold text-sm text-gray-700">Material Lines</div>
-                    <div className="flex-1 overflow-y-auto">
-                        {items === undefined ? (
-                            <div className="p-4 text-sm text-gray-500">Loading...</div>
-                        ) : items.length === 0 ? (
-                            <div className="p-4 text-sm text-gray-500">No material lines found.</div>
-                        ) : (
-                            <div className="divide-y">
-                                {items.map((item) => (
-                                    <button
-                                        key={item._id}
-                                        type="button"
-                                        className={`w-full text-left p-3 hover:bg-gray-50 ${
-                                            selectedItemId === item._id ? "bg-blue-50" : ""
-                                        }`}
-                                        onClick={() => setSelectedItemId(item._id)}
-                                    >
-                                        <div className="flex justify-between items-center">
-                                            <div className="font-medium text-sm text-gray-900">{item.label}</div>
-                                            {item.solutioned && (
-                                                <span className="text-[10px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full">
-                                                    Solved
-                                                </span>
-                                            )}
-                                        </div>
-                                        <div className="text-xs text-gray-500 mt-1">
-                                            {item.category} · {item.group} / {item.sectionName}
-                                        </div>
-                                        <div className="text-xs text-gray-400 mt-1">
-                                            Qty: {item.plannedQuantity} {item.unit}
-                                        </div>
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
+            <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)] h-[calc(100vh-180px)]">
+                <ItemsTreeSidebar />
 
                 <div className="grid gap-4 grid-cols-2 min-h-0">
                     <div className="flex flex-col gap-3 min-h-0">
@@ -253,7 +199,7 @@ export default function SolutioningPage() {
                                 onSend={async (content) => {
                                     await sendMessage({
                                         threadId,
-                                        materialLineId: selectedItemId,
+                                        itemId: selectedItemId,
                                         userContent: content,
                                     });
                                 }}
@@ -264,7 +210,7 @@ export default function SolutioningPage() {
                     <div className="bg-white border rounded shadow-sm flex flex-col overflow-hidden min-h-0">
                         <div className="p-3 border-b bg-gray-50 flex items-center justify-between">
                             <div className="font-semibold text-sm text-gray-700">
-                                {selectedItem ? selectedItem.label : "Selected item"}
+                                {selectedItem ? selectedItem.title : "Selected item"}
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
@@ -273,7 +219,11 @@ export default function SolutioningPage() {
                                     disabled={!threadId || !selectedItemId}
                                     onClick={async () => {
                                         if (!threadId || !selectedItemId) return;
-                                        await extractPlan({ threadId, materialLineId: selectedItemId });
+                                        const result = await extractPlan({ threadId, itemId: selectedItemId });
+                                        if (result?.plan) {
+                                            setPlanDraft(result.plan);
+                                            setMarkdownDraft(result.markdown ?? "");
+                                        }
                                     }}
                                 >
                                     Extract plan
@@ -420,13 +370,13 @@ export default function SolutioningPage() {
                                 <div className="overflow-y-auto space-y-4 pr-1">
                                     <ImageGeneratorPanel
                                         projectId={projectId}
-                                        entityType="materialLine"
+                                        entityType="projectItem"
                                         entityId={String(selectedItemId)}
-                                        defaultPrompt={`${selectedItem.label} (${selectedItem.category}) - studio build render`}
+                                        defaultPrompt={`${selectedItem.title} (${selectedItem.typeKey}) - studio build render`}
                                     />
                                     <ImagePicker
                                         projectId={projectId}
-                                        entityType="materialLine"
+                                        entityType="projectItem"
                                         entityId={String(selectedItemId)}
                                     />
                                 </div>
@@ -435,6 +385,8 @@ export default function SolutioningPage() {
                     </div>
                 </div>
             </div>
+
+            <ItemEditorPanel />
         </div>
     );
 }

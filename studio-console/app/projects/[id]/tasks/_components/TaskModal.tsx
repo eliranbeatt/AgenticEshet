@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useAction, useMutation } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { AgentChatThread } from "../../_components/chat/AgentChatThread";
 import { ImageGeneratorPanel } from "../../_components/images/ImageGeneratorPanel";
 import { ImagePicker } from "../../_components/images/ImagePicker";
+import { ItemSpecV2 } from "@/lib/items";
 
 const statusOptions: Array<Doc<"tasks">["status"]> = ["todo", "in_progress", "blocked", "done"];
 const categoryOptions: Array<Doc<"tasks">["category"]> = ["Logistics", "Creative", "Finance", "Admin", "Studio"];
@@ -24,6 +25,7 @@ export function TaskModal({
     const ensureThread = useMutation(api.chat.ensureThread);
     const updateTask = useMutation(api.tasks.updateTask);
     const sendAiPatch = useAction(api.agents.taskEditor.send);
+    const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
 
     const [threadId, setThreadId] = useState<Id<"chatThreads"> | null>(null);
 
@@ -36,10 +38,46 @@ export function TaskModal({
         task.estimatedMinutes === null || task.estimatedMinutes === undefined ? "" : String(task.estimatedMinutes)
     );
     const [assignee, setAssignee] = useState<string>(task.assignee ?? "");
+    const [linkedItemId, setLinkedItemId] = useState<Id<"projectItems"> | "">(task.itemId ?? "");
+    const [linkedSubtaskId, setLinkedSubtaskId] = useState<string>(task.itemSubtaskId ?? "");
 
     const [stepsText, setStepsText] = useState<string>((task.steps ?? []).join("\n"));
     const [subtasks, setSubtasks] = useState<Array<{ title: string; done: boolean }>>(task.subtasks ?? []);
     const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
+
+    const itemData = useQuery(
+        api.items.getItem,
+        linkedItemId ? { itemId: linkedItemId as Id<"projectItems"> } : "skip",
+    );
+    const itemAssets = useQuery(
+        api.assets.listEntityAssets,
+        linkedItemId ? { projectId, entityType: "projectItem", entityId: String(linkedItemId) } : "skip",
+    );
+
+    const itemOptions = useMemo(() => itemsData?.items ?? [], [itemsData?.items]);
+
+    const approvedSpec = useMemo<ItemSpecV2 | null>(() => {
+        if (!itemData) return null;
+        const approvedId = itemData.item.approvedRevisionId;
+        if (!approvedId) return null;
+        const revision = itemData.revisions?.find((rev) => rev._id === approvedId) ?? null;
+        return (revision?.data as ItemSpecV2) ?? null;
+    }, [itemData]);
+
+    const availableSubtasks = useMemo(() => {
+        if (!approvedSpec?.breakdown?.subtasks) return [];
+        const results: Array<{ id: string; title: string }> = [];
+        const walk = (items: ItemSpecV2["breakdown"]["subtasks"]) => {
+            for (const item of items) {
+                results.push({ id: item.id, title: item.title });
+                if (item.children && item.children.length > 0) {
+                    walk(item.children);
+                }
+            }
+        };
+        walk(approvedSpec.breakdown.subtasks);
+        return results;
+    }, [approvedSpec]);
 
     useEffect(() => {
         void (async () => {
@@ -66,6 +104,8 @@ export function TaskModal({
             status !== task.status ||
             category !== task.category ||
             priority !== task.priority ||
+            linkedItemId !== (task.itemId ?? "") ||
+            linkedSubtaskId !== (task.itemSubtaskId ?? "") ||
             (task.estimatedMinutes ?? null) !== (Number.isFinite(est) ? est : null) ||
             (task.assignee ?? "") !== assignee ||
             JSON.stringify(task.steps ?? []) !== JSON.stringify(steps) ||
@@ -89,6 +129,8 @@ export function TaskModal({
             status,
             category,
             priority,
+            itemId: linkedItemId || undefined,
+            itemSubtaskId: linkedSubtaskId || undefined,
             estimatedMinutes: estimated,
             steps,
             subtasks,
@@ -212,6 +254,47 @@ export function TaskModal({
 
                             <div className="md:col-span-2">
                                 <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                                    Linked item
+                                </label>
+                                <select
+                                    className="w-full border rounded px-3 py-2 text-sm bg-white"
+                                    value={linkedItemId}
+                                    onChange={(e) => {
+                                        const next = e.target.value as Id<"projectItems"> | "";
+                                        setLinkedItemId(next);
+                                        setLinkedSubtaskId("");
+                                    }}
+                                >
+                                    <option value="">Unassigned</option>
+                                    {itemOptions.map((item) => (
+                                        <option key={item._id} value={item._id}>
+                                            {item.title}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                                    Linked subtask
+                                </label>
+                                <select
+                                    className="w-full border rounded px-3 py-2 text-sm bg-white"
+                                    value={linkedSubtaskId}
+                                    onChange={(e) => setLinkedSubtaskId(e.target.value)}
+                                    disabled={!linkedItemId || availableSubtasks.length === 0}
+                                >
+                                    <option value="">Unassigned</option>
+                                    {availableSubtasks.map((subtask) => (
+                                        <option key={subtask.id} value={subtask.id}>
+                                            {subtask.title}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
                                     Assignee
                                 </label>
                                 <input
@@ -315,6 +398,31 @@ export function TaskModal({
                             defaultPrompt={`${task.title} - reference image`}
                         />
                         <ImagePicker projectId={projectId} entityType="task" entityId={String(task._id)} />
+
+                        {linkedItemId && (
+                            <div className="bg-white border rounded p-3 space-y-2">
+                                <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                                    Linked item images
+                                </div>
+                                {itemAssets === undefined ? (
+                                    <div className="text-sm text-gray-500">Loading item images...</div>
+                                ) : itemAssets.length === 0 ? (
+                                    <div className="text-sm text-gray-500">No item images linked.</div>
+                                ) : (
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {itemAssets.map((asset) => (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img
+                                                key={asset._id}
+                                                src={asset.url ?? ""}
+                                                alt={asset.filename ?? "item image"}
+                                                className="h-20 w-full object-cover rounded border"
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     <div className="border-l bg-gray-50 p-4 overflow-y-auto max-h-[calc(92vh-64px)] space-y-3">

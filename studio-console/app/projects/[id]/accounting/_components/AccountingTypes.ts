@@ -27,6 +27,7 @@ export type ProjectAccountingSection = {
     materials: Doc<"materialLines">[];
     work: Doc<"workLines">[];
     stats: SectionStats;
+    item?: Doc<"projectItems"> | null;
 };
 
 export type ProjectAccountingData = {
@@ -38,4 +39,5 @@ export type ProjectAccountingData = {
         actualDirect: number;
     };
 };
+
 

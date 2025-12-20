@@ -1,7 +1,9 @@
 import { v } from "convex/values";
 import { action, mutation, query } from "./_generated/server";
 import { api } from "./_generated/api";
-import { ItemSpecV2Schema, ItemUpdateOutputSchema } from "./lib/zodSchemas";
+import type { Doc } from "./_generated/dataModel";
+import { ItemSpecV2Schema, ItemUpdateOutputSchema, type ItemSpecV2 } from "./lib/zodSchemas";
+import { syncItemProjections } from "./lib/itemProjections";
 
 const tabScopeValidator = v.union(
     v.literal("ideation"),
@@ -33,6 +35,68 @@ function buildBaseItemSpec(title: string, typeKey: string, description?: string)
     });
 }
 
+function normalizeRateType(rateType: string): "hour" | "day" | "flat" {
+    if (rateType === "hour" || rateType === "day" || rateType === "flat") {
+        return rateType;
+    }
+    return "hour";
+}
+
+function buildMaterialSpec(line: Doc<"materialLines">) {
+    return {
+        id: line.itemMaterialId ?? line._id,
+        category: line.category,
+        label: line.label,
+        description: line.description,
+        qty: line.plannedQuantity,
+        unit: line.unit,
+        unitCostEstimate: line.plannedUnitCost,
+        vendorName: line.vendorName,
+        procurement: line.procurement,
+        status: line.status,
+        note: line.note,
+    };
+}
+
+function buildLaborSpec(line: Doc<"workLines">) {
+    return {
+        id: line.itemLaborId ?? line._id,
+        workType: line.workType,
+        role: line.role,
+        rateType: normalizeRateType(line.rateType),
+        quantity: line.plannedQuantity,
+        unitCost: line.plannedUnitCost,
+        description: line.description,
+    };
+}
+
+function buildSpecFromAccounting(args: {
+    item: Doc<"projectItems">;
+    section: Doc<"sections">;
+    materials: Doc<"materialLines">[];
+    workLines: Doc<"workLines">[];
+    baseSpec?: ItemSpecV2;
+}) {
+    const base = args.baseSpec ?? buildBaseItemSpec(args.item.title, args.item.typeKey);
+    return ItemSpecV2Schema.parse({
+        ...base,
+        identity: {
+            ...base.identity,
+            title: args.section.name,
+            typeKey: base.identity.typeKey,
+            description: args.section.description ?? base.identity.description,
+            accountingGroup: args.section.group,
+        },
+        breakdown: {
+            ...base.breakdown,
+            materials: args.materials.map(buildMaterialSpec),
+            labor: args.workLines.map(buildLaborSpec),
+        },
+        state: base.state ?? { openQuestions: [], assumptions: [], decisions: [] },
+        quote: base.quote ?? { includeInQuote: true },
+    });
+}
+
 // --------------------------------------------------------------------------
 // Queries
 // --------------------------------------------------------------------------
@@ -47,6 +111,31 @@ export const listApproved = query({
 
         items.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
         return items;
+    },
+});
+
+export const listApprovedWithSpecs = query({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const items = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", "approved"))
+            .collect();
+
+        items.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+
+        const results = [];
+        for (const item of items) {
+            let spec: ItemSpecV2;
+            if (item.approvedRevisionId) {
+                const revision = await ctx.db.get(item.approvedRevisionId);
+                spec = revision ? parseItemSpec(revision.data) : buildBaseItemSpec(item.title, item.typeKey);
+            } else {
+                spec = buildBaseItemSpec(item.title, item.typeKey);
+            }
+            results.push({ item, spec });
+        }
+        return results;
     },
 });
 
@@ -71,7 +160,36 @@ export const listSidebarTree = query({
         }
 
         items.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-        return { items };
+
+        if (!args.includeTab) {
+            return { items };
+        }
+
+        const drafts = await ctx.db
+            .query("itemRevisions")
+            .withIndex("by_project_tab_state", (q) =>
+                q.eq("projectId", args.projectId).eq("tabScope", args.includeTab).eq("state", "proposed")
+            )
+            .collect();
+
+        const draftByItemId = new Map<string, Doc<"itemRevisions">>();
+        for (const draft of drafts) {
+            const existing = draftByItemId.get(draft.itemId);
+            if (!existing || existing.revisionNumber < draft.revisionNumber) {
+                draftByItemId.set(draft.itemId, draft);
+            }
+        }
+
+        return {
+            items: items.map((item) => {
+                const draft = draftByItemId.get(item._id);
+                return {
+                    ...item,
+                    draftRevisionId: draft?._id ?? null,
+                    draftRevisionNumber: draft?.revisionNumber ?? null,
+                };
+            }),
+        };
     },
 });
 
@@ -248,6 +366,8 @@ export const upsertRevision = mutation({
         tabScope: tabScopeValidator,
         dataOrPatch: v.any(),
         changeReason: v.optional(v.string()),
+        createdByKind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
+        agentRunId: v.optional(v.id("agentRuns")),
     },
     handler: async (ctx, args) => {
         const item = await ctx.db.get(args.itemId);
@@ -266,7 +386,10 @@ export const upsertRevision = mutation({
             baseApprovedRevisionId: item.approvedRevisionId,
             data: spec,
             summaryMarkdown: args.changeReason,
-            createdBy: { kind: "user" },
+            createdBy: {
+                kind: args.createdByKind ?? "user",
+                agentRunId: args.agentRunId,
+            },
             createdAt: now,
         });
 
@@ -290,6 +413,7 @@ export const approveRevision = mutation({
         if (revision.itemId !== args.itemId) throw new Error("Revision does not belong to item");
 
         const now = Date.now();
+        const spec = parseItemSpec(revision.data);
         if (item.approvedRevisionId) {
             await ctx.db.patch(item.approvedRevisionId, { state: "superseded" });
         }
@@ -298,7 +422,16 @@ export const approveRevision = mutation({
         await ctx.db.patch(args.itemId, {
             approvedRevisionId: args.revisionId,
             status: "approved",
+            title: spec.identity.title,
+            typeKey: spec.identity.typeKey,
+            tags: spec.identity.tags,
             updatedAt: now,
+        });
+
+        await syncItemProjections(ctx, {
+            item: { ...item, title: spec.identity.title, typeKey: spec.identity.typeKey },
+            revision,
+            spec,
         });
 
         return { approvedRevisionId: args.revisionId };
@@ -379,6 +512,106 @@ export const confirmDelete = mutation({
     },
 });
 
+export const syncApproved = mutation({
+    args: { itemId: v.id("projectItems") },
+    handler: async (ctx, args) => {
+        const item = await ctx.db.get(args.itemId);
+        if (!item) throw new Error("Item not found");
+        if (!item.approvedRevisionId) throw new Error("Item has no approved revision");
+
+        const revision = await ctx.db.get(item.approvedRevisionId);
+        if (!revision) throw new Error("Revision not found");
+
+        const spec = parseItemSpec(revision.data);
+        return await syncItemProjections(ctx, {
+            item,
+            revision,
+            spec,
+            force: true,
+        });
+    },
+});
+
+export const syncFromAccountingSection = mutation({
+    args: {
+        itemId: v.id("projectItems"),
+        sectionId: v.id("sections"),
+    },
+    handler: async (ctx, args) => {
+        const item = await ctx.db.get(args.itemId);
+        const section = await ctx.db.get(args.sectionId);
+
+        if (!item) throw new Error("Item not found");
+        if (!section) throw new Error("Section not found");
+        if (item.projectId !== section.projectId) {
+            throw new Error("Item and section belong to different projects");
+        }
+
+        const [materials, workLines] = await Promise.all([
+            ctx.db
+                .query("materialLines")
+                .withIndex("by_section", (q) => q.eq("sectionId", args.sectionId))
+                .collect(),
+            ctx.db
+                .query("workLines")
+                .withIndex("by_section", (q) => q.eq("sectionId", args.sectionId))
+                .collect(),
+        ]);
+
+        let baseSpec: ItemSpecV2 | undefined;
+        if (item.approvedRevisionId) {
+            const approved = await ctx.db.get(item.approvedRevisionId);
+            if (approved) {
+                baseSpec = parseItemSpec(approved.data);
+            }
+        }
+
+        const spec = buildSpecFromAccounting({ item, section, materials, workLines, baseSpec });
+
+        const now = Date.now();
+        const revisionNumber = item.latestRevisionNumber + 1;
+
+        if (item.approvedRevisionId) {
+            await ctx.db.patch(item.approvedRevisionId, { state: "superseded" });
+        }
+
+        const revisionId = await ctx.db.insert("itemRevisions", {
+            projectId: item.projectId,
+            itemId: item._id,
+            tabScope: "accounting",
+            state: "approved",
+            revisionNumber,
+            baseApprovedRevisionId: item.approvedRevisionId,
+            data: spec,
+            summaryMarkdown: "Synced from accounting section.",
+            createdBy: { kind: "user" },
+            createdAt: now,
+        });
+
+        await ctx.db.patch(item._id, {
+            approvedRevisionId: revisionId,
+            latestRevisionNumber: revisionNumber,
+            status: "approved",
+            title: spec.identity.title,
+            typeKey: spec.identity.typeKey,
+            tags: spec.identity.tags,
+            updatedAt: now,
+        });
+
+        const revision = await ctx.db.get(revisionId);
+        if (!revision) throw new Error("Revision not found after insert");
+
+        await syncItemProjections(ctx, {
+            item: { ...item, title: spec.identity.title, typeKey: spec.identity.typeKey },
+            revision,
+            spec,
+            force: true,
+        });
+
+        return { revisionId };
+    },
+});
+
 // --------------------------------------------------------------------------
 // Actions
 // --------------------------------------------------------------------------
@@ -419,6 +652,7 @@ export const agentProposeItemUpdate = action({
             tabScope: args.tabScope,
             dataOrPatch: parsed.data.proposedData,
             changeReason: parsed.data.changeReason,
+            createdByKind: "agent",
         });
 
         return { revisionId: result.revisionId };

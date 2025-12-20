@@ -52,7 +52,7 @@ export const generateFromAccounting = mutation({
             .first();
 
         if (!activePlan) {
-            throw new Error("Approve a planning document first (Planning tab → Approve Plan).");
+            throw new Error("Approve a planning document first (Planning tab â†’ Approve Plan).");
         }
 
         const sections = await ctx.db
@@ -70,6 +70,16 @@ export const generateFromAccounting = mutation({
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
             .collect();
 
+        const items: Doc<"projectItems">[] = [];
+        for (const status of ["draft", "approved", "archived"] as const) {
+            const batch = await ctx.db
+                .query("projectItems")
+                .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+                .collect();
+            items.push(...batch);
+        }
+        const itemById = new Map(items.map((item) => [item._id, item]));
+
         const materialsBySection = new Map<string, Doc<"materialLines">[]>();
         for (const material of allMaterials) {
             if (!materialsBySection.has(material.sectionId)) materialsBySection.set(material.sectionId, []);
@@ -84,21 +94,57 @@ export const generateFromAccounting = mutation({
 
         const defaults = getProjectPricingDefaults(project);
 
-        const breakdown: QuoteBreakdownItem[] = sections
-            .slice()
-            .sort((a, b) => (a.group !== b.group ? a.group.localeCompare(b.group) : a.sortOrder - b.sortOrder))
-            .map((section) => {
-                const materials = materialsBySection.get(section._id) ?? [];
-                const work = workBySection.get(section._id) ?? [];
-                const stats = calculateSectionSnapshot(section, materials, work, defaults);
-                return {
-                    label: `${section.group}: ${section.name}`,
-                    amount: stats.plannedClientPrice,
+        const sectionsWithStats = sections.map((section) => {
+            const materials = materialsBySection.get(section._id) ?? [];
+            const work = workBySection.get(section._id) ?? [];
+            const stats = calculateSectionSnapshot(section, materials, work, defaults);
+            return { section, stats };
+        });
+
+        const hasItemLinks = sectionsWithStats.some((entry) => entry.section.itemId);
+        const breakdown: QuoteBreakdownItem[] = [];
+
+        if (hasItemLinks) {
+            const grouped = new Map<string, { label: string; amount: number }>();
+
+            for (const entry of sectionsWithStats) {
+                const itemId = entry.section.itemId;
+                const item = itemId ? itemById.get(itemId) ?? null : null;
+                const label = item ? item.title : `${entry.section.group}: ${entry.section.name}`;
+                const key = itemId ? String(itemId) : `section:${entry.section._id}`;
+
+                const current = grouped.get(key) ?? { label, amount: 0 };
+                current.amount += entry.stats.plannedClientPrice;
+                grouped.set(key, current);
+            }
+
+            for (const group of grouped.values()) {
+                if (group.amount <= 0) continue;
+                breakdown.push({
+                    label: group.label,
+                    amount: group.amount,
                     currency: defaults.currency,
                     notes: null,
-                };
-            })
-            .filter((item) => item.amount > 0);
+                });
+            }
+        } else {
+            breakdown.push(
+                ...sectionsWithStats
+                    .slice()
+                    .sort((a, b) =>
+                        a.section.group !== b.section.group
+                            ? a.section.group.localeCompare(b.section.group)
+                            : a.section.sortOrder - b.section.sortOrder,
+                    )
+                    .map((entry) => ({
+                        label: `${entry.section.group}: ${entry.section.name}`,
+                        amount: entry.stats.plannedClientPrice,
+                        currency: defaults.currency,
+                        notes: null,
+                    }))
+                    .filter((item) => item.amount > 0),
+            );
+        }
 
         const totalAmount = breakdown.reduce((sum, item) => sum + item.amount, 0);
         const clientDocumentText = buildClientDocument({
@@ -183,7 +229,8 @@ function buildWizardClientDocument(args: {
         lines.push("");
         lines.push(args.notesToClient.trim());
     }
-    return lines.join("\n");
+    return lines.join("
+");
 }
 
 export const createFromWizard = mutation({
@@ -316,3 +363,4 @@ export const attachPdf = mutation({
         return { pdfUrl };
     },
 });
+

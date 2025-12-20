@@ -350,6 +350,85 @@ export const linkTasksForProject = internalMutation({
     },
 });
 
+export const proposeFromConceptCardsForProject = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const cards = await ctx.db
+            .query("ideationConceptCards")
+            .withIndex("by_project_createdAt", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        if (cards.length === 0) {
+            return { projectId: args.projectId, created: 0, skipped: 0 };
+        }
+
+        const existingItems: Doc<"projectItems">[] = [];
+        for (const status of ["draft", "approved", "archived"] as const) {
+            const batch = await ctx.db
+                .query("projectItems")
+                .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+                .collect();
+            existingItems.push(...batch);
+        }
+
+        const usedCardIds = new Set(
+            existingItems
+                .filter((item) => item.createdFrom.source === "ideationCard" && item.createdFrom.sourceId)
+                .map((item) => item.createdFrom.sourceId as string),
+        );
+
+        let created = 0;
+        let skipped = 0;
+        const now = Date.now();
+
+        for (const card of cards) {
+            if (usedCardIds.has(card._id)) {
+                skipped += 1;
+                continue;
+            }
+
+            const spec = ItemSpecV2Schema.parse({
+                version: "ItemSpecV2",
+                identity: {
+                    title: card.title,
+                    typeKey: "concept",
+                    description: card.detailsMarkdown,
+                },
+                breakdown: { subtasks: [], materials: [], labor: [] },
+                state: { openQuestions: [], assumptions: [], decisions: [] },
+                quote: { includeInQuote: true },
+            });
+
+            const itemId = await ctx.db.insert("projectItems", {
+                projectId: args.projectId,
+                title: card.title,
+                typeKey: "concept",
+                status: "draft",
+                createdFrom: { source: "ideationCard", sourceId: card._id },
+                latestRevisionNumber: 1,
+                createdAt: now,
+                updatedAt: now,
+            });
+
+            await ctx.db.insert("itemRevisions", {
+                projectId: args.projectId,
+                itemId,
+                tabScope: "ideation",
+                state: "proposed",
+                revisionNumber: 1,
+                data: spec,
+                summaryMarkdown: "Proposed from ideation concept card.",
+                createdBy: { kind: "agent" },
+                createdAt: now,
+            });
+
+            created += 1;
+        }
+
+        return { projectId: args.projectId, created, skipped };
+    },
+});
+
 export const backfillFromAccounting = action({
     args: { projectId: v.optional(v.id("projects")) },
     handler: async (ctx, args) => {
@@ -382,6 +461,26 @@ export const linkTasksToItems = action({
             const result = await ctx.runMutation(internal.itemsMigrations.linkTasksForProject, {
                 projectId,
             });
+            results.push(result);
+        }
+
+        return results;
+    },
+});
+
+export const proposeFromConceptCards = action({
+    args: { projectId: v.optional(v.id("projects")) },
+    handler: async (ctx, args) => {
+        const projectIds = args.projectId
+            ? [args.projectId]
+            : await ctx.runQuery(internal.itemsMigrations.listProjectIds, {});
+
+        const results = [];
+        for (const projectId of projectIds) {
+            const result = await ctx.runMutation(
+                internal.itemsMigrations.proposeFromConceptCardsForProject,
+                { projectId },
+            );
             results.push(result);
         }
 

@@ -15,6 +15,8 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
   const updateProject = useMutation(api.projects.updateProject);
   const updateSection = useMutation(api.accounting.updateSection);
   const deleteSection = useMutation(api.accounting.deleteSection);
+  const syncApproved = useMutation(api.items.syncApproved);
+  const syncFromAccounting = useMutation(api.items.syncFromAccountingSection);
 
   const [newSectionGroup, setNewSectionGroup] = useState("General");
   const [newSectionName, setNewSectionName] = useState("");
@@ -238,6 +240,12 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
                     onDelete={async (args) => {
                         await deleteSection(args);
                     }}
+                    onSyncToItem={async ({ itemId }) => {
+                        await syncApproved({ itemId });
+                    }}
+                    onSyncFromAccounting={async ({ itemId, sectionId }) => {
+                        await syncFromAccounting({ itemId, sectionId });
+                    }}
                 />
             ))}
             {/* Totals Row */}
@@ -276,8 +284,10 @@ function SectionRow(props: {
         };
     }) => Promise<void>;
     onDelete: (args: { id: Id<"sections"> }) => Promise<void>;
+    onSyncToItem: (args: { itemId: Id<"projectItems"> }) => Promise<void>;
+    onSyncFromAccounting: (args: { itemId: Id<"projectItems">; sectionId: Id<"sections"> }) => Promise<void>;
 }) {
-    const { item, formatMoney, onUpdate, onDelete } = props;
+    const { item, formatMoney, onUpdate, onDelete, onSyncToItem, onSyncFromAccounting } = props;
     const { section, stats } = item;
 
     const [isEditing, setIsEditing] = useState(false);
@@ -369,6 +379,9 @@ function SectionRow(props: {
                     <div className="flex flex-col">
                         <span>{section.name}</span>
                         {section.description && <span className="text-xs text-gray-500">{section.description}</span>}
+                        {item.item && (
+                            <span className="text-xs text-blue-600">Item: {item.item.title}</span>
+                        )}
                     </div>
                 )}
             </td>
@@ -381,7 +394,29 @@ function SectionRow(props: {
             <td className="px-3 py-2 text-right font-bold bg-yellow-50/50">{formatMoney(stats.plannedClientPrice)}</td>
             <td className="px-3 py-2 text-right">
                 {!isEditing ? (
-                    <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition">
+                    <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition">
+                        {item.item && (
+                            <>
+                                <button
+                                    onClick={async () => {
+                                        await onSyncFromAccounting({ itemId: item.item!._id, sectionId: section._id });
+                                    }}
+                                    className="text-[11px] text-blue-700 hover:underline"
+                                    title="Sync item from accounting"
+                                >
+                                    Sync from accounting
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        await onSyncToItem({ itemId: item.item!._id });
+                                    }}
+                                    className="text-[11px] text-blue-700 hover:underline"
+                                    title="Sync accounting from item"
+                                >
+                                    Sync to accounting
+                                </button>
+                            </>
+                        )}
                         <button
                             onClick={() => setIsEditing(true)}
                             className="p-1 rounded hover:bg-gray-200"

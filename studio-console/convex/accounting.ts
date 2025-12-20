@@ -18,6 +18,16 @@ export const getProjectAccounting = query({
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .collect();
 
+    const items: Doc<"projectItems">[] = [];
+    for (const status of ["draft", "approved", "archived"] as const) {
+      const batch = await ctx.db
+        .query("projectItems")
+        .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+        .collect();
+      items.push(...batch);
+    }
+    const itemById = new Map(items.map((item) => [item._id, item]));
+
     // Fetch all lines for the project in bulk (using the denormalized projectId index)
     const allMaterials = await ctx.db
       .query("materialLines")
@@ -53,11 +63,13 @@ export const getProjectAccounting = query({
       const wrk = workBySection.get(s._id) || [];
       const snapshot = calculateSectionSnapshot(s, mats, wrk, defaults);
       
+      const linkedItem = s.itemId ? itemById.get(s.itemId) ?? null : null;
       return {
         section: s,
         materials: mats,
         work: wrk,
-        stats: snapshot
+        stats: snapshot,
+        item: linkedItem,
       };
     });
 
@@ -117,6 +129,7 @@ export const addSection = mutation({
     description: v.optional(v.string()),
     sortOrder: v.number(),
     pricingMode: v.union(v.literal("estimated"), v.literal("actual"), v.literal("mixed")),
+    itemId: v.optional(v.id("projectItems")),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("sections", args);
@@ -165,6 +178,8 @@ export const addMaterialLine = mutation({
   args: {
     sectionId: v.id("sections"),
     projectId: v.id("projects"),
+    itemId: v.optional(v.id("projectItems")),
+    itemMaterialId: v.optional(v.string()),
     category: v.string(),
     label: v.string(),
     description: v.optional(v.string()),
@@ -196,6 +211,8 @@ export const updateMaterialLine = mutation({
   args: {
     id: v.id("materialLines"),
     updates: v.object({
+        itemId: v.optional(v.id("projectItems")),
+        itemMaterialId: v.optional(v.string()),
         category: v.optional(v.string()),
         label: v.optional(v.string()),
         description: v.optional(v.string()),
@@ -237,6 +254,8 @@ export const addWorkLine = mutation({
   args: {
     sectionId: v.id("sections"),
     projectId: v.id("projects"),
+    itemId: v.optional(v.id("projectItems")),
+    itemLaborId: v.optional(v.string()),
     workType: v.string(),
     role: v.string(),
     rateType: v.string(),
@@ -254,6 +273,8 @@ export const updateWorkLine = mutation({
   args: {
     id: v.id("workLines"),
     updates: v.object({
+        itemId: v.optional(v.id("projectItems")),
+        itemLaborId: v.optional(v.string()),
         workType: v.optional(v.string()),
         role: v.optional(v.string()),
         rateType: v.optional(v.string()),

@@ -12,6 +12,8 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
   const updateWorkLine = useMutation(api.accounting.updateWorkLine);
   const deleteWorkLine = useMutation(api.accounting.deleteWorkLine);
   const estimateSection = useAction(api.agents.estimator.run);
+  const syncApproved = useMutation(api.items.syncApproved);
+  const syncFromAccounting = useMutation(api.items.syncFromAccountingSection);
 
   const [filterSection, setFilterSection] = useState<string>("all");
   const [estimatingIds, setEstimatingIds] = useState<Set<string>>(new Set());
@@ -41,6 +43,7 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
     await addWorkLine({
       projectId,
       sectionId,
+      itemId: data.sections.find((s) => s.section._id === sectionId)?.section.itemId ?? undefined,
       workType: "studio",
       role: "Art worker",
       rateType: "hour",
@@ -79,7 +82,12 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
             return (
                 <div key={section._id} className="border rounded-lg overflow-hidden">
                     <div className="bg-gray-50 px-4 py-2 border-b flex justify-between items-center">
-                        <h3 className="font-medium text-gray-700">{section.name}</h3>
+                        <div>
+                            <h3 className="font-medium text-gray-700">{section.name}</h3>
+                            {item.item && (
+                                <div className="text-xs text-blue-600">Item: {item.item.title}</div>
+                            )}
+                        </div>
                          <div className="flex space-x-2">
                              <button 
                                 className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded flex items-center hover:bg-purple-200 disabled:opacity-50"
@@ -89,6 +97,24 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
                                 <Wand2 className={`w-3 h-3 mr-1 ${estimatingIds.has(section._id) ? "animate-spin" : ""}`} /> 
                                 {estimatingIds.has(section._id) ? "Estimating..." : "Auto-Estimate"}
                              </button>
+                             {item.item && (
+                                <>
+                                    <button
+                                        className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200"
+                                        onClick={() => syncFromAccounting({ itemId: item.item!._id, sectionId: section._id })}
+                                        title="Sync item from accounting"
+                                    >
+                                        Sync from accounting
+                                    </button>
+                                    <button
+                                        className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200"
+                                        onClick={() => syncApproved({ itemId: item.item!._id })}
+                                        title="Sync accounting from item"
+                                    >
+                                        Sync to accounting
+                                    </button>
+                                </>
+                             )}
                              <button 
                                 onClick={() => handleAddLine(section._id)}
                                 className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 flex items-center"

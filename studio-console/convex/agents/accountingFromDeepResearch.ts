@@ -3,6 +3,9 @@ import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
+import { ItemSpecV2Schema } from "../lib/zodSchemas";
+import { syncItemProjections } from "../lib/itemProjections";
+import type { Doc } from "../_generated/dataModel";
 
 const AccountingFromDeepResearchSchema = z.object({
     sections: z.array(
@@ -67,6 +70,48 @@ function buildPrompt(args: {
     ].join("\n");
 }
 
+function buildItemSpec(section: AccountingFromDeepResearch["sections"][number]) {
+    return ItemSpecV2Schema.parse({
+        version: "ItemSpecV2",
+        identity: {
+            title: section.name,
+            typeKey: section.group,
+            description: section.description ?? undefined,
+            accountingGroup: section.group,
+        },
+        breakdown: {
+            subtasks: [],
+            materials: section.materials.map((material, index) => ({
+                id: `mat:${material.label}:${index + 1}`,
+                category: material.category,
+                label: material.label,
+                description: material.description ?? undefined,
+                qty: material.quantity,
+                unit: material.unit,
+                unitCostEstimate: material.unitCost,
+                vendorName: material.vendorName ?? undefined,
+            })),
+            labor: section.work.map((workLine, index) => ({
+                id: `labor:${workLine.role}:${index + 1}`,
+                workType: workLine.workType,
+                role: workLine.role,
+                rateType: workLine.rateType,
+                quantity: workLine.quantity,
+                unitCost: workLine.unitCost,
+                description: workLine.description ?? undefined,
+            })),
+        },
+        state: {
+            openQuestions: [],
+            assumptions: [],
+            decisions: [],
+        },
+        quote: {
+            includeInQuote: true,
+        },
+    });
+}
+
 export const getContext = internalQuery({
     args: {
         projectId: v.id("projects"),
@@ -96,6 +141,21 @@ export const applyGeneratedAccounting = internalMutation({
         const payload = args.payload as AccountingFromDeepResearch;
 
         if (args.replaceExisting) {
+            const items: Doc<"projectItems">[] = [];
+            for (const status of ["draft", "approved", "archived"] as const) {
+                const batch = await ctx.db
+                    .query("projectItems")
+                    .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+                    .collect();
+                items.push(...batch);
+            }
+
+            for (const item of items) {
+                if (item.status !== "archived") {
+                    await ctx.db.patch(item._id, { status: "archived", archivedAt: Date.now(), updatedAt: Date.now() });
+                }
+            }
+
             const materials = await ctx.db
                 .query("materialLines")
                 .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
@@ -117,47 +177,48 @@ export const applyGeneratedAccounting = internalMutation({
 
         let sortOrder = 1;
         for (const section of payload.sections) {
-            const sectionId = await ctx.db.insert("sections", {
+            const spec = buildItemSpec(section);
+            const now = Date.now();
+
+            const itemId = await ctx.db.insert("projectItems", {
                 projectId: args.projectId,
-                group: section.group,
-                name: section.name,
-                description: section.description ?? undefined,
+                title: spec.identity.title,
+                typeKey: spec.identity.typeKey,
+                status: "approved",
                 sortOrder,
-                pricingMode: "estimated",
+                createdFrom: { source: "accountingBackfill" },
+                latestRevisionNumber: 1,
+                createdAt: now,
+                updatedAt: now,
             });
             sortOrder += 1;
 
-            for (const material of section.materials) {
-                await ctx.db.insert("materialLines", {
-                    projectId: args.projectId,
-                    sectionId,
-                    category: material.category,
-                    label: material.label,
-                    description: material.description ?? undefined,
-                    vendorName: material.vendorName ?? undefined,
-                    unit: material.unit,
-                    plannedQuantity: material.quantity,
-                    plannedUnitCost: material.unitCost,
-                    status: "planned",
-                });
-            }
+            const revisionId = await ctx.db.insert("itemRevisions", {
+                projectId: args.projectId,
+                itemId,
+                tabScope: "accounting",
+                state: "approved",
+                revisionNumber: 1,
+                data: spec,
+                summaryMarkdown: "Generated from deep-research report.",
+                createdBy: { kind: "agent" },
+                createdAt: now,
+            });
 
-            for (const workLine of section.work) {
-                await ctx.db.insert("workLines", {
-                    projectId: args.projectId,
-                    sectionId,
-                    workType: workLine.workType,
-                    role: workLine.role,
-                    rateType: workLine.rateType,
-                    plannedQuantity: workLine.rateType === "flat" ? 1 : workLine.quantity,
-                    plannedUnitCost: workLine.unitCost,
-                    status: "planned",
-                    description: workLine.description ?? undefined,
-                });
+            await ctx.db.patch(itemId, {
+                approvedRevisionId: revisionId,
+                status: "approved",
+                updatedAt: now,
+            });
+
+            const item = await ctx.db.get(itemId);
+            const revision = await ctx.db.get(revisionId);
+            if (item && revision) {
+                await syncItemProjections(ctx, { item, revision, spec, force: true });
             }
         }
 
-        return { sectionsCreated: payload.sections.length };
+        return { itemsCreated: payload.sections.length };
     },
 });
 

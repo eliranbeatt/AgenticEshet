@@ -24,12 +24,17 @@ export default function GanttView() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
     const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
+    const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
     const updateTask = useMutation(api.tasks.updateTask);
 
     const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Day);
 
     const ganttTasks: Task[] = useMemo(() => {
         if (!tasks) return [];
+        const itemMap = new Map<string, string>();
+        for (const item of itemsData?.items ?? []) {
+            itemMap.set(item._id, item.title);
+        }
         
         return tasks.map((t) => {
             // Default to today if no start date, or keep existing
@@ -47,7 +52,7 @@ export default function GanttView() {
             return {
                 start,
                 end,
-                name: t.title,
+                name: t.itemId && itemMap.has(t.itemId) ? `[${itemMap.get(t.itemId)}] ${t.title}` : t.title,
                 id: t._id,
                 type: "task",
                 progress: t.status === "done" ? 100 : t.status === "in_progress" ? 50 : 0,

@@ -29,13 +29,15 @@ type UpdateTaskInput = {
     accountingSectionId?: Id<"sections">;
     accountingLineType?: "material" | "work";
     accountingLineId?: Id<"materialLines"> | Id<"workLines">;
+    itemId?: Id<"projectItems">;
+    itemSubtaskId?: string;
 };
 
 type DeleteTaskInput = {
     taskId: Id<"tasks">;
 };
 
-type FilterField = "none" | "section" | "priority" | "category" | "status" | "source";
+type FilterField = "none" | "section" | "item" | "priority" | "category" | "status" | "source";
 type SortField = "updatedAt" | "createdAt" | "priority" | "title" | "category" | "section";
 type SortOrder = "asc" | "desc";
 
@@ -61,6 +63,7 @@ export default function TasksPage() {
 
     const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
     const accountingData = useQuery(api.accounting.getProjectAccounting, { projectId });
+    const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
     const runArchitect = useAction(api.agents.architect.run);
     const updateTask = useMutation(api.tasks.updateTask);
     const createTask = useMutation(api.tasks.createTask);
@@ -90,6 +93,8 @@ export default function TasksPage() {
         if (!accountingData?.sections) return [];
         return accountingData.sections as unknown as AccountingSectionRow[];
     }, [accountingData?.sections]);
+
+    const items = useMemo(() => itemsData?.items ?? [], [itemsData?.items]);
 
     const sectionLabelById = useMemo(() => {
         const map = new Map<string, string>();
@@ -134,6 +139,11 @@ export default function TasksPage() {
         if (filterField === "section") {
             if (filterValue === "unassigned") return tasks.filter((task: Doc<"tasks">) => !task.accountingSectionId);
             return tasks.filter((task: Doc<"tasks">) => task.accountingSectionId === filterValue);
+        }
+
+        if (filterField === "item") {
+            if (filterValue === "unassigned") return tasks.filter((task: Doc<"tasks">) => !task.itemId);
+            return tasks.filter((task: Doc<"tasks">) => task.itemId === filterValue);
         }
 
         if (filterField === "priority") return tasks.filter((task: Doc<"tasks">) => task.priority === filterValue);
@@ -280,6 +290,7 @@ export default function TasksPage() {
 
             <TaskControlsBar
                 sections={accountingSections.map((row) => row.section)}
+                items={items}
                 filterField={filterField}
                 filterValue={filterValue}
                 onChangeFilterField={(next) => {
@@ -311,6 +322,7 @@ export default function TasksPage() {
                                     await deleteTask(input);
                                 }}
                                 sections={accountingSections}
+                                items={items}
                                 sectionLabelById={sectionLabelById}
                                 accountingItemById={accountingItemById}
                                 taskNumberById={taskNumberById}
@@ -345,6 +357,7 @@ function KanbanColumn({
     onUpdate,
     onDelete,
     sections,
+    items,
     sectionLabelById,
     accountingItemById,
     activeTaskId,
@@ -356,6 +369,7 @@ function KanbanColumn({
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
     onDelete: (input: DeleteTaskInput) => Promise<void>;
     sections: AccountingSectionRow[];
+    items: Array<Doc<"projectItems">>;
     sectionLabelById: Map<string, string>;
     accountingItemById: Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>;
     activeTaskId: Id<"tasks"> | null;
@@ -377,6 +391,7 @@ function KanbanColumn({
                         key={task._id}
                         task={task}
                         sections={sections}
+                        items={items}
                         sectionLabelById={sectionLabelById}
                         accountingItemById={accountingItemById}
                         onUpdate={onUpdate}
@@ -394,6 +409,7 @@ function KanbanColumn({
 function TaskCard({
     task,
     sections,
+    items,
     sectionLabelById,
     accountingItemById,
     onUpdate,
@@ -404,6 +420,7 @@ function TaskCard({
 }: {
     task: Doc<"tasks">;
     sections: AccountingSectionRow[];
+    items: Array<Doc<"projectItems">>;
     sectionLabelById: Map<string, string>;
     accountingItemById: Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>;
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
@@ -423,6 +440,7 @@ function TaskCard({
 
     const sectionLabel = task.accountingSectionId ? sectionLabelById.get(task.accountingSectionId) : null;
     const accountingItem = task.accountingLineId ? accountingItemById.get(task.accountingLineId) : null;
+    const itemLabel = task.itemId ? items.find((item) => item._id === task.itemId)?.title ?? null : null;
     const accountingChipLabel = (() => {
         if (sectionLabel && accountingItem) return `Accounting: ${sectionLabel} / ${accountingItem.label}`;
         if (sectionLabel) return `Accounting: ${sectionLabel}`;
@@ -451,6 +469,7 @@ function TaskCard({
     })();
 
     const itemValue = task.accountingLineId && task.accountingLineType ? `${task.accountingLineType}:${task.accountingLineId}` : "";
+    const itemLinkOptions = items.map((item) => ({ label: item.title, value: item._id }));
 
     const dependencyText = task.dependencies && task.dependencies.length > 0
         ? "Requires: " + task.dependencies.map(id => "#" + (taskNumberById.get(id) ?? "?")).join(", ")
@@ -507,6 +526,11 @@ function TaskCard({
                 <span className="px-2 py-0.5 rounded-full bg-gray-50">
                     {accountingChipLabel}
                 </span>
+                {itemLabel && (
+                    <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                        Item: {itemLabel}
+                    </span>
+                )}
             </div>
             {dependencyText && (
                 <p className="text-[11px] text-gray-500 mb-2">
@@ -526,6 +550,19 @@ function TaskCard({
                     value={task.priority}
                     options={priorityOptions}
                     onChange={(value) => onUpdate({ taskId: task._id, priority: value as Doc<"tasks">["priority"] })}
+                />
+                <InlineSelect
+                    label="Item"
+                    value={task.itemId ?? ""}
+                    options={itemLinkOptions}
+                    includeUnassigned
+                    onChange={(value) =>
+                        onUpdate({
+                            taskId: task._id,
+                            itemId: value ? (value as Id<"projectItems">) : undefined,
+                            itemSubtaskId: undefined,
+                        })
+                    }
                 />
                 <InlineSelect
                     label="Section"
@@ -629,6 +666,7 @@ function InlineSelect({
 
 function TaskControlsBar({
     sections,
+    items,
     filterField,
     filterValue,
     onChangeFilterField,
@@ -640,6 +678,7 @@ function TaskControlsBar({
     totalTasks,
 }: {
     sections: Doc<"sections">[];
+    items: Array<Doc<"projectItems">>;
     filterField: FilterField;
     filterValue: string;
     onChangeFilterField: (field: FilterField) => void;
@@ -657,6 +696,13 @@ function TaskControlsBar({
                 { label: "All", value: "" },
                 { label: "Unassigned", value: "unassigned" },
                 ...sections.map((section) => ({ label: `[${section.group}] ${section.name}`, value: section._id })),
+            ];
+        }
+        if (filterField === "item") {
+            return [
+                { label: "All", value: "" },
+                { label: "Unassigned", value: "unassigned" },
+                ...items.map((item) => ({ label: item.title, value: item._id })),
             ];
         }
         if (filterField === "priority") return [{ label: "All", value: "" }, ...priorityOptions.map((p) => ({ label: p, value: p }))];
@@ -681,6 +727,7 @@ function TaskControlsBar({
                         options={[
                             { label: "None", value: "none" },
                             { label: "Section", value: "section" },
+                            { label: "Item", value: "item" },
                             { label: "Priority", value: "priority" },
                             { label: "Category", value: "category" },
                             { label: "Status", value: "status" },

@@ -8,6 +8,7 @@ export const TaskBreakdownSchema = z.object({
         description: z.string(),
         category: z.enum(["Logistics", "Creative", "Finance", "Admin", "Studio"]),
         priority: z.enum(["High", "Medium", "Low"]),
+        itemTitle: z.string().nullable().describe("Project item title to link this task to (null if none)"),
         accountingSectionName: z.string().nullable().describe("Accounting section label to link this task to (null if none)"),
         accountingItemLabel: z.string().nullable().describe("Accounting item label/role within that section (null if none)"),
         accountingItemType: z.enum(["material", "work"]).nullable().describe("Accounting item type (null if none)"),

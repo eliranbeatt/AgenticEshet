@@ -139,6 +139,17 @@ Flow:
 Output: QuoteSchema JSON with coherent totals.`,
                 metadata: { phase: "quote" },
             },
+            {
+                name: "item_editor",
+                type: "agent_system",
+                content: `You are an item editor assisting a creative studio.
+Goal:
+- Update a single project item based on user input and existing item context.
+- Preserve existing data unless the user explicitly changes it.
+Style:
+- Keep responses short, specific, and in Hebrew unless the user requests English.`,
+                metadata: { phase: "clarification" },
+            },
         ];
 
         for (const skill of skills) {

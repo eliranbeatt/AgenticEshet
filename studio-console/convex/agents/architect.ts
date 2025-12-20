@@ -43,6 +43,15 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
             .collect();
 
+        const items: Doc<"projectItems">[] = [];
+        for (const status of ["draft", "approved", "archived"] as const) {
+            const batch = await ctx.db
+                .query("projectItems")
+                .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+                .collect();
+            items.push(...batch);
+        }
+
         const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
             projectId: args.projectId,
             limit: 3,
@@ -60,6 +69,7 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
             materialLines,
             workLines,
             existingTasks,
+            items,
             knowledgeDocs,
             systemPrompt: skill?.content || "You are a Senior Solutions Architect.",
         };
@@ -75,6 +85,7 @@ export const saveTasks = internalMutation({
             description: v.string(),
             category: v.union(v.literal("Logistics"), v.literal("Creative"), v.literal("Finance"), v.literal("Admin"), v.literal("Studio")),
             priority: v.union(v.literal("High"), v.literal("Medium"), v.literal("Low")),
+            itemTitle: v.optional(v.union(v.string(), v.null())),
             accountingSectionName: v.optional(v.union(v.string(), v.null())),
             accountingItemLabel: v.optional(v.union(v.string(), v.null())),
             accountingItemType: v.optional(v.union(v.literal("material"), v.literal("work"), v.null())),
@@ -122,6 +133,15 @@ export const saveTasks = internalMutation({
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
             .collect();
 
+        const items: Doc<"projectItems">[] = [];
+        for (const status of ["draft", "approved", "archived"] as const) {
+            const batch = await ctx.db
+                .query("projectItems")
+                .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+                .collect();
+            items.push(...batch);
+        }
+
         const normalizeKey = (value: string) => value.trim().toLowerCase();
 
         const sectionNameCounts = new Map<string, number>();
@@ -155,6 +175,20 @@ export const saveTasks = internalMutation({
             workBySection.get(sectionId)!.set(normalizeKey(line.role), line._id);
         }
 
+        const itemTitleCounts = new Map<string, number>();
+        for (const item of items) {
+            const key = normalizeKey(item.title);
+            itemTitleCounts.set(key, (itemTitleCounts.get(key) ?? 0) + 1);
+        }
+
+        const itemTitleLookupUnique = new Map<string, Id<"projectItems">>();
+        for (const item of items) {
+            const key = normalizeKey(item.title);
+            if ((itemTitleCounts.get(key) ?? 0) === 1) {
+                itemTitleLookupUnique.set(key, item._id);
+            }
+        }
+
         const resolveSectionId = (raw?: string) => {
             if (!raw) return undefined;
             const key = normalizeKey(raw);
@@ -166,6 +200,21 @@ export const saveTasks = internalMutation({
                 for (const [sKey, sId] of sectionLookup.entries()) {
                     if (sKey.includes(key) || key.includes(sKey)) {
                         match = sId;
+                        break;
+                    }
+                }
+            }
+            return match;
+        };
+
+        const resolveItemId = (raw?: string) => {
+            if (!raw) return undefined;
+            const key = normalizeKey(raw);
+            let match = itemTitleLookupUnique.get(key);
+            if (!match) {
+                for (const [titleKey, itemId] of itemTitleLookupUnique.entries()) {
+                    if (titleKey.includes(key) || key.includes(titleKey)) {
+                        match = itemId;
                         break;
                     }
                 }
@@ -200,6 +249,7 @@ export const saveTasks = internalMutation({
             const t = tasks[i];
             const normalizedTitle = t.title.trim().toLowerCase();
             const sectionId = resolveSectionId(t.accountingSectionName);
+            const itemId = resolveItemId(t.itemTitle ?? undefined);
 
             let accountingLineType: "material" | "work" | undefined;
             let accountingLineId: Id<"materialLines"> | Id<"workLines"> | undefined;
@@ -218,7 +268,7 @@ export const saveTasks = internalMutation({
 
             if (existingTask && existingTask.source === "agent") {
                 taskId = existingTask.id;
-                await ctx.db.patch(taskId, {
+                const patch: Partial<Doc<"tasks">> = {
                     description: t.description,
                     category: t.category,
                     priority: t.priority,
@@ -226,6 +276,12 @@ export const saveTasks = internalMutation({
                     accountingLineType,
                     accountingLineId,
                     estimatedDuration: t.estimatedDuration,
+                };
+                if (itemId) {
+                    patch.itemId = itemId;
+                }
+                await ctx.db.patch(taskId, {
+                    ...patch,
                     updatedAt: Date.now(),
                 });
                 if (!existingTasks.find(et => et._id === taskId)?.taskNumber) {
@@ -240,6 +296,7 @@ export const saveTasks = internalMutation({
                     description: t.description,
                     category: t.category,
                     priority: t.priority,
+                    itemId,
                     accountingLineId,
                     status: "todo",
                     source: "agent",
@@ -359,7 +416,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         }
 
         try {
-            const { project, latestPlan, systemPrompt, sections, materialLines, workLines, existingTasks } = await ctx.runQuery(internal.agents.architect.getContext, {
+            const { project, latestPlan, systemPrompt, sections, materialLines, workLines, existingTasks, items } = await ctx.runQuery(internal.agents.architect.getContext, {
                 projectId: args.projectId,
             });
 
@@ -433,10 +490,20 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                     .join("\n")
                 : "- No accounting sections found. If a task cannot be linked, set accountingSectionName to null.";
 
+            const itemsSummary = items.length
+                ? items
+                    .filter((item: Doc<"projectItems">) => item.status !== "archived")
+                    .map((item: Doc<"projectItems">) => `- ${item.title} (${item.typeKey})`)
+                    .join("\n")
+                : "- No project items found. If a task cannot be linked, set itemTitle to null.";
+
             const userPrompt = `Project: ${project.name}
     
 Plan Content:
 ${latestPlan.contentMarkdown}
+
+Project Items (use exact titles when linking tasks via itemTitle):
+${itemsSummary}
 
 Accounting Sections (IMPORTANT: Use the exact label format "[Group] Name" when linking tasks):
 ${accountingSummary}
@@ -467,8 +534,11 @@ REQUIRED: Dependencies & Estimations
    - Try to link every task to an Accounting Section if possible. 
    - Use the exact string from the "Accounting Sections" list or a close match (e.g. "[Studio Elements] Paint").
    - If a specific material or work role applies, include it.
+4. **Item Linking (preferred)**:
+   - When possible, set itemTitle to the matching Project Item title (exact match preferred).
+   - If no item is relevant, set itemTitle to null.
 
-4. **Categories & Priorities (CRITICAL)**:
+5. **Categories & Priorities (CRITICAL)**:
    - You MUST use exactly one of these categories: "Logistics", "Creative", "Finance", "Admin", "Studio".
    - You MUST use exactly one of these priorities: "High", "Medium", "Low".
 
@@ -499,11 +569,13 @@ When relevant, set accountingSectionName to one of the Accounting Sections above
             const normalizedTasks = result.tasks.map((task) => {
                 const accountingSectionName = task.accountingSectionName?.trim();
                 const accountingItemLabel = task.accountingItemLabel?.trim();
+                const itemTitle = task.itemTitle?.trim();
                 return {
                     ...task,
                     accountingSectionName: accountingSectionName && accountingSectionName.length > 0 ? accountingSectionName : undefined,
                     accountingItemLabel: accountingItemLabel && accountingItemLabel.length > 0 ? accountingItemLabel : undefined,
                     accountingItemType: task.accountingItemType ?? undefined,
+                    itemTitle: itemTitle && itemTitle.length > 0 ? itemTitle : undefined,
                 };
             });
 

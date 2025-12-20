@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, query } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
-import { QuoteSchema } from "../lib/zodSchemas";
+import { ItemSpecV2Schema, QuoteSchema, type ItemSpecV2 } from "../lib/zodSchemas";
 import { type Doc } from "../_generated/dataModel";
 
 type QuoteBreakdownItem = {
@@ -26,11 +26,24 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
         const project = await ctx.db.get(args.projectId);
         if (!project) throw new Error("Project not found");
 
-        // Get tasks to base the quote on
-        const tasks = await ctx.db
-            .query("tasks")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        const items = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", "approved"))
             .collect();
+        const itemSpecs: Array<{ item: Doc<"projectItems">; spec: ItemSpecV2 | null }> = [];
+        for (const item of items) {
+            if (!item.approvedRevisionId) {
+                itemSpecs.push({ item, spec: null });
+                continue;
+            }
+            const revision = await ctx.db.get(item.approvedRevisionId);
+            if (!revision) {
+                itemSpecs.push({ item, spec: null });
+                continue;
+            }
+            const parsed = ItemSpecV2Schema.safeParse(revision.data);
+            itemSpecs.push({ item, spec: parsed.success ? parsed.data : null });
+        }
 
         const skill = await ctx.db
             .query("skills")
@@ -45,7 +58,8 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
 
         return {
             project,
-            tasks,
+            items,
+            itemSpecs,
             knowledgeDocs,
             systemPrompt: skill?.content || "You are a Cost Estimator.",
         };
@@ -146,7 +160,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         }
 
         try {
-            const { project, tasks, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
+            const { project, items, itemSpecs, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
                 projectId: args.projectId,
             });
 
@@ -169,9 +183,16 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 includeSummaries: true,
             });
 
-            const taskSummary = tasks
-                .map((task: Doc<"tasks">) => `- ${task.title} [${task.category}/${task.priority}]`)
-                .join("\n");
+            const itemSummary = itemSpecs
+                .filter((entry) => entry.spec?.quote?.includeInQuote !== false)
+                .map((entry) => {
+                    if (!entry.spec) {
+                        return `- ${entry.item.title} (${entry.item.typeKey})`;
+                    }
+                    const description = entry.spec.identity.description ?? "";
+                    return `- ${entry.spec.identity.title} (${entry.spec.identity.typeKey})${description ? `: ${description}` : ""}`;
+                });
+            const scopeSummary = itemSummary.length > 0 ? itemSummary.join("\n") : "- No approved items found.";
 
             const knowledgeSummary = knowledgeDocs.length
                 ? knowledgeDocs
@@ -187,8 +208,8 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
 
             const userPrompt = `Project: ${project.name}
 Details: ${JSON.stringify(project.details)}
-Tasks/Scope:
-${taskSummary}
+Items/Scope:
+${scopeSummary}
 
 Pricing Intelligence:
 ${knowledgeSummary}

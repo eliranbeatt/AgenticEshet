@@ -17,6 +17,7 @@ export default function IdeationPage() {
     const runIdeation = useAction(api.agents.ideation.send);
     const conceptCards = useQuery(api.ideation.listConceptCards, { projectId });
     const clearCards = useMutation(api.ideation.clearConceptCards);
+    const createItemFromConcept = useMutation(api.items.createFromConceptCard);
 
     const [threadId, setThreadId] = useState<Id<"chatThreads"> | null>(null);
     const [scenarioId, setScenarioId] = useState<Id<"projectScenarios"> | null>(null);
@@ -36,7 +37,7 @@ export default function IdeationPage() {
     }, [conceptCards, threadId]);
 
     if (!threadId || !scenarioId) {
-        return <div className="p-4 text-sm text-gray-500">Initializing ideation…</div>;
+        return <div className="p-4 text-sm text-gray-500">Initializing ideation...</div>;
     }
 
     return (
@@ -52,7 +53,7 @@ export default function IdeationPage() {
 
                 <AgentChatThread
                     threadId={threadId}
-                    placeholder="Describe the event, vibe, constraints…"
+                    placeholder="Describe the event, vibe, constraints"
                     onSend={async (content) => {
                         await runIdeation({ threadId, userContent: content });
                     }}
@@ -80,7 +81,7 @@ export default function IdeationPage() {
 
                 <div className="space-y-3">
                     {conceptCards === undefined ? (
-                        <div className="text-sm text-gray-500">Loading…</div>
+                        <div className="text-sm text-gray-500">Loading...</div>
                     ) : cardsByThread.length === 0 ? (
                         <div className="bg-white border rounded p-4 text-sm text-gray-500">
                             No concept cards yet. Send a message to generate 3 concepts.
@@ -99,6 +100,21 @@ export default function IdeationPage() {
                                 </div>
                                 <div className="prose prose-sm max-w-none mt-3">
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{card.detailsMarkdown}</ReactMarkdown>
+                                </div>
+                                <div className="mt-3 flex justify-end">
+                                    <button
+                                        type="button"
+                                        className="text-xs px-3 py-1 rounded border bg-white hover:bg-gray-50"
+                                        onClick={async () => {
+                                            await createItemFromConcept({
+                                                projectId,
+                                                conceptCardId: card._id,
+                                            });
+                                            alert("Item draft created from this concept card.");
+                                        }}
+                                    >
+                                        Create item
+                                    </button>
                                 </div>
                             </div>
                         ))

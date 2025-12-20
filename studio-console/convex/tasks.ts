@@ -61,6 +61,8 @@ export const createTask = mutation({
         accountingSectionId: v.optional(v.id("sections")),
         accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
+        itemId: v.optional(v.id("projectItems")),
+        itemSubtaskId: v.optional(v.string()),
         source: v.optional(v.union(v.literal("user"), v.literal("agent"))),
         // Gantt fields
         estimatedDuration: v.optional(v.number()), // in milliseconds
@@ -94,6 +96,8 @@ export const createTask = mutation({
             accountingSectionId: args.accountingSectionId,
             accountingLineType: args.accountingLineType,
             accountingLineId: args.accountingLineId,
+            itemId: args.itemId,
+            itemSubtaskId: args.itemSubtaskId,
             source: args.source ?? "user",
             taskNumber,
             estimatedDuration: args.estimatedDuration,
@@ -141,6 +145,8 @@ export const updateTask = mutation({
         accountingSectionId: v.optional(v.id("sections")),
         accountingLineType: v.optional(v.union(v.literal("material"), v.literal("work"))),
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
+        itemId: v.optional(v.id("projectItems")),
+        itemSubtaskId: v.optional(v.string()),
 
         // Gantt fields
         startDate: v.optional(v.number()),

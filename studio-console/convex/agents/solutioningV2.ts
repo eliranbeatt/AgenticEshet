@@ -2,25 +2,88 @@ import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
-import { SolutioningExtractedPlanSchema } from "../lib/zodSchemas";
+import { ItemSpecV2Schema, SolutioningExtractedPlanSchema, type ItemSpecV2 } from "../lib/zodSchemas";
+import type { Doc, Id } from "../_generated/dataModel";
 
 const FALLBACK_SYSTEM_PROMPT = [
     "You are a production solutioning expert for a creative studio.",
-    "Help the user define exactly how to produce or procure a specific material line item.",
+    "Help the user define exactly how to produce or procure a specific project item.",
     "Be practical, cost-aware, and ask clarifying questions when needed.",
     "Default to the project's default language unless the user explicitly requests otherwise.",
 ].join("\n");
 
+function parseItemSpec(data: unknown): ItemSpecV2 | null {
+    const parsed = ItemSpecV2Schema.safeParse(data);
+    if (!parsed.success) return null;
+    return parsed.data;
+}
+
+function buildBaseItemSpec(item: Doc<"projectItems">): ItemSpecV2 {
+    return ItemSpecV2Schema.parse({
+        version: "ItemSpecV2",
+        identity: {
+            title: item.title,
+            typeKey: item.typeKey,
+        },
+    });
+}
+
+function withSolutionPlan(spec: ItemSpecV2, planMarkdown: string, planJson?: string | null): ItemSpecV2 {
+    const studioWork = spec.studioWork ? { ...spec.studioWork } : { required: true };
+    const required = studioWork.required ?? true;
+    return ItemSpecV2Schema.parse({
+        ...spec,
+        studioWork: {
+            ...studioWork,
+            required,
+            buildPlanMarkdown: planMarkdown,
+            buildPlanJson: planJson ?? undefined,
+        },
+    });
+}
+
+function findSolutioningDraft(revisions: Doc<"itemRevisions">[]) {
+    return revisions
+        .filter((rev) => rev.tabScope === "solutioning" && rev.state === "proposed")
+        .sort((a, b) => b.revisionNumber - a.revisionNumber)[0] ?? null;
+}
+
+function findApprovedRevision(
+    revisions: Doc<"itemRevisions">[],
+    approvedRevisionId?: Id<"itemRevisions">
+) {
+    if (!approvedRevisionId) return null;
+    return revisions.find((rev) => rev._id === approvedRevisionId) ?? null;
+}
+
+function resolveActiveSpec(item: Doc<"projectItems">, revisions: Doc<"itemRevisions">[]) {
+    const draft = findSolutioningDraft(revisions);
+    const approved = findApprovedRevision(revisions, item.approvedRevisionId);
+    const active = draft ?? approved;
+    const spec = active ? parseItemSpec(active.data) : null;
+    return {
+        draft,
+        approved,
+        active,
+        spec: spec ?? buildBaseItemSpec(item),
+    };
+}
+
 export const getContext = internalQuery({
-    args: { projectId: v.id("projects"), materialLineId: v.id("materialLines") },
+    args: { projectId: v.id("projects"), itemId: v.id("projectItems") },
     handler: async (ctx, args) => {
         const project = await ctx.db.get(args.projectId);
         if (!project) throw new Error("Project not found");
 
-        const materialLine = await ctx.db.get(args.materialLineId);
-        if (!materialLine) throw new Error("Material line not found");
+        const item = await ctx.db.get(args.itemId);
+        if (!item) throw new Error("Item not found");
 
-        const section = await ctx.db.get(materialLine.sectionId);
+        const revisions = await ctx.db
+            .query("itemRevisions")
+            .withIndex("by_item_revision", (q) => q.eq("itemId", item._id))
+            .collect();
+
+        const { spec } = resolveActiveSpec(item, revisions);
 
         const skill = await ctx.db
             .query("skills")
@@ -29,8 +92,8 @@ export const getContext = internalQuery({
 
         return {
             project,
-            materialLine,
-            section,
+            item,
+            spec,
             systemPrompt: skill?.content || FALLBACK_SYSTEM_PROMPT,
         };
     },
@@ -38,24 +101,68 @@ export const getContext = internalQuery({
 
 export const saveDraftPlan = internalMutation({
     args: {
-        materialLineId: v.id("materialLines"),
+        itemId: v.id("projectItems"),
         solutionPlan: v.string(),
-        solutionPlanJson: v.string(),
+        solutionPlanJson: v.optional(v.string()),
+        createdBy: v.optional(v.union(v.literal("user"), v.literal("agent"))),
     },
     handler: async (ctx, args) => {
-        await ctx.db.patch(args.materialLineId, {
-            solutionPlan: args.solutionPlan,
-            solutionPlanJson: args.solutionPlanJson,
-            updatedAt: Date.now(),
-            lastUpdatedBy: "solutioning_agent",
+        const item = await ctx.db.get(args.itemId);
+        if (!item) throw new Error("Item not found");
+
+        const revisions = await ctx.db
+            .query("itemRevisions")
+            .withIndex("by_item_revision", (q) => q.eq("itemId", item._id))
+            .collect();
+
+        const draft = findSolutioningDraft(revisions);
+        const approved = findApprovedRevision(revisions, item.approvedRevisionId);
+        const baseSpec = draft
+            ? parseItemSpec(draft.data) ?? buildBaseItemSpec(item)
+            : approved
+            ? parseItemSpec(approved.data) ?? buildBaseItemSpec(item)
+            : buildBaseItemSpec(item);
+
+        const planMarkdown = args.solutionPlan.trim();
+        const spec = withSolutionPlan(baseSpec, planMarkdown, args.solutionPlanJson ?? undefined);
+
+        const now = Date.now();
+        if (draft) {
+            await ctx.db.patch(draft._id, {
+                data: spec,
+                summaryMarkdown: "Solutioning draft updated.",
+            });
+            await ctx.db.patch(item._id, { updatedAt: now });
+            return { revisionId: draft._id };
+        }
+
+        const revisionNumber = item.latestRevisionNumber + 1;
+        const revisionId = await ctx.db.insert("itemRevisions", {
+            projectId: item.projectId,
+            itemId: item._id,
+            tabScope: "solutioning",
+            state: "proposed",
+            revisionNumber,
+            baseApprovedRevisionId: item.approvedRevisionId,
+            data: spec,
+            summaryMarkdown: "Solutioning draft created.",
+            createdBy: { kind: args.createdBy ?? "user" },
+            createdAt: now,
         });
+
+        await ctx.db.patch(item._id, {
+            latestRevisionNumber: revisionNumber,
+            updatedAt: now,
+        });
+
+        return { revisionId };
     },
 });
 
 export const send = action({
     args: {
         threadId: v.id("chatThreads"),
-        materialLineId: v.id("materialLines"),
+        itemId: v.id("projectItems"),
         userContent: v.string(),
         thinkingMode: v.optional(v.boolean()),
     },
@@ -70,9 +177,9 @@ export const send = action({
             threadId: args.threadId,
         });
 
-        const { materialLine, section, systemPrompt } = await ctx.runQuery(internal.agents.solutioningV2.getContext, {
+        const { spec, systemPrompt } = await ctx.runQuery(internal.agents.solutioningV2.getContext, {
             projectId: project._id,
-            materialLineId: args.materialLineId,
+            itemId: args.itemId,
         });
 
         const settings = await ctx.runQuery(internal.settings.getAll);
@@ -96,6 +203,10 @@ export const send = action({
             status: "streaming",
         });
 
+        const identity = spec.identity;
+        const tags = identity.tags?.join(", ") || "none";
+        const plan = spec.studioWork?.buildPlanMarkdown ?? "(none)";
+
         const contextLines = [
             `Project: ${project.name}`,
             `Client: ${project.clientName}`,
@@ -104,15 +215,15 @@ export const send = action({
             `Project types: ${(project.projectTypes ?? []).join(", ") || "none"}`,
             `Default language: ${project.defaultLanguage ?? "he"}`,
             "",
-            "Material line:",
-            `- Label: ${materialLine.label}`,
-            `- Category: ${materialLine.category}`,
-            `- Quantity: ${materialLine.plannedQuantity} ${materialLine.unit}`,
-            `- Section: ${section ? `${section.group} / ${section.name}` : "unknown"}`,
-            `- Note: ${materialLine.note ?? "none"}`,
+            "Project item:",
+            `- Title: ${identity.title}`,
+            `- Type: ${identity.typeKey}`,
+            `- Description: ${identity.description ?? "none"}`,
+            `- Tags: ${tags}`,
+            `- Accounting group: ${identity.accountingGroup ?? "none"}`,
             "",
             "Existing plan (if any):",
-            materialLine.solutionPlan ?? "(none)",
+            plan,
         ];
 
         const transcript = [
@@ -183,7 +294,7 @@ export const send = action({
 export const extractPlanFromThread = action({
     args: {
         threadId: v.id("chatThreads"),
-        materialLineId: v.id("materialLines"),
+        itemId: v.id("projectItems"),
     },
     handler: async (ctx, args) => {
         await ctx.runMutation(internal.rateLimit.consume, {
@@ -197,7 +308,7 @@ export const extractPlanFromThread = action({
         });
         const { systemPrompt } = await ctx.runQuery(internal.agents.solutioningV2.getContext, {
             projectId: project._id,
-            materialLineId: args.materialLineId,
+            itemId: args.itemId,
         });
 
         const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim());
@@ -221,11 +332,12 @@ export const extractPlanFromThread = action({
         });
 
         await ctx.runMutation(internal.agents.solutioningV2.saveDraftPlan, {
-            materialLineId: args.materialLineId,
+            itemId: args.itemId,
             solutionPlan: extracted.markdown,
             solutionPlanJson: JSON.stringify(extracted.plan),
+            createdBy: "agent",
         });
 
-        return { ok: true };
+        return { ok: true, plan: extracted.plan, markdown: extracted.markdown };
     },
 });

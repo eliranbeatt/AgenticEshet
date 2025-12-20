@@ -8,6 +8,7 @@ const navItems = [
     { href: "/admin/skills", label: "Skills" },
     { href: "/admin/enrichment", label: "Enrichment Profiles" },
     { href: "/admin/settings", label: "Settings" },
+    { href: "/admin/items", label: "Items Migrations" },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {

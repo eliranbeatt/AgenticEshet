@@ -13,10 +13,11 @@ const sourceTypeEnum = v.union(
   v.literal("task"),
   v.literal("quest"),
   v.literal("quote"),
+  v.literal("item"),
   v.literal("system_note")
 );
 
-type SourceType = "doc_upload" | "plan" | "conversation" | "task" | "quest" | "quote" | "system_note";
+type SourceType = "doc_upload" | "plan" | "conversation" | "task" | "quest" | "quote" | "item" | "system_note";
 const scopeEnum = v.union(v.literal("project"), v.literal("global"), v.literal("both"));
 
 // --- Mutations ---

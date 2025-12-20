@@ -47,6 +47,7 @@ import type * as lib_gemini from "../lib/gemini.js";
 import type * as lib_geminiImages from "../lib/geminiImages.js";
 import type * as lib_geminiInteractions from "../lib/geminiInteractions.js";
 import type * as lib_hash from "../lib/hash.js";
+import type * as lib_itemProjections from "../lib/itemProjections.js";
 import type * as lib_openai from "../lib/openai.js";
 import type * as lib_openaiImages from "../lib/openaiImages.js";
 import type * as lib_projects from "../lib/projects.js";
@@ -114,6 +115,7 @@ declare const fullApi: ApiFromModules<{
   "lib/geminiImages": typeof lib_geminiImages;
   "lib/geminiInteractions": typeof lib_geminiInteractions;
   "lib/hash": typeof lib_hash;
+  "lib/itemProjections": typeof lib_itemProjections;
   "lib/openai": typeof lib_openai;
   "lib/openaiImages": typeof lib_openaiImages;
   "lib/projects": typeof lib_projects;

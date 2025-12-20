@@ -6,6 +6,7 @@ import { syncItemProjections } from "../lib/itemProjections";
 import {
     ItemSpecV2Schema,
     SolutionItemPlanV1Schema,
+    SolutioningExtractedPlanSchema,
     SolutioningExtractedPlanLooseSchema,
     type ItemSpecV2,
     type SolutionItemPlanV1,
@@ -27,6 +28,17 @@ type StepMaterial = {
     unitCostEstimate?: number;
     notes?: string;
 };
+
+function coerceNumber(value: unknown): number | undefined {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+        const cleaned = value.trim().replace(/,/g, "");
+        if (!cleaned) return undefined;
+        const parsed = Number.parseFloat(cleaned);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+}
 
 function parseItemSpec(data: unknown): ItemSpecV2 | null {
     const parsed = ItemSpecV2Schema.safeParse(data);
@@ -63,7 +75,9 @@ function parsePlanJson(planJson?: string | null): SolutionItemPlanV1 | null {
     try {
         const parsed = JSON.parse(planJson) as unknown;
         const result = SolutionItemPlanV1Schema.safeParse(parsed);
-        return result.success ? result.data : null;
+        if (result.success) return result.data;
+        const coerced = coercePlanFromLooseFormat(parsed);
+        return coerced ?? null;
     } catch {
         return null;
     }
@@ -105,15 +119,18 @@ function normalizeStepMaterials(
             if (name) results.push({ name });
             continue;
         }
-        if (!entry || typeof entry.name !== "string") continue;
-        const name = entry.name.trim();
+        if (!entry || typeof entry !== "object") continue;
+        const candidate = entry as Record<string, unknown>;
+        const nameValue = typeof candidate.name === "string" ? candidate.name : "";
+        if (!nameValue.trim()) continue;
+        const name = nameValue.trim();
         if (!name) continue;
         results.push({
             name,
-            quantity: typeof entry.quantity === "number" ? entry.quantity : undefined,
-            unit: typeof entry.unit === "string" ? entry.unit : undefined,
-            unitCostEstimate: typeof entry.unitCostEstimate === "number" ? entry.unitCostEstimate : undefined,
-            notes: typeof entry.notes === "string" ? entry.notes : undefined,
+            quantity: coerceNumber(candidate.quantity),
+            unit: typeof candidate.unit === "string" ? candidate.unit : undefined,
+            unitCostEstimate: coerceNumber(candidate.unitCostEstimate),
+            notes: typeof candidate.notes === "string" ? candidate.notes : undefined,
         });
     }
     return results;
@@ -228,6 +245,142 @@ function getString(source: Record<string, unknown>, keys: string[]) {
     return "";
 }
 
+function getUnknown(source: Record<string, unknown>, keys: string[]) {
+    for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(source, key)) {
+            return source[key];
+        }
+    }
+    return undefined;
+}
+
+function normalizeMaterialEntry(entry: unknown): StepMaterial | null {
+    if (typeof entry === "string") {
+        const name = entry.trim();
+        return name ? { name } : null;
+    }
+    if (!isRecord(entry)) return null;
+    const name =
+        getString(entry, ["name", "label", "material", "item", "title"]) ||
+        getString(entry, ["Name", "Label", "Material", "Item", "Title"]);
+    if (!name) return null;
+    return {
+        name,
+        quantity: coerceNumber(
+            getUnknown(entry, ["quantity", "qty", "amount", "count", "Quantity", "Qty", "Amount", "Count"])
+        ),
+        unit:
+            getString(entry, ["unit", "uom", "units", "Unit", "Uom", "Units"]) || undefined,
+        unitCostEstimate: coerceNumber(
+            getUnknown(entry, [
+                "unitCostEstimate",
+                "unitCost",
+                "unitPrice",
+                "cost",
+                "price",
+                "estimatedUnitCost",
+                "estimatedUnitPrice",
+                "UnitCostEstimate",
+                "UnitCost",
+                "UnitPrice",
+                "Cost",
+                "Price",
+            ])
+        ),
+        notes:
+            getString(entry, ["notes", "note", "description", "Notes", "Note", "Description"]) ||
+            undefined,
+    };
+}
+
+function normalizeMaterialsList(raw: unknown): StepMaterial[] {
+    if (!raw) return [];
+    if (typeof raw === "string") {
+        return raw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .map((name) => ({ name }));
+    }
+    if (Array.isArray(raw)) {
+        const results: StepMaterial[] = [];
+        for (const entry of raw) {
+            const normalized = normalizeMaterialEntry(entry);
+            if (normalized) results.push(normalized);
+        }
+        return results;
+    }
+    if (isRecord(raw)) {
+        const nested =
+            getUnknown(raw, ["items", "materials", "Materials", "Items", "list", "List"]) ?? null;
+        if (nested) return normalizeMaterialsList(nested);
+    }
+    return [];
+}
+
+function normalizeToolsList(raw: unknown): string[] {
+    if (!raw) return [];
+    if (typeof raw === "string") {
+        return raw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean);
+    }
+    if (Array.isArray(raw)) {
+        return raw.filter((entry) => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+    }
+    return [];
+}
+
+function normalizeStepFromLooseFormat(step: unknown, index: number) {
+    const stepObj = isRecord(step) ? step : {};
+    const title =
+        getString(stepObj, ["title", "Title", "name", "Name", "step", "Step"]) ||
+        `Step ${index + 1}`;
+    const details =
+        getString(stepObj, ["details", "Details", "description", "Description", "notes", "Notes"]) ||
+        "";
+    const id = getString(stepObj, ["id", "Id", "ID"]) || `S${index + 1}`;
+    const estimatedMinutes = coerceNumber(
+        getUnknown(stepObj, [
+            "estimatedMinutes",
+            "estimated_minutes",
+            "durationMinutes",
+            "duration",
+            "estMinutes",
+            "estimatedTimeMinutes",
+            "EstimatedMinutes",
+            "DurationMinutes",
+        ])
+    );
+    let materials = normalizeMaterialsList(
+        getUnknown(stepObj, [
+            "materials",
+            "Materials",
+            "materialList",
+            "materialsList",
+            "MaterialsList",
+            "materials_needed",
+        ])
+    );
+    let tools = normalizeToolsList(
+        getUnknown(stepObj, ["tools", "Tools", "toolList", "toolsList", "ToolsList"])
+    );
+    if ((!materials.length || !tools.length) && details) {
+        const extracted = extractResourcesFromText(details);
+        if (!materials.length) materials = extracted.materials;
+        if (!tools.length) tools = extracted.tools;
+    }
+    return {
+        id,
+        title,
+        details,
+        estimatedMinutes,
+        materials: materials.length ? materials : undefined,
+        tools: tools.length ? tools : undefined,
+    };
+}
+
 function coercePlanFromLooseFormat(value: unknown): SolutionItemPlanV1 | null {
     if (!isRecord(value)) return null;
     const parsed = SolutionItemPlanV1Schema.safeParse(value);
@@ -248,25 +401,16 @@ function coercePlanFromLooseFormat(value: unknown): SolutionItemPlanV1 | null {
         (isRecord(value.StepByStepPlan) ? value.StepByStepPlan : null) ||
         (isRecord(value.StepsPlan) ? value.StepsPlan : null);
     const stepsNode =
-        planNode && Array.isArray((planNode as Record<string, unknown>).Steps)
+        (Array.isArray(value.steps) && value.steps) ||
+        (Array.isArray(value.Steps) && value.Steps) ||
+        (planNode && Array.isArray((planNode as Record<string, unknown>).Steps)
             ? (planNode as Record<string, unknown>).Steps
             : planNode && Array.isArray((planNode as Record<string, unknown>).steps)
             ? (planNode as Record<string, unknown>).steps
-            : null;
+            : null);
 
     const steps = Array.isArray(stepsNode)
-        ? stepsNode.map((step, index) => {
-              const stepObj = isRecord(step) ? step : {};
-              const stepTitle =
-                  getString(stepObj, ["Title", "title"]) || `Step ${index + 1}`;
-              const details =
-                  getString(stepObj, ["Details", "details", "Description", "description"]) || "";
-              return {
-                  id: `S${index + 1}`,
-                  title: stepTitle,
-                  details,
-              };
-          })
+        ? stepsNode.map((step, index) => normalizeStepFromLooseFormat(step, index))
         : [];
 
     const normalized: SolutionItemPlanV1 = {
@@ -688,23 +832,44 @@ export const send = action({
             const finalContent = buffer.trim() ? buffer : "(empty)";
             if (finalContent.length > 40) {
                 try {
-                    const extracted = await callChatWithSchema(SolutioningExtractedPlanLooseSchema, {
-                        model,
+                    let extracted;
+                    try {
+                        extracted = await callChatWithSchema(SolutioningExtractedPlanSchema, {
+                            model,
                             systemPrompt: [
-                            systemPrompt,
-                            "",
-            "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
-            "Return JSON with keys: plan and markdown.",
-            "The plan.steps array must contain multiple atomic steps (each is a single task).",
-            "If the message is long, split it into 4-10 steps.",
-            "Each step.materials entry should be an object with name, quantity, unit, and unitCostEstimate when available.",
-                            "Use the same language as the message content.",
-                            "Return valid JSON only.",
-                        ].join("\n"),
-                        userPrompt: finalContent,
-                        maxRetries: 2,
-                        language: project.defaultLanguage === "en" ? "en" : "he",
-                    });
+                                systemPrompt,
+                                "",
+                                "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
+                                "Return JSON with keys: plan and markdown.",
+                                "The plan.steps array must contain multiple atomic steps (each is a single task).",
+                                "If the message is long, split it into 4-10 steps.",
+                                "Each step.materials entry should be an object with name, quantity, unit, and unitCostEstimate when available.",
+                                "Use the same language as the message content.",
+                                "Return valid JSON only.",
+                            ].join("\n"),
+                            userPrompt: finalContent,
+                            maxRetries: 2,
+                            language: project.defaultLanguage === "en" ? "en" : "he",
+                        });
+                    } catch {
+                        extracted = await callChatWithSchema(SolutioningExtractedPlanLooseSchema, {
+                            model,
+                            systemPrompt: [
+                                systemPrompt,
+                                "",
+                                "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
+                                "Return JSON with keys: plan and markdown.",
+                                "The plan.steps array must contain multiple atomic steps (each is a single task).",
+                                "If the message is long, split it into 4-10 steps.",
+                                "Each step.materials entry should be an object with name, quantity, unit, and unitCostEstimate when available.",
+                                "Use the same language as the message content.",
+                                "Return valid JSON only.",
+                            ].join("\n"),
+                            userPrompt: finalContent,
+                            maxRetries: 2,
+                            language: project.defaultLanguage === "en" ? "en" : "he",
+                        });
+                    }
 
                     const normalized = normalizeExtractedPlan(extracted);
                     await ctx.runMutation(internal.agents.solutioningV2.saveDraftPlan, {
@@ -791,23 +956,44 @@ export const extractPlanFromThread = action({
         const model = settings.modelConfig?.solutioning || "gpt-5.2";
 
         try {
-            const extracted = await callChatWithSchema(SolutioningExtractedPlanLooseSchema, {
-                model,
-                systemPrompt: [
-                    systemPrompt,
-                    "",
-                    "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
-                    "Return JSON with keys: plan and markdown.",
-                    "The plan.steps array must contain multiple atomic steps (each is a single task).",
-                    "If the message is long, split it into 4-10 steps.",
-                    "Each step.materials entry should be an object with name, quantity, unit, and unitCostEstimate when available.",
-                    "Use the same language as the message content.",
-                    "Return valid JSON only.",
-                ].join("\n"),
-                userPrompt: lastAssistant.content,
-                maxRetries: 2,
-                language: project.defaultLanguage === "en" ? "en" : "he",
-            });
+            let extracted;
+            try {
+                extracted = await callChatWithSchema(SolutioningExtractedPlanSchema, {
+                    model,
+                    systemPrompt: [
+                        systemPrompt,
+                        "",
+                        "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
+                        "Return JSON with keys: plan and markdown.",
+                        "The plan.steps array must contain multiple atomic steps (each is a single task).",
+                        "If the message is long, split it into 4-10 steps.",
+                        "Each step.materials entry should be an object with name, quantity, unit, and unitCostEstimate when available.",
+                        "Use the same language as the message content.",
+                        "Return valid JSON only.",
+                    ].join("\n"),
+                    userPrompt: lastAssistant.content,
+                    maxRetries: 2,
+                    language: project.defaultLanguage === "en" ? "en" : "he",
+                });
+            } catch {
+                extracted = await callChatWithSchema(SolutioningExtractedPlanLooseSchema, {
+                    model,
+                    systemPrompt: [
+                        systemPrompt,
+                        "",
+                        "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
+                        "Return JSON with keys: plan and markdown.",
+                        "The plan.steps array must contain multiple atomic steps (each is a single task).",
+                        "If the message is long, split it into 4-10 steps.",
+                        "Each step.materials entry should be an object with name, quantity, unit, and unitCostEstimate when available.",
+                        "Use the same language as the message content.",
+                        "Return valid JSON only.",
+                    ].join("\n"),
+                    userPrompt: lastAssistant.content,
+                    maxRetries: 2,
+                    language: project.defaultLanguage === "en" ? "en" : "he",
+                });
+            }
 
             const normalized = normalizeExtractedPlan(extracted);
             await ctx.runMutation(internal.agents.solutioningV2.saveDraftPlan, {

@@ -245,9 +245,8 @@ async function executeRefinement(
         language: project.defaultLanguage === "en" ? "en" : "he",
     });
 
-    const hasAnyDependencies = result.tasks.some((task) => (task.dependencies ?? []).length > 0);
     const fallbackDependencies = new Map<Id<"tasks">, Id<"tasks">[]>();
-    if (!hasAnyDependencies && sortedTasks.length > 1) {
+    if (sortedTasks.length > 1) {
         for (let i = 1; i < sortedTasks.length; i++) {
             fallbackDependencies.set(sortedTasks[i]._id, [sortedTasks[i - 1]._id]);
         }
@@ -262,6 +261,7 @@ async function executeRefinement(
         subtasks?: Array<{ title: string; done: boolean }>;
     }> = [];
 
+    let resolvedDependencies = 0;
     for (const task of result.tasks) {
         const normalizedId = normalizeTempTaskId(task.id);
         const taskId =
@@ -285,9 +285,7 @@ async function executeRefinement(
             }
         }
 
-        if (depIds.length === 0 && fallbackDependencies.has(taskId)) {
-            depIds.push(...(fallbackDependencies.get(taskId) ?? []));
-        }
+        resolvedDependencies += depIds.length;
 
         updates.push({
             taskId,
@@ -300,6 +298,14 @@ async function executeRefinement(
                 .filter(Boolean)
                 .map((title) => ({ title, done: false })),
         });
+    }
+
+    if (resolvedDependencies === 0 && fallbackDependencies.size > 0) {
+        for (const update of updates) {
+            if ((update.dependencies ?? []).length > 0) continue;
+            const fallback = fallbackDependencies.get(update.taskId);
+            if (fallback) update.dependencies = fallback;
+        }
     }
 
     await ctx.runMutation(internal.agents.taskRefiner.applyRefinements, { updates });

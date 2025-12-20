@@ -523,7 +523,9 @@ function TaskCard({
         ? task.estimatedDuration >= 86400000
             ? `${(task.estimatedDuration / 86400000).toFixed(1)} days`
             : `${(task.estimatedDuration / 3600000).toFixed(1)} hours`
-        : null;
+        : typeof task.estimatedMinutes === "number"
+            ? `${(task.estimatedMinutes / 60).toFixed(1)} hours`
+            : null;
 
     return (
         <div ref={setNodeRef} style={style} className="bg-white p-3 rounded shadow-sm border hover:shadow-md transition group relative">

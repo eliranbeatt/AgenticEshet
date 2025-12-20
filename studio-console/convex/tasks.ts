@@ -160,11 +160,31 @@ export const updateTask = mutation({
         assignee: v.optional(v.union(v.string(), v.null())),
     },
     handler: async (ctx, args) => {
-        const { taskId, ...patches } = args;
-        await ctx.db.patch(taskId, {
-            ...patches,
-            updatedAt: Date.now(),
-        });
+        const { taskId, estimatedMinutes, ...patches } = args;
+        const task = await ctx.db.get(taskId);
+        if (!task) return;
+
+        const nextPatches: Record<string, unknown> = { ...patches };
+        if (estimatedMinutes !== undefined) {
+            nextPatches.estimatedMinutes = estimatedMinutes;
+            if (typeof estimatedMinutes === "number" && Number.isFinite(estimatedMinutes)) {
+                const minutes = Math.max(1, estimatedMinutes);
+                nextPatches.estimatedDuration = minutes * 60 * 1000;
+            }
+        }
+
+        if (patches.itemId && patches.accountingSectionId === undefined) {
+            const section = await ctx.db
+                .query("sections")
+                .withIndex("by_project", (q) => q.eq("projectId", task.projectId))
+                .filter((q) => q.eq(q.field("itemId"), patches.itemId))
+                .first();
+            if (section) {
+                nextPatches.accountingSectionId = section._id;
+            }
+        }
+
+        await ctx.db.patch(taskId, { ...nextPatches, updatedAt: Date.now() });
     },
 });
 

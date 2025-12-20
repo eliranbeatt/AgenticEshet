@@ -24,6 +24,7 @@ import type * as agents_quote from "../agents/quote.js";
 import type * as agents_solutioning from "../agents/solutioning.js";
 import type * as agents_solutioningV2 from "../agents/solutioningV2.js";
 import type * as agents_taskEditor from "../agents/taskEditor.js";
+import type * as agents_taskRefiner from "../agents/taskRefiner.js";
 import type * as assets from "../assets.js";
 import type * as backfill from "../backfill.js";
 import type * as buying from "../buying.js";
@@ -94,6 +95,7 @@ declare const fullApi: ApiFromModules<{
   "agents/solutioning": typeof agents_solutioning;
   "agents/solutioningV2": typeof agents_solutioningV2;
   "agents/taskEditor": typeof agents_taskEditor;
+  "agents/taskRefiner": typeof agents_taskRefiner;
   assets: typeof assets;
   backfill: typeof backfill;
   buying: typeof buying;

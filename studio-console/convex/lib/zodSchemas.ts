@@ -17,6 +17,18 @@ export const TaskBreakdownSchema = z.object({
     })),
 });
 
+export const TaskRefinementSchema = z.object({
+    logic: z.string().optional().describe("Reasoning summary for the refinements."),
+    tasks: z.array(z.object({
+        id: z.string().describe("Task ID from the input list (e.g., 'T1')."),
+        description: z.string().describe("Improved, clearer task description."),
+        estimatedHours: z.number().describe("Estimated time to complete this task in hours."),
+        dependencies: z.array(z.string()).describe("List of task IDs that this task depends on (e.g., ['T1']). Use [] if it can start immediately."),
+        steps: z.array(z.string()).optional().describe("Optional step-by-step bullets for the task."),
+        subtasks: z.array(z.string()).optional().describe("Optional subtask titles."),
+    })),
+});
+
 export const ClarificationSchema = z.object({
     briefSummary: z.string(),
     openQuestions: z.array(z.string()),
@@ -93,7 +105,16 @@ export const SolutionItemPlanV1Schema = z.object({
             title: z.string(),
             details: z.string(),
             estimatedMinutes: z.number().optional(),
-            materials: z.array(z.string()).optional(),
+            materials: z.array(z.union([
+                z.string(),
+                z.object({
+                    name: z.string(),
+                    quantity: z.number().optional(),
+                    unit: z.string().optional(),
+                    unitCostEstimate: z.number().optional(),
+                    notes: z.string().optional(),
+                }),
+            ])).optional(),
             tools: z.array(z.string()).optional(),
         })
     ),

@@ -34,9 +34,17 @@ type SolutionItemPlanV1 = {
         title: string;
         details: string;
         estimatedMinutes?: number;
-        materials?: string[];
+        materials?: SolutionPlanMaterial[];
         tools?: string[];
     }>;
+};
+
+type SolutionPlanMaterial = {
+    name: string;
+    quantity?: number;
+    unit?: string;
+    unitCostEstimate?: number;
+    notes?: string;
 };
 
 function createEmptyPlan(title: string): SolutionItemPlanV1 {
@@ -57,6 +65,50 @@ function createEmptyPlan(title: string): SolutionItemPlanV1 {
     };
 }
 
+function normalizePlanMaterials(raw: unknown): SolutionPlanMaterial[] {
+    if (!Array.isArray(raw)) return [];
+    const results: SolutionPlanMaterial[] = [];
+    for (const entry of raw) {
+        if (typeof entry === "string") {
+            const name = entry.trim();
+            if (name) results.push({ name });
+            continue;
+        }
+        if (!entry || typeof entry !== "object") continue;
+        const candidate = entry as Partial<SolutionPlanMaterial>;
+        if (typeof candidate.name !== "string") continue;
+        const name = candidate.name.trim();
+        if (!name) continue;
+        results.push({
+            name,
+            quantity: typeof candidate.quantity === "number" ? candidate.quantity : undefined,
+            unit: typeof candidate.unit === "string" ? candidate.unit : undefined,
+            unitCostEstimate: typeof candidate.unitCostEstimate === "number" ? candidate.unitCostEstimate : undefined,
+            notes: typeof candidate.notes === "string" ? candidate.notes : undefined,
+        });
+    }
+    return results;
+}
+
+function formatMaterialLabel(material: SolutionPlanMaterial) {
+    const parts: string[] = [];
+    if (typeof material.quantity === "number") {
+        parts.push(material.quantity.toString());
+    }
+    if (material.unit) {
+        parts.push(material.unit);
+    }
+    if (typeof material.unitCostEstimate === "number") {
+        parts.push(`@ ${material.unitCostEstimate}`);
+    }
+    return parts.length > 0 ? `${material.name} (${parts.join(" ")})` : material.name;
+}
+
+function formatMaterialList(materials: SolutionPlanMaterial[]) {
+    if (!materials.length) return "";
+    return `Materials: ${materials.map(formatMaterialLabel).join(", ")}`;
+}
+
 function safeParsePlanJson(json: string | undefined | null, fallbackTitle: string): SolutionItemPlanV1 {
     if (!json) return createEmptyPlan(fallbackTitle);
     try {
@@ -73,7 +125,7 @@ function safeParsePlanJson(json: string | undefined | null, fallbackTitle: strin
                 title: typeof s.title === "string" ? s.title : `Step ${idx + 1}`,
                 details: typeof s.details === "string" ? s.details : "",
                 estimatedMinutes: typeof s.estimatedMinutes === "number" ? s.estimatedMinutes : undefined,
-                materials: Array.isArray(s.materials) ? s.materials.filter((m) => typeof m === "string") : [],
+                materials: normalizePlanMaterials(s.materials),
                 tools: Array.isArray(s.tools) ? s.tools.filter((t) => typeof t === "string") : [],
             })),
         };
@@ -96,7 +148,7 @@ function renderPlanMarkdown(plan: SolutionItemPlanV1): string {
             lines.push("", `- Est. minutes: ${step.estimatedMinutes}`);
         }
         if (step.materials && step.materials.length) {
-            lines.push("", `- Materials: ${step.materials.join(", ")}`);
+            lines.push("", `- ${formatMaterialList(step.materials)}`);
         }
         if (step.tools && step.tools.length) {
             lines.push("", `- Tools: ${step.tools.join(", ")}`);
@@ -313,22 +365,113 @@ export default function SolutioningPage() {
                                                             setPlanDraft({ ...planDraft, steps: next });
                                                         }}
                                                     />
-                                                    <div className="grid grid-cols-2 gap-2">
-                                                        <input
-                                                            className="border rounded px-3 py-2 text-sm"
-                                                            placeholder="Materials (comma separated)"
-                                                            value={(step.materials ?? []).join(", ")}
-                                                            onChange={(e) => {
-                                                                const materials = e.target.value
-                                                                    .split(",")
-                                                                    .map((m) => m.trim())
-                                                                    .filter(Boolean);
-                                                                const next = planDraft.steps.map((s) =>
-                                                                    s.id === step.id ? { ...s, materials } : s
-                                                                );
+                                                    <div className="space-y-2">
+                                                        <div className="text-xs font-semibold text-gray-600">Materials</div>
+                                                        {(step.materials ?? []).length === 0 ? (
+                                                            <div className="text-xs text-gray-400">No materials yet.</div>
+                                                        ) : (
+                                                            (step.materials ?? []).map((material, materialIndex) => (
+                                                                <div
+                                                                    key={`${step.id}-mat-${materialIndex}`}
+                                                                    className="grid gap-2 md:grid-cols-[1.5fr_0.6fr_0.6fr_0.8fr_auto] items-center"
+                                                                >
+                                                                    <input
+                                                                        className="border rounded px-3 py-2 text-sm"
+                                                                        placeholder="Material name"
+                                                                        value={material.name}
+                                                                        onChange={(e) => {
+                                                                            const next = planDraft.steps.map((s) => {
+                                                                                if (s.id !== step.id) return s;
+                                                                                const materials = (s.materials ?? []).map((m, idx) =>
+                                                                                    idx === materialIndex ? { ...m, name: e.target.value } : m
+                                                                                );
+                                                                                return { ...s, materials };
+                                                                            });
+                                                                            setPlanDraft({ ...planDraft, steps: next });
+                                                                        }}
+                                                                    />
+                                                                    <input
+                                                                        className="border rounded px-3 py-2 text-sm"
+                                                                        placeholder="Qty"
+                                                                        value={material.quantity?.toString() ?? ""}
+                                                                        onChange={(e) => {
+                                                                            const value = e.target.value;
+                                                                            const quantity = value ? Number(value) : undefined;
+                                                                            const next = planDraft.steps.map((s) => {
+                                                                                if (s.id !== step.id) return s;
+                                                                                const materials = (s.materials ?? []).map((m, idx) =>
+                                                                                    idx === materialIndex ? { ...m, quantity } : m
+                                                                                );
+                                                                                return { ...s, materials };
+                                                                            });
+                                                                            setPlanDraft({ ...planDraft, steps: next });
+                                                                        }}
+                                                                    />
+                                                                    <input
+                                                                        className="border rounded px-3 py-2 text-sm"
+                                                                        placeholder="Unit"
+                                                                        value={material.unit ?? ""}
+                                                                        onChange={(e) => {
+                                                                            const next = planDraft.steps.map((s) => {
+                                                                                if (s.id !== step.id) return s;
+                                                                                const materials = (s.materials ?? []).map((m, idx) =>
+                                                                                    idx === materialIndex ? { ...m, unit: e.target.value } : m
+                                                                                );
+                                                                                return { ...s, materials };
+                                                                            });
+                                                                            setPlanDraft({ ...planDraft, steps: next });
+                                                                        }}
+                                                                    />
+                                                                    <input
+                                                                        className="border rounded px-3 py-2 text-sm"
+                                                                        placeholder="Unit cost"
+                                                                        value={material.unitCostEstimate?.toString() ?? ""}
+                                                                        onChange={(e) => {
+                                                                            const value = e.target.value;
+                                                                            const unitCostEstimate = value ? Number(value) : undefined;
+                                                                            const next = planDraft.steps.map((s) => {
+                                                                                if (s.id !== step.id) return s;
+                                                                                const materials = (s.materials ?? []).map((m, idx) =>
+                                                                                    idx === materialIndex ? { ...m, unitCostEstimate } : m
+                                                                                );
+                                                                                return { ...s, materials };
+                                                                            });
+                                                                            setPlanDraft({ ...planDraft, steps: next });
+                                                                        }}
+                                                                    />
+                                                                    <button
+                                                                        type="button"
+                                                                        className="text-xs text-red-600 hover:text-red-800"
+                                                                        onClick={() => {
+                                                                            const next = planDraft.steps.map((s) => {
+                                                                                if (s.id !== step.id) return s;
+                                                                                const materials = (s.materials ?? []).filter((_, idx) => idx !== materialIndex);
+                                                                                return { ...s, materials };
+                                                                            });
+                                                                            setPlanDraft({ ...planDraft, steps: next });
+                                                                        }}
+                                                                    >
+                                                                        Remove
+                                                                    </button>
+                                                                </div>
+                                                            ))
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            className="text-xs text-blue-600 hover:text-blue-800"
+                                                            onClick={() => {
+                                                                const next = planDraft.steps.map((s) => {
+                                                                    if (s.id !== step.id) return s;
+                                                                    const materials = [...(s.materials ?? []), { name: "New material" }];
+                                                                    return { ...s, materials };
+                                                                });
                                                                 setPlanDraft({ ...planDraft, steps: next });
                                                             }}
-                                                        />
+                                                        >
+                                                            Add material
+                                                        </button>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-2">
                                                         <input
                                                             className="border rounded px-3 py-2 text-sm"
                                                             placeholder="Tools (comma separated)"

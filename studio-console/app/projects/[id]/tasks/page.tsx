@@ -48,6 +48,10 @@ type AccountingSectionRow = {
     work: Doc<"workLines">[];
 };
 
+type AgentRun = {
+    status: "queued" | "running" | "succeeded" | "failed";
+};
+
 const columns: { id: Doc<"tasks">["status"]; title: string; color: string }[] = [
     { id: "todo", title: "To Do", color: "bg-gray-100" },
     { id: "in_progress", title: "In Progress", color: "bg-blue-50" },
@@ -65,7 +69,13 @@ export default function TasksPage() {
     const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
     const accountingData = useQuery(api.accounting.getProjectAccounting, { projectId });
     const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
+    const taskRefinerRuns = useQuery(api.agentRuns.listByProject, {
+        projectId,
+        agent: "task_refiner",
+        limit: 1,
+    }) as AgentRun[] | undefined;
     const runArchitect = useAction(api.agents.architect.run);
+    const runTaskRefiner = useAction(api.agents.taskRefiner.run);
     const updateTask = useMutation(api.tasks.updateTask);
     const createTask = useMutation(api.tasks.createTask);
     const deleteTask = useMutation(api.tasks.deleteTask);
@@ -74,6 +84,7 @@ export default function TasksPage() {
 
     const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isRefining, setIsRefining] = useState(false);
     const [newTaskTitle, setNewTaskTitle] = useState("");
     const [filterField, setFilterField] = useState<FilterField>("none");
     const [filterValue, setFilterValue] = useState<string>("");
@@ -81,6 +92,10 @@ export default function TasksPage() {
     const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
     const [activeTaskId, setActiveTaskId] = useState<Id<"tasks"> | null>(null);
     const [selectedTaskId, setSelectedTaskId] = useState<Id<"tasks"> | null>(null);
+
+    const refinerStatus = taskRefinerRuns?.[0]?.status;
+    const isRefinerActive = refinerStatus === "queued" || refinerStatus === "running";
+    const isRefiningActive = isRefining || isRefinerActive;
 
     useEffect(() => {
         if (!tasks) return;
@@ -224,6 +239,23 @@ export default function TasksPage() {
         }
     };
 
+    const handleRefineTasks = async () => {
+        if (!tasks || tasks.length === 0) {
+            alert("No tasks to refine. Generate tasks first.");
+            return;
+        }
+        setIsRefining(true);
+        try {
+            await runTaskRefiner({ projectId });
+            alert("Task refinement started. Updates will appear shortly.");
+        } catch (err) {
+            console.error(err);
+            alert("Failed to refine tasks.");
+        } finally {
+            setIsRefining(false);
+        }
+    };
+
     const handleCreateManual = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newTaskTitle.trim()) return;
@@ -275,15 +307,25 @@ export default function TasksPage() {
 
                 <button
                     onClick={handleAutoGenerate}
-                    disabled={isGenerating}
+                    disabled={isGenerating || isRefiningActive}
                     className="bg-purple-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center gap-2"
                 >
                     {isGenerating ? "Thinking..." : "Auto-Generate from Plan"}
                 </button>
 
                 <button
+                    onClick={handleRefineTasks}
+                    disabled={isRefiningActive || isGenerating}
+                    className={`bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 ${
+                        isRefiningActive ? "animate-pulse" : ""
+                    }`}
+                >
+                    {isRefiningActive ? "Refining..." : "Refine Tasks (Deps + Estimates)"}
+                </button>
+
+                <button
                     onClick={handleRegenerate}
-                    disabled={isGenerating}
+                    disabled={isGenerating || isRefiningActive}
                     className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
                 >
                     {isGenerating ? "Thinking..." : "Regenerate (Clear & New)"}

@@ -17,7 +17,16 @@ const FALLBACK_SYSTEM_PROMPT = [
     "Help the user define exactly how to produce or procure a specific project item.",
     "Be practical, cost-aware, and ask clarifying questions when needed.",
     "Default to the project's default language unless the user explicitly requests otherwise.",
+    "When listing step materials, include name, quantity, unit, and estimated unit cost if known.",
 ].join("\n");
+
+type StepMaterial = {
+    name: string;
+    quantity?: number;
+    unit?: string;
+    unitCostEstimate?: number;
+    notes?: string;
+};
 
 function parseItemSpec(data: unknown): ItemSpecV2 | null {
     const parsed = ItemSpecV2Schema.safeParse(data);
@@ -66,7 +75,7 @@ function buildSubtasksFromPlan(plan: SolutionItemPlanV1) {
         title: step.title,
         description: [
             step.details,
-            step.materials && step.materials.length ? `Materials: ${step.materials.join(", ")}` : "",
+            formatMaterialList(normalizeStepMaterials(step.materials)),
             step.tools && step.tools.length ? `Tools: ${step.tools.join(", ")}` : "",
         ]
             .filter((line) => line.trim())
@@ -85,24 +94,72 @@ function normalizeToken(value: string) {
         .replace(/-+$/, "");
 }
 
+function normalizeStepMaterials(
+    materials: SolutionItemPlanV1["steps"][number]["materials"],
+): StepMaterial[] {
+    if (!materials || materials.length === 0) return [];
+    const results: StepMaterial[] = [];
+    for (const entry of materials) {
+        if (typeof entry === "string") {
+            const name = entry.trim();
+            if (name) results.push({ name });
+            continue;
+        }
+        if (!entry || typeof entry.name !== "string") continue;
+        const name = entry.name.trim();
+        if (!name) continue;
+        results.push({
+            name,
+            quantity: typeof entry.quantity === "number" ? entry.quantity : undefined,
+            unit: typeof entry.unit === "string" ? entry.unit : undefined,
+            unitCostEstimate: typeof entry.unitCostEstimate === "number" ? entry.unitCostEstimate : undefined,
+            notes: typeof entry.notes === "string" ? entry.notes : undefined,
+        });
+    }
+    return results;
+}
+
+function formatMaterialLabel(material: StepMaterial) {
+    const parts: string[] = [];
+    if (typeof material.quantity === "number") {
+        parts.push(material.quantity.toString());
+    }
+    if (material.unit) {
+        parts.push(material.unit);
+    }
+    if (typeof material.unitCostEstimate === "number") {
+        parts.push(`@ ${material.unitCostEstimate}`);
+    }
+    return parts.length > 0 ? `${material.name} (${parts.join(" ")})` : material.name;
+}
+
+function formatMaterialList(materials: StepMaterial[]) {
+    if (!materials.length) return "";
+    return `Materials: ${materials.map(formatMaterialLabel).join(", ")}`;
+}
+
 function deriveMaterialsFromPlan(plan: SolutionItemPlanV1) {
     const materialMap = new Map<string, ItemSpecV2["breakdown"]["materials"][number]>();
     let fallbackIndex = 0;
 
-    for (const step of plan.steps) {
-        for (const material of step.materials ?? []) {
-            const label = material.trim();
+    for (const [index, step] of plan.steps.entries()) {
+        const stepToken = normalizeToken(step.id?.trim() ? step.id : step.title) || `step-${index + 1}`;
+        for (const material of normalizeStepMaterials(step.materials)) {
+            const label = material.name.trim();
             if (!label) continue;
             const token = normalizeToken(label) || `item-${++fallbackIndex}`;
-            const id = `plan-mat:${token}`;
+            const id = `plan-mat:${stepToken}:${token}`;
             if (materialMap.has(id)) continue;
+            const descriptionParts = [`Step: ${step.title}`];
+            if (material.notes) descriptionParts.push(material.notes);
             materialMap.set(id, {
                 id,
                 category: "General",
                 label,
-                qty: 1,
-                unit: "unit",
-                unitCostEstimate: 0,
+                description: descriptionParts.join(" "),
+                qty: material.quantity ?? 1,
+                unit: material.unit ?? "unit",
+                unitCostEstimate: material.unitCostEstimate ?? 0,
                 status: "planned",
             });
         }
@@ -148,8 +205,9 @@ function renderPlanMarkdown(plan: SolutionItemPlanV1): string {
         if (typeof step.estimatedMinutes === "number") {
             lines.push("", `- Est. minutes: ${step.estimatedMinutes}`);
         }
-        if (step.materials && step.materials.length) {
-            lines.push("", `- Materials: ${step.materials.join(", ")}`);
+        const normalizedMaterials = normalizeStepMaterials(step.materials);
+        if (normalizedMaterials.length) {
+            lines.push("", `- ${formatMaterialList(normalizedMaterials)}`);
         }
         if (step.tools && step.tools.length) {
             lines.push("", `- Tools: ${step.tools.join(", ")}`);
@@ -323,7 +381,7 @@ function fillStepDetailsFromMarkdown(
 }
 
 function extractResourcesFromText(text: string) {
-    const materials: string[] = [];
+    const materials: StepMaterial[] = [];
     const tools: string[] = [];
     const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
     for (const line of lines) {
@@ -331,10 +389,15 @@ function extractResourcesFromText(text: string) {
         const [label, rest] = normalized.split(/:\s*/, 2);
         if (!rest) continue;
         const lower = label.toLowerCase();
-        if (lower === "materials" || lower === "material" || label === "חומרים") {
-            materials.push(...rest.split(",").map((item) => item.trim()).filter(Boolean));
+        if (lower === "materials" || lower === "material") {
+            materials.push(
+                ...rest.split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+                    .map((name) => ({ name })),
+            );
         }
-        if (lower === "tools" || lower === "tool" || label === "כלים") {
+        if (lower === "tools" || lower === "tool") {
             tools.push(...rest.split(",").map((item) => item.trim()).filter(Boolean));
         }
     }
@@ -591,6 +654,7 @@ export const send = action({
             "- Always include a draft step-by-step build/procurement plan, even if you must state assumptions.",
             "- If assumptions are needed, list them explicitly before the steps.",
             "- Keep the response actionable and specific (dimensions, materials, suppliers, tools, sequencing).",
+            "- For each step, list materials with name, quantity, unit, and estimated unit cost when possible.",
         ].join("\n");
 
         let buffer = "";
@@ -626,13 +690,14 @@ export const send = action({
                 try {
                     const extracted = await callChatWithSchema(SolutioningExtractedPlanLooseSchema, {
                         model,
-                        systemPrompt: [
+                            systemPrompt: [
                             systemPrompt,
                             "",
             "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
             "Return JSON with keys: plan and markdown.",
             "The plan.steps array must contain multiple atomic steps (each is a single task).",
             "If the message is long, split it into 4-10 steps.",
+            "Each step.materials entry should be an object with name, quantity, unit, and unitCostEstimate when available.",
                             "Use the same language as the message content.",
                             "Return valid JSON only.",
                         ].join("\n"),
@@ -735,6 +800,7 @@ export const extractPlanFromThread = action({
                     "Return JSON with keys: plan and markdown.",
                     "The plan.steps array must contain multiple atomic steps (each is a single task).",
                     "If the message is long, split it into 4-10 steps.",
+                    "Each step.materials entry should be an object with name, quantity, unit, and unitCostEstimate when available.",
                     "Use the same language as the message content.",
                     "Return valid JSON only.",
                 ].join("\n"),

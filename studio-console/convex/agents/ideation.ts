@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { z } from "zod";
 import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { callChatWithSchema } from "../lib/openai";
+import { callChatWithSchema, streamChatText } from "../lib/openai";
 import { ConceptPacketSchema } from "../lib/zodSchemas";
 
 const FALLBACK_SYSTEM_PROMPT = [
@@ -10,6 +10,75 @@ const FALLBACK_SYSTEM_PROMPT = [
     "You propose concepts that are realistic to execute and aligned with constraints.",
     "Always default to the project's default language unless the user explicitly requests otherwise.",
 ].join("\n");
+
+type ParsedConcept = {
+    title: string;
+    oneLiner: string;
+    narrative: string;
+};
+
+function parseConceptMarkdown(markdown: string): ParsedConcept[] {
+    const results: ParsedConcept[] = [];
+    const regex = /^##\s*Concept\s*\d+\s*:?\s*(.+)?$/gim;
+    const matches = [...markdown.matchAll(regex)];
+    if (matches.length === 0) return results;
+
+    for (let idx = 0; idx < matches.length; idx += 1) {
+        const match = matches[idx];
+        const title = (match[1] ?? "").trim() || `Concept ${idx + 1}`;
+        const sectionStart = (match.index ?? 0) + match[0].length;
+        const sectionEnd = idx + 1 < matches.length ? (matches[idx + 1].index ?? markdown.length) : markdown.length;
+        const section = markdown.slice(sectionStart, sectionEnd).trim();
+
+        const boldMatch = section.match(/\*\*(.+?)\*\*/);
+        const oneLiner = (boldMatch?.[1] ?? "").trim();
+        const narrative = section.replace(/\*\*(.+?)\*\*/, "").trim() || section;
+
+        results.push({
+            title,
+            oneLiner: oneLiner || title,
+            narrative: narrative || title,
+        });
+    }
+
+    return results;
+}
+
+function buildFallbackPacket(projectId: string, concepts: ParsedConcept[]) {
+    const summary = concepts.map((concept) => concept.title).join("; ").slice(0, 180) || "Ideation concepts";
+    return {
+        type: "ConceptPacket" as const,
+        projectId,
+        agentName: "IDEATION_AGENT",
+        summary,
+        assumptions: [],
+        openQuestions: [],
+        concepts: {
+            create: concepts.map((concept, index) => ({
+                tempId: `fallback-${index + 1}`,
+                title: concept.title,
+                oneLiner: concept.oneLiner,
+                narrative: concept.narrative,
+                style: {
+                    materials: [],
+                    colors: [],
+                    lighting: [],
+                    references: [],
+                },
+                feasibility: {
+                    studioProduction: "medium",
+                    purchases: "medium",
+                    rentals: "medium",
+                    moving: "medium",
+                    installation: "medium",
+                    mainRisks: [],
+                },
+                impliedItemCandidates: [],
+            })),
+            patch: [],
+        },
+    };
+}
 
 export const getContext = internalQuery({
     args: { projectId: v.id("projects") },
@@ -265,19 +334,88 @@ export const send = action({
                 status: "final",
             });
         } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
+            const fallbackPrompt = [
+                "Generate exactly 3 concept directions.",
+                "Output plain Markdown only (no JSON).",
+                "Use headings:",
+                "## Concept 1: <title>",
+                "## Concept 2: <title>",
+                "## Concept 3: <title>",
+                "Under each concept include:",
+                "- One-liner (bold)",
+                "- Visual language keywords",
+                "- Materials / build approach",
+                "- Timeline (high level)",
+                "- Risks + mitigations",
+                "- Budget fit",
+                "",
+                "Project context:",
+                `Name: ${project.name}`,
+                `Client: ${project.clientName}`,
+                `Stage: ${project.stage ?? "ideation"}`,
+                `Budget tier: ${project.budgetTier ?? "unknown"}`,
+                `Project types: ${(project.projectTypes ?? []).join(", ") || "none"}`,
+            ].join("\n");
+
+            let markdownOutput = "";
+            try {
+                markdownOutput = await streamChatText({
+                    model,
+                    systemPrompt,
+                    userPrompt: fallbackPrompt,
+                    language: project.defaultLanguage === "en" ? "en" : "he",
+                    onDelta: async (delta) => {
+                        markdownOutput += delta;
+                    },
+                });
+            } catch {
+                markdownOutput = "";
+            }
+
+            const parsed = parseConceptMarkdown(markdownOutput);
+            const normalized = parsed.length > 0 ? parsed.slice(0, 3) : [
+                { title: "Concept 1", oneLiner: "Concept 1", narrative: "Concept 1" },
+                { title: "Concept 2", oneLiner: "Concept 2", narrative: "Concept 2" },
+                { title: "Concept 3", oneLiner: "Concept 3", narrative: "Concept 3" },
+            ];
+            const fallbackPacket = buildFallbackPacket(project._id, normalized);
+
+            const concepts = fallbackPacket.concepts.create.slice(0, 7).map((concept) => ({
+                title: concept.title,
+                oneLiner: concept.oneLiner,
+                detailsMarkdown: [
+                    concept.narrative,
+                    "",
+                    "Style:",
+                    `- Materials: ${concept.style.materials.join(", ") || "n/a"}`,
+                    `- Colors: ${concept.style.colors.join(", ") || "n/a"}`,
+                    `- Lighting: ${concept.style.lighting.join(", ") || "n/a"}`,
+                    `- References: ${concept.style.references.join(", ") || "n/a"}`,
+                    "",
+                    "Feasibility:",
+                    `- Studio production: ${concept.feasibility.studioProduction}`,
+                    `- Purchases: ${concept.feasibility.purchases}`,
+                    `- Rentals: ${concept.feasibility.rentals}`,
+                    `- Moving: ${concept.feasibility.moving}`,
+                    `- Installation: ${concept.feasibility.installation}`,
+                    `- Main risks: ${concept.feasibility.mainRisks.join(", ") || "n/a"}`,
+                    "",
+                    "Implied item candidates:",
+                    "- n/a",
+                ].join("\n"),
+            }));
+
+            await ctx.runMutation(internal.agents.ideation.upsertConceptCards, {
+                projectId: project._id,
+                threadId: args.threadId,
+                concepts,
+            });
+
+            const fallbackContent = markdownOutput.trim() ? markdownOutput : renderConceptPacketMarkdown(fallbackPacket);
             await ctx.runMutation(internal.chat.patchMessage, {
                 messageId: assistantMessageId,
-                status: "error",
-                content: `Error: ${message}`,
-            });
-            await ctx.runMutation(internal.chat.createMessage, {
-                projectId: project._id,
-                scenarioId: scenario._id,
-                threadId: args.threadId,
-                role: "system",
-                content: `Error: ${message}`,
-                status: "error",
+                content: fallbackContent,
+                status: "final",
             });
         }
 

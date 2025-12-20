@@ -34,8 +34,8 @@ export function QuoteWizard({
     const currency = (accounting?.project.currency as string | undefined) ?? "ILS";
 
     const baseItems = useMemo<Array<Omit<WizardItem, "selected" | "notes"> & { notes: string }>>(() => {
-        if (!accounting?.sections) return [];
-        const rows = accounting.sections as unknown as AccountingSectionRow[];
+        if (!accounting?.sections && !itemsWithSpecs) return [];
+        const rows = (accounting?.sections ?? []) as unknown as AccountingSectionRow[];
         const itemTotals = new Map<string, number>();
         const itemLabelFallback = new Map<string, string>();
         const unlinkedSections: AccountingSectionRow[] = [];
@@ -54,18 +54,16 @@ export function QuoteWizard({
             }
         }
 
-        const itemsById = new Map(
-            (itemsWithSpecs ?? []).map((entry) => [entry.item._id, entry]),
-        );
-
-        const itemLines = Array.from(itemTotals.entries())
-            .map(([itemId, amount]) => {
-                const entry = itemsById.get(itemId);
-                const includeInQuote = entry?.spec.quote?.includeInQuote ?? true;
-                if (!includeInQuote || amount <= 0) return null;
+        const itemsById = new Map((itemsWithSpecs ?? []).map((entry) => [entry.item._id, entry]));
+        const itemLines = (itemsWithSpecs ?? [])
+            .map((entry) => {
+                const itemId = String(entry.item._id);
+                const includeInQuote = entry.spec.quote?.includeInQuote ?? true;
+                if (!includeInQuote) return null;
+                const amount = itemTotals.get(itemId) ?? 0;
                 const label =
-                    entry?.spec.quote?.clientTextOverride?.trim() ||
-                    entry?.item.title ||
+                    entry.spec.quote?.clientTextOverride?.trim() ||
+                    entry.item.title ||
                     itemLabelFallback.get(itemId) ||
                     "Item";
                 return {
@@ -78,7 +76,8 @@ export function QuoteWizard({
             })
             .filter(Boolean) as Array<Omit<WizardItem, "selected" | "notes"> & { notes: string }>;
 
-        const sectionLines = unlinkedSections.map((row) => {
+        const sectionLines = unlinkedSections
+            .map((row) => {
             const section = row.section;
             const amount = Number(row.stats?.plannedClientPrice ?? 0);
             return {
@@ -88,9 +87,10 @@ export function QuoteWizard({
                 currency,
                 notes: "",
             };
-        });
+        })
+            .filter((item) => item.amount > 0);
 
-        return [...itemLines, ...sectionLines].filter((item) => item.amount > 0);
+        return [...itemLines, ...sectionLines];
     }, [accounting?.sections, currency, itemsWithSpecs]);
 
     const [excludedKeys, setExcludedKeys] = useState<Set<string>>(() => new Set());
@@ -115,8 +115,9 @@ export function QuoteWizard({
 
     const selectedCustomItems = useMemo(() => customItems.filter((i) => i.selected), [customItems]);
     const selectedItems = useMemo(() => [...selectedBaseItems, ...selectedCustomItems], [selectedBaseItems, selectedCustomItems]);
+    const selectedQuoteItems = useMemo(() => selectedItems.filter((i) => i.amount > 0), [selectedItems]);
 
-    const total = useMemo(() => selectedItems.reduce((sum, i) => sum + i.amount, 0), [selectedItems]);
+    const total = useMemo(() => selectedQuoteItems.reduce((sum, i) => sum + i.amount, 0), [selectedQuoteItems]);
 
     return (
         <div className="bg-white border rounded shadow-sm p-4 space-y-4">
@@ -132,7 +133,7 @@ export function QuoteWizard({
             ) : (
                 <div className="space-y-2">
                     {baseItems.length === 0 ? (
-                        <div className="text-sm text-gray-500">No priced sections yet.</div>
+                        <div className="text-sm text-gray-500">No items or priced sections yet.</div>
                     ) : (
                         baseItems.map((item) => (
                             <div key={item.key} className="flex items-center gap-2 border rounded p-2">
@@ -281,14 +282,14 @@ export function QuoteWizard({
                 <button
                     type="button"
                     className="bg-green-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-                    disabled={isSaving || selectedItems.length === 0}
+                    disabled={isSaving || selectedQuoteItems.length === 0}
                     onClick={async () => {
                         setIsSaving(true);
                         try {
                             const result = await createFromWizard({
                                 projectId,
                                 currency,
-                                breakdown: selectedItems.map((i) => ({
+                                breakdown: selectedQuoteItems.map((i) => ({
                                     label: i.label,
                                     amount: i.amount,
                                     currency: i.currency,

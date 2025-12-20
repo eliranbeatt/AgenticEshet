@@ -121,6 +121,7 @@ export default function SolutioningPage() {
     const [planDraft, setPlanDraft] = useState<SolutionItemPlanV1 | null>(null);
     const [markdownDraft, setMarkdownDraft] = useState("");
     const [isSaving, setIsSaving] = useState(false);
+    const [isExtracting, setIsExtracting] = useState(false);
     const previousSelectedItemIdRef = useRef<string | null>(null);
     const lastRemotePlanJsonRef = useRef<string | null>(null);
     const lastRemoteMarkdownRef = useRef<string | null>(null);
@@ -241,20 +242,53 @@ export default function SolutioningPage() {
                             <div className="flex items-center gap-2">
                                 <button
                                     type="button"
-                                    className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
-                                    disabled={!threadId || !selectedItemId}
+                                    className={`text-xs px-2 py-1 rounded border text-white disabled:opacity-50 ${
+                                        isExtracting
+                                            ? "bg-amber-500 border-amber-500"
+                                            : "bg-green-600 border-green-600 hover:bg-green-700"
+                                    }`}
+                                    disabled={!threadId || !selectedItemId || isExtracting}
                                     onClick={async () => {
                                         if (!threadId || !selectedItemId) return;
-                                        const result = await extractPlan({ threadId, itemId: selectedItemId });
-                                        if (result?.plan) {
-                                            setPlanDraft(result.plan);
-                                            setMarkdownDraft(result.markdown ?? "");
-                                            lastRemotePlanJsonRef.current = JSON.stringify(result.plan);
-                                            lastRemoteMarkdownRef.current = result.markdown ?? "";
+                                        setIsExtracting(true);
+                                        try {
+                                            const result = await extractPlan({ threadId, itemId: selectedItemId });
+                                            if (result?.plan) {
+                                                setPlanDraft(result.plan);
+                                                setMarkdownDraft(result.markdown ?? "");
+                                                lastRemotePlanJsonRef.current = JSON.stringify(result.plan);
+                                                lastRemoteMarkdownRef.current = result.markdown ?? "";
+                                            }
+                                        } finally {
+                                            setIsExtracting(false);
                                         }
                                     }}
                                 >
-                                    Extract plan
+                                    <span className="inline-flex items-center gap-2">
+                                        {isExtracting && (
+                                            <svg
+                                                className="h-3 w-3 animate-spin"
+                                                viewBox="0 0 24 24"
+                                                aria-hidden="true"
+                                            >
+                                                <circle
+                                                    className="opacity-25"
+                                                    cx="12"
+                                                    cy="12"
+                                                    r="10"
+                                                    stroke="currentColor"
+                                                    strokeWidth="4"
+                                                    fill="none"
+                                                />
+                                                <path
+                                                    className="opacity-75"
+                                                    fill="currentColor"
+                                                    d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z"
+                                                />
+                                            </svg>
+                                        )}
+                                        {isExtracting ? "Extracting..." : "Extract plan"}
+                                    </span>
                                 </button>
                                 <button
                                     type="button"

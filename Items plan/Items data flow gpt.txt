@@ -1,0 +1,426 @@
+
+
+## Core principle
+
+### Items are the single source of truth
+
+An **Item** is the atomic unit of the project (set piece, print, floor, transport, installation day, rental, management fee, etc.). Once an item exists, it becomes the shared object that **all tabs + all agents** read/write:
+
+* Planning
+* Solutioning
+* Accounting / Estimation
+* Tasks + Gantt (duration + dependencies)
+* Quotes (client-facing doc)
+
+So the workflow is essentially:
+**Overview → (Ideation OR Planning) → Items → Plan extraction → Solutioning extraction → Accounting + Tasks → Quote**
+
+---
+
+## Phase 0 — Create Project (Overview screen)
+
+### User actions
+
+User opens a new project and fills an **Overview** form:
+
+* Project name
+* Project properties (multi-select across categories), for example:
+
+  * Studio production required (yes/no + type)
+  * Purchases required (local/abroad/both)
+  * Rentals required
+  * Moving/transport required
+  * Installation required
+  * Crew required (day workers, specialists)
+  * Constraints: budget tier, timeline, venue, client rules, safety constraints, etc.
+* Attach knowledge:
+
+  * Docs (brief, references, measurements, client email, moodboard, etc.)
+  * Past similar projects (linked or imported)
+  * Any structured inputs (client requirements, vendor quotes, materials list)
+
+### Persisted artifacts (canonical data)
+
+* `Project` record (overview fields)
+* `Project Knowledge` corpus (attachments + linked past projects + notes)
+* Optional: project “tags” and statuses
+
+### Immediately available to all agents
+
+From this point on, every agent must be able to load:
+
+* Project overview fields
+* Attached/ingested knowledge (docs + past projects)
+* Current items (if any)
+* Current tasks/accounting/quotes (if any)
+
+---
+
+## Branching point: two possible flows after Overview
+
+After saving Overview, user chooses **one of two entry flows**:
+
+1. **Ideation flow** (items are NOT known yet)
+2. **Planning flow** (items ARE already known)
+
+Both flows ultimately produce **Items**.
+
+---
+
+## Flow 1 — Ideation (items unknown)
+
+### Purpose
+
+Help the user explore concepts when they don’t yet know what the project needs.
+
+### Inputs to Ideation Agent
+
+The ideation agent receives:
+
+* Full project overview (all selected properties, constraints, budget tier, timeline)
+* Full project knowledge (uploaded docs + linked past projects + extracted summaries)
+* Any user message/instructions for ideation
+* Ability to **research online** when needed (materials, inspiration, methods, references)
+
+### Ideation Agent behavior goals (prompt requirements)
+
+* **Ask clarifying questions first** when critical details are missing (venue type, dimensions, style, must-haves, budget range, deadlines).
+* Generate **multiple concept candidates** (not a single answer), each with:
+
+  * Name/title
+  * One-liner
+  * Short narrative concept
+  * Visual/style direction
+  * Feasibility notes (what makes it easy/hard)
+  * What kinds of items it likely implies (but without forcing decisions)
+* Iterate:
+
+  * User can request “more”, “different direction”, “combine A+B”, “cheaper”, “more premium”, etc.
+  * Agent updates or creates new concept cards.
+
+### Output artifact: Concept Cards (not Items yet)
+
+Concepts are stored as “concept cards” until the user selects one.
+
+### Conversion step: Concept → Item
+
+When the user chooses a concept (or part of it) and clicks **“Turn into Item”**:
+
+* A new **Item card** is created (or multiple items, if concept is complex)
+* The created item becomes shared across all agents/tabs
+
+**Handoff at this point:**
+Concept data (intent + constraints + idea) becomes structured Item seed data.
+
+---
+
+## Flow 2 — Planning entry (items already known)
+
+### Purpose
+
+User already knows the rough list of items and wants to operationalize the project.
+
+### User actions
+
+User manually creates items via a structured form:
+
+* Item name
+* Description
+* Category/type (set piece / print / rental / moving / install / management / etc.)
+* Flags: produced in studio? requires purchases? rental? moving? etc.
+* Any known constraints: dimensions, materials, deadlines, references
+
+User then selects **one or more items** and starts a chat with the agents.
+
+---
+
+## Phase 1 — Clarification (for plan generation)
+
+### Clarification Agent role
+
+Before generating a plan, the agent must ask the minimum set of questions required to produce a realistic first plan.
+
+### Inputs to Clarification Agent
+
+* Project overview (all properties)
+* Selected items (or all items if user chose “project-wide”)
+* Current item cards (their current fields)
+* All relevant knowledge (docs + past projects + previous conversations)
+* The user’s message that starts the planning request
+
+### Clarification Agent behavior goals
+
+* Ask questions that unblock planning, especially:
+
+  * Dimensions, quantities, location/venue constraints
+  * Required look/quality level
+  * Deadlines + install/shoot dates
+  * Approvals: who signs off, when
+  * What is fixed vs flexible (budget vs look vs time)
+  * What’s already owned vs must purchase/rent
+* Keep questions grouped and structured:
+
+  * “Project-level questions”
+  * “Per-item questions”
+* Avoid over-questioning: only ask what matters for the *initial* plan.
+
+### Output artifacts
+
+* A structured clarification transcript + summary (persisted)
+* “Open questions list” (persisted)
+* A “ready-to-plan” signal once minimum info exists
+
+---
+
+## Phase 2 — Planning extraction (build the initial plan into Items)
+
+### Trigger
+
+User clicks **“Extract Plan”**.
+
+### Planning Agent role
+
+Convert all known information + clarification transcript into:
+
+* Updates to existing items
+* Creation of missing items (template-driven)
+* Creation of item sub-structure (subtasks + initial material/labor/purchase placeholders)
+
+### Inputs to Planning Agent
+
+* Project overview
+* All items currently in the project
+* Selected items scope (if user chose subset)
+* Entire clarification conversation (Q&A)
+* Relevant documents + past projects (retrieved context)
+
+### Planning Agent behavior goals
+
+* Produce a **first operational plan**:
+
+  * What must happen, in what order
+  * What each item requires
+* Update item cards with extracted structured fields:
+
+  * Item scope
+  * Subtasks list (coarse → medium detail)
+  * Purchase/rental/moving/management needs
+  * Rough deliverables and checkpoints
+* Create missing “infrastructure items” when needed (based on project template), e.g.:
+
+  * Management / production fee
+  * Moving / transport
+  * Installation day
+  * Shoot day
+  * Disassembly / return rentals
+* Keep outputs editable by the user.
+
+### Output artifacts (written into Items)
+
+* Updated item cards
+* New item cards if required
+* Each item contains initial **subtasks**
+
+### Approval step
+
+User reviews changes and **approves**:
+
+* New items
+* Item updates / subtasks
+
+Only after approval are items considered “committed” and visible as authoritative downstream.
+
+---
+
+## Phase 3 — Automatic downstream sync (tabs update from Items)
+
+Once items/subtasks exist, the system should automatically reflect them:
+
+* **Accounting tab**: shows items → subtasks (as cost containers)
+* **Tasks tab**: shows items → subtasks (as executable tasks)
+* **Gantt**: tasks appear but scheduling may still be empty until Task Scheduling agent runs
+* **Quote tab**: can already list items, but pricing/terms may be incomplete until solutioning/accounting
+
+This is a key design rule:
+**Items are the hub; every other view is a projection.**
+
+---
+
+## Phase 4 — Solutioning (deep implementation + materials/labor)
+
+### Solutioning Agent role
+
+Go deep on “how to execute” each item/subtask:
+
+* Improve feasibility
+* Improve look
+* Improve efficiency
+* Reduce cost/risk
+* Suggest materials + methods
+* Research online for better options if needed
+
+### Inputs to Solutioning Agent
+
+* Project overview + constraints
+* Approved items + subtasks
+* All knowledge (docs + past projects)
+* Planning outputs
+* Any user instructions (“make it cheaper”, “safer”, “more premium”, etc.)
+* Ability to do online research
+
+### Solutioning Agent behavior goals
+
+For each relevant subtask, produce **structured, actionable execution details**:
+
+* Method options (A/B/C), with pros/cons
+* Recommended approach
+* Materials list + quantities (if possible)
+* Labor roles needed + rough effort assumptions
+* Tools/equipment needs
+* Risks + mitigations
+* Dependencies (what must be done first)
+
+### Extraction step
+
+After solutioning chat, user triggers **“Extract to Items”**.
+
+### Output artifacts (written into Items)
+
+* Item subtasks now include:
+
+  * Materials (lines: name, qty, unit, notes)
+  * Labor (lines: role, hours/days, notes)
+  * Execution notes
+  * Optional: purchase plan hints (local/abroad, lead times)
+
+---
+
+## Phase 5 — Accounting / Estimation (pricing confidence loop)
+
+### Accounting Agent role
+
+Let user drill into any item/subtask and request:
+
+* “Explain why you estimated X”
+* “Estimate more precisely”
+* “Give me 3 options: cheap/standard/premium”
+* “Use vendor memory / price history”
+* “Suggest where to buy / lead times”
+
+### Inputs to Accounting Agent
+
+* Items + extracted materials/labor
+* Vendor/price memory (historical purchases, price observations)
+* Project constraints (budget tier, timeline)
+* Any research reports if available
+
+### Output artifacts
+
+* Updated material + labor cost estimates (per line + totals)
+* Optional: confidence level + assumptions
+* Optional: alternatives and tradeoffs
+
+---
+
+## Phase 6 — Tasks scheduling (duration + dependencies → Gantt)
+
+### Tasks Agent role
+
+Turn item subtasks into a real execution schedule:
+
+* durations
+* dependencies
+* ordering constraints
+* start/end estimates
+
+### Inputs to Tasks Agent
+
+* Project overview (dates, deadlines, install day, shoot day)
+* Items + subtasks
+* Existing tasks list (if already exists)
+* Any known availability constraints (crew, vendors, shipping lead times)
+
+### Tasks Agent behavior goals
+
+* Ensure every subtask has:
+
+  * Estimated duration
+  * Dependency rules (must start after X)
+  * Suggested sequencing across items
+* Identify critical path and risky lead-time tasks (shipping, custom fabrication, approvals)
+* Write results back to task data so the Gantt becomes meaningful
+
+### Output artifacts
+
+* Updated Tasks (duration, dependencies, scheduling fields)
+* Gantt view becomes automatically coherent
+
+---
+
+## Phase 7 — Quote generation (client document)
+
+### Quote Agent role
+
+Generate a client-facing narrative quote document.
+
+### Inputs to Quote Agent
+
+* Project overview (client name, dates, scope summary)
+* Approved items + final pricing (from accounting)
+* Attached files (brief, references) as context
+* Any user constraints about tone/format and payment terms
+
+### Quote Agent behavior goals
+
+Produce a quote document that includes:
+
+* Short project description
+* Itemized list: each item name + price
+* Total
+* Terms & conditions tailored to protect the studio:
+
+  * Scope boundaries / change requests
+  * Approvals and signoff points
+  * Timeline assumptions
+  * Payment milestones, deposits, late fees
+  * Ownership of designs/assets (if relevant)
+  * Safety / venue constraints responsibility
+  * Cancellation / delays handling
+
+### Output artifacts
+
+* Quote draft(s) versioned
+* Ready to export/share (PDF/Doc)
+
+---
+
+## What gets passed between agents (handoff summary)
+
+### Canonical shared objects
+
+* **Project Overview** (always included)
+* **Knowledge corpus** (always included; retrieval scoped to project + similar past projects)
+* **Items** (the shared “truth” object)
+* **Chat transcripts** (clarification chat, solutioning chat, etc.)
+
+### Main handoff artifacts
+
+1. **Ideation → Items**: concept cards become initial item seeds
+2. **Clarification → Planning**: Q&A transcript becomes plan inputs
+3. **Planning → Items**: items get subtasks + new template items
+4. **Solutioning → Items**: materials/labor/methods written per subtask
+5. **Items → Accounting**: costs aggregated, refined, justified
+6. **Items → Tasks**: scheduling + dependencies for Gantt
+7. **Items + Accounting → Quote**: narrative quote with line pricing + terms
+
+---
+
+## What you want from prompts (high-level “non-negotiables”)
+
+Across all agents:
+
+* Always ground output in **project overview + ingested knowledge + current items**
+* Ask clarifying questions when needed; don’t hallucinate missing constraints
+* Prefer **structured outputs that can be saved into item/task fields**
+* Support iterative loops: user can refine and rerun extraction without breaking consistency
+* Respect approvals: agent can *propose* changes; user *commits* them

@@ -1,0 +1,399 @@
+Below is a **drop-in Convex schema section** (tables + indexes) for the **Items subsystem** that supports your full workflow: tree/accordion UI, agent proposals → approval, revisions, locks, plus clean joins into **Tasks/Gantt** and **Accounting**.
+
+This aligns with the existing table naming implied in your current spec (`projectItems`, `itemRevisions`, `itemTemplates`, `itemProjectionLocks`). 
+
+---
+
+```ts
+// convex/schema.items.ts (or paste into convex/schema.ts)
+//
+// NOTE:
+// - If you paste into schema.ts, remove the export and merge into your defineSchema({...})
+// - This is “exact Convex schema code”: tables + indexes + search indexes.
+
+import { defineTable } from "convex/server";
+import { v } from "convex/values";
+
+/** Shared enums (keep literals stable) */
+const ItemStatus = v.union(
+  v.literal("draft"),
+  v.literal("proposed"),   // exists inside a changeset; not yet committed
+  v.literal("approved"),
+  v.literal("in_progress"),
+  v.literal("done"),
+  v.literal("blocked"),
+  v.literal("cancelled"),
+  v.literal("deleted")     // soft delete marker
+);
+
+const ItemKind = v.union(
+  v.literal("deliverable"),
+  v.literal("service"),
+  v.literal("day"),
+  v.literal("fee"),
+  v.literal("group")
+);
+
+const ItemCategory = v.union(
+  v.literal("set_piece"),
+  v.literal("print"),
+  v.literal("floor"),
+  v.literal("prop"),
+  v.literal("rental"),
+  v.literal("purchase"),
+  v.literal("transport"),
+  v.literal("installation"),
+  v.literal("studio_production"),
+  v.literal("management"),
+  v.literal("other")
+);
+
+const Phase = v.union(
+  v.literal("overview"),
+  v.literal("ideation"),
+  v.literal("clarification"),
+  v.literal("planning"),
+  v.literal("solutioning"),
+  v.literal("accounting"),
+  v.literal("tasks"),
+  v.literal("quote"),
+  v.literal("execution")
+);
+
+const Currency = v.union(v.literal("ILS"), v.literal("USD"), v.literal("EUR"));
+
+/**
+ * 1) projectItems (canonical current state)
+ * Tree node + cached rollups for fast UI.
+ */
+export const projectItems = defineTable({
+  projectId: v.id("projects"),
+
+  // Tree
+  parentItemId: v.optional(v.id("projectItems")), // null/undefined = root
+  sortKey: v.string(), // stable sibling ordering, e.g. "0003.0010"
+
+  // Classification
+  kind: ItemKind,
+  category: ItemCategory,
+
+  // Core text
+  name: v.string(),
+  description: v.optional(v.string()),
+
+  // Flags
+  flags: v.object({
+    requiresStudio: v.optional(v.boolean()),
+    requiresPurchase: v.optional(v.boolean()),
+    purchaseMode: v.optional(
+      v.union(
+        v.literal("local"),
+        v.literal("abroad"),
+        v.literal("both"),
+        v.literal("none")
+      )
+    ),
+    requiresRental: v.optional(v.boolean()),
+    requiresMoving: v.optional(v.boolean()),
+    requiresInstallation: v.optional(v.boolean()),
+  }),
+
+  // Structured scope (editable)
+  scope: v.optional(
+    v.object({
+      quantity: v.optional(v.number()),
+      unit: v.optional(v.string()),        // pcs/sqm/day/service
+      dimensions: v.optional(v.string()),  // free text for now
+      location: v.optional(v.string()),
+      dueDate: v.optional(v.string()),     // ISO date
+      constraints: v.optional(v.array(v.string())),
+      assumptions: v.optional(v.array(v.string())),
+    })
+  ),
+
+  // Links (to knowledge / external / trello)
+  links: v.optional(
+    v.object({
+      knowledgeDocIds: v.optional(v.array(v.id("knowledgeDocs"))),
+      pastProjectIds: v.optional(v.array(v.id("projects"))),
+      externalUrls: v.optional(v.array(v.string())),
+      trelloCardIds: v.optional(v.array(v.string())),
+    })
+  ),
+
+  // Cached rollups (computed by backend; stored for speed)
+  rollups: v.object({
+    cost: v.object({
+      material: v.number(),
+      labor: v.number(),
+      rentals: v.number(),
+      purchases: v.number(),
+      shipping: v.number(),
+      misc: v.number(),
+      totalCost: v.number(),
+      sellPrice: v.optional(v.number()),
+      margin: v.optional(v.number()),
+      currency: Currency,
+    }),
+    schedule: v.object({
+      durationHours: v.number(),
+      plannedStart: v.optional(v.string()), // ISO datetime
+      plannedEnd: v.optional(v.string()),
+      progressPct: v.number(),              // derived from tasks
+      blocked: v.optional(v.boolean()),
+    }),
+    tasks: v.object({
+      total: v.number(),
+      done: v.number(),
+      blocked: v.number(),
+    }),
+  }),
+
+  // Quote defaults (not quote itself)
+  quoteDefaults: v.optional(
+    v.object({
+      includeByDefault: v.boolean(),
+      displayName: v.optional(v.string()),
+      taxable: v.optional(v.boolean()),
+      vatRate: v.optional(v.number()),
+    })
+  ),
+
+  // Governance / provenance
+  status: ItemStatus,
+  currentRevisionId: v.id("itemRevisions"),
+  lockedByPhase: v.optional(Phase),
+
+  // Soft delete flow (double approval UX)
+  deleteRequestedAt: v.optional(v.number()),
+  deleteRequestedBy: v.optional(v.string()),
+  deletedAt: v.optional(v.number()),
+
+  // Search helper
+  searchText: v.string(), // set to `${name}\n${description ?? ""}`
+
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  // Primary listings
+  .index("by_project", ["projectId"])
+  .index("by_project_status", ["projectId", "status"])
+  .index("by_project_kind", ["projectId", "kind"])
+  .index("by_project_category", ["projectId", "category"])
+
+  // Tree navigation
+  .index("by_project_parent_sort", ["projectId", "parentItemId", "sortKey"])
+  .index("by_project_sort", ["projectId", "sortKey"])
+
+  // Soft delete patterns
+  .index("by_project_deletedAt", ["projectId", "deletedAt"])
+
+  // Search (fast “type to find item”)
+  .searchIndex("search_items", {
+    searchField: "searchText",
+    filterFields: ["projectId", "status", "category", "kind"],
+  });
+
+/**
+ * 2) itemRevisions (history)
+ * Stores snapshots/patches + metadata for approval/rollback/audit.
+ */
+export const itemRevisions = defineTable({
+  projectId: v.id("projects"),
+  itemId: v.optional(v.id("projectItems")), // optional for "create item" revisions
+  parentRevisionId: v.optional(v.id("itemRevisions")), // chain
+  baseRevisionId: v.optional(v.id("itemRevisions")),   // 3-way merge base
+
+  changeSetId: v.optional(v.id("itemChangeSets")),
+  phase: Phase,
+
+  source: v.union(v.literal("user"), v.literal("agent")),
+  agentName: v.optional(v.string()),
+  runId: v.optional(v.string()),
+
+  // Store either a full snapshot or patch (both allowed; snapshot recommended on commit)
+  revisionType: v.union(v.literal("snapshot"), v.literal("patch")),
+  snapshotJson: v.optional(v.any()),
+  patchJson: v.optional(v.any()),
+
+  summary: v.optional(v.string()),
+
+  createdAt: v.number(),
+
+  // When merged into canonical item
+  appliedAt: v.optional(v.number()),
+  appliedBy: v.optional(v.string()),
+})
+  .index("by_project", ["projectId"])
+  .index("by_item", ["itemId"])
+  .index("by_project_phase", ["projectId", "phase"])
+  .index("by_changeSet", ["changeSetId"])
+  .index("by_run", ["runId"]);
+
+/**
+ * 3) itemTemplates (system + user templates)
+ * Used by planning agent to auto-add management/moving/install/etc.
+ */
+export const itemTemplates = defineTable({
+  name: v.string(),
+  description: v.optional(v.string()),
+
+  kind: ItemKind,
+  category: ItemCategory,
+
+  defaultFlags: v.optional(v.any()), // or v.object(...) if you want strict typing
+  defaultScope: v.optional(v.any()),
+  // Optional: recommended children/subtasks blueprint
+  blueprintJson: v.optional(v.any()),
+
+  tags: v.optional(v.array(v.string())),
+  isSystem: v.boolean(),
+  version: v.number(),
+
+  createdBy: v.optional(v.string()),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  .index("by_name", ["name"])
+  .index("by_kind_category", ["kind", "category"])
+  .index("by_isSystem", ["isSystem"])
+  .searchIndex("search_templates", { searchField: "name", filterFields: ["isSystem"] });
+
+/**
+ * 4) itemProjectionLocks
+ * Prevent concurrent agent extractions overwriting each other.
+ */
+export const itemProjectionLocks = defineTable({
+  projectId: v.id("projects"),
+  itemId: v.optional(v.id("projectItems")), // undefined => project-wide lock
+  phase: Phase,
+
+  lockedBy: v.string(),       // userId/email OR "agent:<name>"
+  runId: v.optional(v.string()),
+  lockedAt: v.number(),
+  expiresAt: v.number(),
+})
+  .index("by_project_phase", ["projectId", "phase"])
+  .index("by_item_phase", ["itemId", "phase"])
+  .index("by_run", ["runId"]);
+
+/**
+ * 5) itemChangeSets (agent proposals → user approves)
+ */
+export const itemChangeSets = defineTable({
+  projectId: v.id("projects"),
+  phase: Phase,
+  agentName: v.string(),
+  runId: v.string(),
+
+  status: v.union(v.literal("pending"), v.literal("approved"), v.literal("rejected")),
+  createdAt: v.number(),
+
+  decidedAt: v.optional(v.number()),
+  decidedBy: v.optional(v.string()),
+
+  // quick UI metadata
+  title: v.optional(v.string()),
+  warnings: v.optional(v.array(v.string())),
+  assumptions: v.optional(v.array(v.string())),
+
+  // counts for fast badges
+  counts: v.optional(
+    v.object({
+      items: v.number(),
+      tasks: v.number(),
+      accountingLines: v.number(),
+      dependencies: v.number(),
+    })
+  ),
+})
+  .index("by_project", ["projectId"])
+  .index("by_project_phase_status", ["projectId", "phase", "status"])
+  .index("by_run", ["runId"]);
+
+/**
+ * 6) itemChangeSetOps (normalized operations)
+ * Lets UI show diffs per item/task/line without huge blobs.
+ */
+export const itemChangeSetOps = defineTable({
+  projectId: v.id("projects"),
+  changeSetId: v.id("itemChangeSets"),
+
+  entityType: v.union(
+    v.literal("item"),
+    v.literal("task"),
+    v.literal("materialLine"),
+    v.literal("workLine"),
+    v.literal("purchase"),
+    v.literal("dependency")
+  ),
+
+  opType: v.union(v.literal("create"), v.literal("patch"), v.literal("delete")),
+  targetId: v.optional(v.string()), // existing id as string (use Id<...> in app logic)
+  tempId: v.optional(v.string()),   // used during creates before merge
+
+  // merge / conflict detection
+  baseRevisionId: v.optional(v.id("itemRevisions")),
+
+  payloadJson: v.any(), // the proposed create object or patch object
+
+  createdAt: v.number(),
+})
+  .index("by_changeSet", ["changeSetId"])
+  .index("by_changeSet_entity", ["changeSetId", "entityType"])
+  .index("by_project", ["projectId"]);
+
+/**
+ * RECOMMENDED: Add these link fields + indexes to EXISTING tables:
+ * - tasks: add itemId
+ * - materialLines/workLines: add itemId + optional taskId
+ *
+ * (Paste these changes into your existing table definitions.)
+ */
+
+// --- tasks (existing) add fields + indexes ---
+// itemId: v.optional(v.id("projectItems")),
+// parentTaskId: v.optional(v.id("tasks")),
+// sortKey: v.optional(v.string()),
+// .index("by_project_item", ["projectId", "itemId"])
+// .index("by_project_parentTask", ["projectId", "parentTaskId"])
+
+// --- materialLines (existing) add fields + indexes ---
+// itemId: v.optional(v.id("projectItems")),
+// taskId: v.optional(v.id("tasks")),
+// .index("by_project_item", ["projectId", "itemId"])
+// .index("by_project_task", ["projectId", "taskId"])
+
+// --- workLines (existing) add fields + indexes ---
+// itemId: v.optional(v.id("projectItems")),
+// taskId: v.optional(v.id("tasks")),
+// .index("by_project_item", ["projectId", "itemId"])
+// .index("by_project_task", ["projectId", "taskId"])
+```
+
+---
+
+## What these indexes are optimized for (practical UI/API queries)
+
+* **Items tree render (accordion)**
+  Query: “give me root items + children ordered”
+  Uses: `projectItems.by_project_parent_sort`
+
+* **Fast filter chips (status/category/kind)**
+  Uses: `by_project_status`, `by_project_category`, `by_project_kind`
+
+* **Type-to-search item name/desc**
+  Uses: `searchIndex("search_items")`
+
+* **Agent proposal review UI** (diff list by change set)
+  Uses: `itemChangeSets.by_project_phase_status` and `itemChangeSetOps.by_changeSet_entity`
+
+* **Conflict-safe updates / rollback**
+  Uses: `itemRevisions.by_item`, `itemRevisions.by_changeSet`, `itemRevisions.baseRevisionId`
+
+* **Prevent concurrent extraction**
+  Uses: `itemProjectionLocks.by_project_phase` or `by_item_phase`
+
+---
+
+If you want, next I can paste the **exact merged `defineSchema({...})` block** including these tables + the minimal modifications to your existing `tasks/materialLines/workLines` definitions (so it’s literally copy/paste into `convex/schema.ts`). 

@@ -1,0 +1,449 @@
+Below are **Agent JSON output contracts (v1)** for each phase: **planning / solutioning / tasks / accounting / quote**. They’re designed to be validated (Zod/JSON-schema) and then persisted as a **ChangeSet** that the user approves/merges into canonical tables (items/tasks/accounting/quotes). This matches the agentic flow + persistence model described in your system docs.
+
+---
+
+## 0) Common envelope (used by every phase)
+
+### `AgentOutputEnvelope.v1` (base)
+
+```json
+{
+  "schemaVersion": "1.0",
+  "phase": "planning",
+  "agent": {
+    "name": "planning_agent",
+    "version": "2025-12-20",
+    "runId": "ar_01JH...."
+  },
+  "project": {
+    "projectId": "P_123",
+    "timezone": "Asia/Jerusalem",
+    "currency": "ILS"
+  },
+  "inputSnapshot": {
+    "projectUpdatedAt": "2025-12-20T10:22:00.000Z",
+    "itemsRevisionId": "ir_45",
+    "tasksUpdatedAt": "2025-12-20T10:10:00.000Z",
+    "accountingUpdatedAt": "2025-12-20T09:55:00.000Z"
+  },
+  "summary": {
+    "title": "What I did",
+    "bullets": ["..."]
+  },
+  "assumptions": ["..."],
+  "openQuestions": [
+    { "id": "q1", "question": "…", "blocking": true, "options": ["…"] }
+  ],
+  "warnings": [
+    { "code": "MISSING_DIMENSIONS", "message": "Item X missing dimensions" }
+  ],
+  "sources": {
+    "knowledgeDocIds": ["kd_1", "kd_2"],
+    "retrievalLogIds": ["rl_1"],
+    "conversationIds": ["cv_1"]
+  },
+  "changeSet": {
+    "changeSetId": "cs_tmp_01",
+    "requiresApproval": true,
+    "ops": []
+  }
+}
+```
+
+### Common operation types (`changeSet.ops[]`)
+
+Every phase outputs a list of ops; ops are idempotent when combined with `runId` + stable `clientRef`:
+
+```json
+{
+  "op": "item.create",
+  "tempId": "tmp:item:wall_01",
+  "clientRef": "wall_setpiece_v1",
+  "payload": { }
+}
+```
+
+Supported `op` values (v1):
+
+* `item.create`, `item.patch`, `item.deleteRequest`
+* `task.create`, `task.patch`, `task.deleteRequest`
+* `dependency.upsert`, `dependency.delete`
+* `accountingLine.create`, `accountingLine.patch`, `accountingLine.deleteRequest`
+* `quote.createDraft` (quote phase only)
+* `projection.recomputeHint` (optional “please recompute rollups” hint)
+
+**ID rules**
+
+* `tempId` is only for newly-created entities; format: `tmp:<type>:<slug>`
+* `clientRef` is a stable dedupe key (recommended): e.g. `"install_day"` / `"moving_service"` / `"linoleum_floor"`
+* For patches, always use real ids: `itemId`, `taskId`, `lineId`
+
+---
+
+## 1) Planning phase contract
+
+**Goal:** Create/normalize the **initial Item tree** + **initial task skeleton** (high-level), plus fill item `scope/constraints/assumptions`. (This is the “Extract Plan” output you described.)
+
+### `PlanningOutput.v1`
+
+* Must contain at least one of:
+
+  * `item.create`
+  * `item.patch`
+  * `task.create`
+
+#### Ops payload shapes
+
+**`item.create`**
+
+```json
+{
+  "op": "item.create",
+  "tempId": "tmp:item:linoleum_01",
+  "clientRef": "linoleum_floor",
+  "payload": {
+    "parentItemId": null,
+    "sortKey": "0002",
+    "kind": "deliverable",
+    "category": "floor",
+    "name": "Linoleum floor",
+    "description": "Supply + install linoleum floor for shoot day.",
+    "flags": {
+      "requiresPurchase": true,
+      "requiresInstallation": true
+    },
+    "scope": {
+      "quantity": 1,
+      "unit": "job",
+      "dimensions": "6m x 4m",
+      "dueDate": "2025-12-28",
+      "constraints": ["Must be matte-looking on camera"],
+      "assumptions": ["Existing flat subfloor"]
+    },
+    "quoteDefaults": { "includeByDefault": true }
+  }
+}
+```
+
+**`item.patch`** (common: add template items if missing)
+
+```json
+{
+  "op": "item.patch",
+  "itemId": "I_300",
+  "payload": {
+    "flags": { "requiresMoving": true },
+    "scope": { "location": "Studio → site" }
+  }
+}
+```
+
+**`task.create`** (initial breakdown per item)
+
+```json
+{
+  "op": "task.create",
+  "tempId": "tmp:task:linoleum_measure",
+  "clientRef": "linoleum_measure_v1",
+  "payload": {
+    "itemRef": "tmp:item:linoleum_01",
+    "parentTaskId": null,
+    "sortKey": "0001",
+    "title": "Measure area + confirm floor spec",
+    "description": "Confirm final dimensions and finish.",
+    "status": "todo",
+    "durationHours": 1.5,
+    "tags": ["planning"]
+  }
+}
+```
+
+**Planning-specific requirements**
+
+* If your project overview implies “moving / management / install day” → **planning must propose them as items** (template expansion), even if user forgot.
+* Create **coarse tasks** only (don’t try to finalize vendors/cost yet).
+
+---
+
+## 2) Solutioning phase contract
+
+**Goal:** Deep implementation plan per item/task:
+
+* add/patch **accounting lines** (materials/labor/purchases/shipping)
+* refine tasks (more granular)
+* attach method notes, risks, alternatives
+
+### `SolutioningOutput.v1`
+
+#### Additional optional top-level fields (recommended)
+
+```json
+{
+  "solutionNotes": {
+    "perItem": [
+      {
+        "itemIdOrRef": "I_100",
+        "approach": "Build lightweight frame + skin…",
+        "risks": ["Warping", "Scratches"],
+        "alternatives": [
+          { "title": "Option B", "pros": ["Cheaper"], "cons": ["Less durable"] }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Ops payload shapes
+
+**`accountingLine.create`** (materials)
+
+```json
+{
+  "op": "accountingLine.create",
+  "tempId": "tmp:line:plywood_10mm",
+  "clientRef": "plywood_10mm_v1",
+  "payload": {
+    "itemRef": "I_100",
+    "taskRef": "tmp:task:frame_build",
+    "lineType": "material",
+    "title": "Plywood 10mm (122x244)",
+    "quantity": 4,
+    "unit": "sheet",
+    "currency": "ILS",
+    "taxable": true,
+    "vatRate": 0.17,
+    "notes": "Subfloor stabilization"
+  }
+}
+```
+
+**`accountingLine.create`** (labor)
+
+```json
+{
+  "op": "accountingLine.create",
+  "tempId": "tmp:line:carpenter_hours",
+  "clientRef": "carpentry_labor_v1",
+  "payload": {
+    "itemRef": "I_100",
+    "lineType": "labor",
+    "title": "Carpentry work",
+    "quantity": 10,
+    "unit": "hour",
+    "currency": "ILS",
+    "notes": "2 workers x 5h"
+  }
+}
+```
+
+**`task.patch`** (refine tasks: add detail & tags)
+
+```json
+{
+  "op": "task.patch",
+  "taskId": "T_55",
+  "payload": {
+    "description": "Use contact cement; allow cure time.",
+    "tags": ["solutioning", "quality"]
+  }
+}
+```
+
+**Solutioning-specific requirements**
+
+* Whenever it proposes a material/labor quantity, include at least one:
+
+  * assumption
+  * measurement source (e.g., “based on 6x4m”)
+  * confidence (optional field if you want it)
+
+---
+
+## 3) Tasks phase contract (Scheduling + Gantt)
+
+**Goal:** turn tasks into a coherent schedule:
+
+* durations
+* dependencies
+* (optional) planned start/end dates
+* critical path flags (optional)
+
+### `TasksOutput.v1`
+
+#### Ops payload shapes
+
+**`dependency.upsert`**
+
+```json
+{
+  "op": "dependency.upsert",
+  "clientRef": "dep_frame_to_paint_v1",
+  "payload": {
+    "fromTaskIdOrRef": "T_10",
+    "toTaskIdOrRef": "T_11",
+    "type": "FS",
+    "lagHours": 0
+  }
+}
+```
+
+**`task.patch`** (duration + schedule)
+
+```json
+{
+  "op": "task.patch",
+  "taskId": "T_11",
+  "payload": {
+    "durationHours": 3,
+    "plannedStart": "2025-12-26T08:00:00.000Z",
+    "plannedEnd": "2025-12-26T11:00:00.000Z"
+  }
+}
+```
+
+**Tasks-specific requirements**
+
+* Must not invent impossible dates: if missing calendar constraints, it should prefer **relative scheduling** (dependencies + durations) and leave actual dates empty.
+* Must keep dependencies at task level (not item level), so Gantt can render correctly.
+
+---
+
+## 4) Accounting phase contract (Cost finalization)
+
+**Goal:** refine costs/vendors/pricing logic:
+
+* unit costs
+* vendor suggestions + lead times
+* purchase status
+* propose sell prices / margins (optional but useful)
+
+### `AccountingOutput.v1`
+
+#### Ops payload shapes
+
+**`accountingLine.patch`** (add cost + vendor + lead time)
+
+```json
+{
+  "op": "accountingLine.patch",
+  "lineId": "L_900",
+  "payload": {
+    "unitCost": 100,
+    "vendorNameFreeText": "Home Center",
+    "leadTimeDays": 2,
+    "purchaseStatus": "quoted",
+    "notes": "Price includes cutting service"
+  }
+}
+```
+
+**Optional: propose sell price at item level**
+
+```json
+{
+  "op": "item.patch",
+  "itemId": "I_100",
+  "payload": {
+    "rollups": {
+      "cost": {
+        "sellPrice": 8500
+      }
+    }
+  }
+}
+```
+
+**Accounting-specific requirements**
+
+* Never overwrite a user-entered `unitCost` unless explicitly instructed; instead, propose a patch with:
+
+  * `costOverride` OR
+  * a note + warning (“user cost locked”)
+* Include VAT flags consistently so quote totals can be computed reliably.
+
+---
+
+## 5) Quote phase contract (Client-facing document)
+
+**Goal:** generate a **versioned quote draft** from current items + accounting:
+
+* narrative sections
+* line items
+* totals
+* terms/payment schedule
+* exclusions + assumptions
+
+### `QuoteOutput.v1`
+
+#### Ops payload shapes
+
+**`quote.createDraft`**
+
+```json
+{
+  "op": "quote.createDraft",
+  "clientRef": "quote_v3",
+  "payload": {
+    "quote": {
+      "currency": "ILS",
+      "versionHint": 3,
+      "narrative": {
+        "intro": "We will design and produce…",
+        "scopeNotes": [
+          "Includes production, installation, and dismantle as described."
+        ],
+        "terms": [
+          "Client approvals required before production begins.",
+          "Changes after approval may affect cost and schedule."
+        ],
+        "exclusions": ["Electrical work unless specified"],
+        "scheduleAssumptions": ["Access to site 08:00-18:00"],
+        "paymentTerms": ["50% deposit, 50% upon completion"]
+      }
+    },
+    "lines": [
+      {
+        "sortKey": "0001",
+        "itemId": "I_100",
+        "displayName": "Set piece wall (production + finish)",
+        "description": "Includes frame, skin, and paint.",
+        "quantity": 1,
+        "unit": "job",
+        "price": 12000,
+        "taxable": true,
+        "vatRate": 0.17
+      },
+      {
+        "sortKey": "0002",
+        "itemId": "I_400",
+        "displayName": "Installation day",
+        "quantity": 1,
+        "unit": "day",
+        "price": 2500,
+        "taxable": true,
+        "vatRate": 0.17
+      }
+    ],
+    "totals": {
+      "subtotal": 14500,
+      "vat": 2465,
+      "total": 16965
+    }
+  }
+}
+```
+
+**Quote-specific requirements**
+
+* Quote agent should **not** mutate accounting lines (no cost edits here).
+* It may propose `item.patch` only for `quoteDefaults.displayName/includeByDefault` if helpful.
+
+---
+
+## If you want, next message I’ll produce:
+
+1. **A single JSON Schema file** (draft 2020-12) that validates all five outputs + shared op definitions
+2. Matching **Zod schemas** (copy/paste into `convex/lib/zodSchemas.ts`) aligned with these contracts
+
+Say: “generate JSON Schema + Zod”.

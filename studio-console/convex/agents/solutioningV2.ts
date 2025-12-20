@@ -76,6 +76,65 @@ function buildSubtasksFromPlan(plan: SolutionItemPlanV1) {
     }));
 }
 
+function normalizeToken(value: string) {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    return trimmed
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+/, "")
+        .replace(/-+$/, "");
+}
+
+function deriveMaterialsFromPlan(plan: SolutionItemPlanV1) {
+    const materialMap = new Map<string, ItemSpecV2["breakdown"]["materials"][number]>();
+    let fallbackIndex = 0;
+
+    for (const step of plan.steps) {
+        for (const material of step.materials ?? []) {
+            const label = material.trim();
+            if (!label) continue;
+            const token = normalizeToken(label) || `item-${++fallbackIndex}`;
+            const id = `plan-mat:${token}`;
+            if (materialMap.has(id)) continue;
+            materialMap.set(id, {
+                id,
+                category: "General",
+                label,
+                qty: 1,
+                unit: "unit",
+                unitCostEstimate: 0,
+                status: "planned",
+            });
+        }
+    }
+
+    return [...materialMap.values()];
+}
+
+function deriveLaborFromPlan(plan: SolutionItemPlanV1) {
+    return plan.steps.map((step, index) => {
+        const idToken = step.id?.trim() ? step.id.trim() : `step-${index + 1}`;
+        const quantity =
+            typeof step.estimatedMinutes === "number"
+                ? Number((step.estimatedMinutes / 60).toFixed(2))
+                : undefined;
+        return {
+            id: `plan-labor:${idToken}`,
+            workType: "studio",
+            role: step.title,
+            rateType: "hour" as const,
+            quantity: quantity && quantity > 0 ? quantity : undefined,
+            unitCost: 0,
+            description: step.details?.trim() || undefined,
+        };
+    });
+}
+
+function mergePlanDerived<T extends { id: string }>(existing: T[], derived: T[], prefix: string) {
+    const retained = existing.filter((entry) => !entry.id.startsWith(prefix));
+    return [...retained, ...derived];
+}
+
 function renderPlanMarkdown(plan: SolutionItemPlanV1): string {
     const lines: string[] = [];
     lines.push(`# ${plan.title}`);
@@ -205,6 +264,22 @@ function parseStepsFromMarkdown(markdown: string): SolutionItemPlanV1["steps"] {
             }
             current = {
                 title: numberedMatch[1].trim() || `Step ${steps.length + 1}`,
+                details: [],
+            };
+            continue;
+        }
+
+        const labeledMatch = trimmed.match(/^(?:-?\s*)?(?:s|step)\s*\d+\s*[:\.\-\)]\s*(.+)$/i);
+        if (labeledMatch) {
+            if (current) {
+                steps.push({
+                    id: `S${steps.length + 1}`,
+                    title: current.title,
+                    details: current.details.join("\n").trim(),
+                });
+            }
+            current = {
+                title: labeledMatch[1].trim() || `Step ${steps.length + 1}`,
                 details: [],
             };
             continue;
@@ -355,11 +430,15 @@ export const saveDraftPlan = internalMutation({
         const plan = parsePlanJson(args.solutionPlanJson ?? undefined);
         let spec = withSolutionPlan(baseSpec, planMarkdown, args.solutionPlanJson ?? undefined);
         if (plan && plan.steps.length > 0) {
+            const derivedMaterials = deriveMaterialsFromPlan(plan);
+            const derivedLabor = deriveLaborFromPlan(plan);
             spec = ItemSpecV2Schema.parse({
                 ...spec,
                 breakdown: {
                     ...spec.breakdown,
                     subtasks: buildSubtasksFromPlan(plan),
+                    materials: mergePlanDerived(spec.breakdown.materials ?? [], derivedMaterials, "plan-mat:"),
+                    labor: mergePlanDerived(spec.breakdown.labor ?? [], derivedLabor, "plan-labor:"),
                 },
             });
         }
@@ -371,11 +450,9 @@ export const saveDraftPlan = internalMutation({
                 summaryMarkdown: "Solutioning draft updated.",
             });
             await ctx.db.patch(item._id, { updatedAt: now });
-            if (args.createdBy === "agent") {
-                const revision = await ctx.db.get(draft._id);
-                if (revision) {
-                    await syncItemProjections(ctx, { item, revision, spec, force: true });
-                }
+            const revision = await ctx.db.get(draft._id);
+            if (revision) {
+                await syncItemProjections(ctx, { item, revision, spec, force: true });
             }
             return { revisionId: draft._id };
         }
@@ -399,11 +476,9 @@ export const saveDraftPlan = internalMutation({
             updatedAt: now,
         });
 
-        if (args.createdBy === "agent") {
-            const revision = await ctx.db.get(revisionId);
-            if (revision) {
-                await syncItemProjections(ctx, { item, revision, spec, force: true });
-            }
+        const revision = await ctx.db.get(revisionId);
+        if (revision) {
+            await syncItemProjections(ctx, { item, revision, spec, force: true });
         }
 
         return { revisionId };

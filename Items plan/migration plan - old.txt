@@ -1,0 +1,325 @@
+Below is an **end-to-end, production-safe migration plan** from the current “items/tasks/accounting” setup in Magnetic Studio Console into the **new Item-centric model** we designed (tree items + normalized accounting lines + tasks linked to items + rollup recomputation).
+
+I’m assuming the current system already has:
+
+* **Items domain tables**: `projectItems`, `itemRevisions`, `itemTemplates`, `itemProjectionLocks` 
+* **Tasks** table used for Tasks + Gantt views 
+* **Accounting domain** tables: `sections`, `materialLines`, `workLines`, plus vendors/purchases/price memory 
+
+---
+
+## 0) Migration strategy (recommended): “extend + backfill + cutover”
+
+To minimize risk, do this in 3 waves:
+
+1. **Schema extension** (add new fields/tables; no behavior change)
+2. **Backfill migration** (create tree, link tasks/accounting to items, compute rollups)
+3. **Cutover with dual-write** (UI/agents read from new model; keep old in sync until stable)
+
+This matches how your system already treats “versioned artifacts” and existing migrations patterns (you already have migrations utilities like task numbering backfills noted in system docs). 
+
+---
+
+## 1) Target model summary (what we are migrating *to*)
+
+### Canonical (new) truths
+
+* **Items are the hub** (tree via `parentItemId`), every deliverable/service/day/fee can be represented as an item.
+* **Tasks link to items** (`tasks.itemId`), dependencies remain task-to-task.
+* **Accounting lines are normalized** (either a new `accountingLines` table, or a “unified view” over material/work lines) and link to items (and optionally tasks).
+* **Item rollups are computed** from:
+
+  * accounting lines → cost rollups
+  * tasks → schedule/progress rollups
+  * tree → parent rollups aggregate children
+
+---
+
+## 2) Wave 1 — Schema changes (safe to deploy first)
+
+### 2.1 Extend existing item tables (preferred)
+
+Instead of creating brand-new “items” tables, **extend `projectItems`** to the new spec fields:
+
+Add to `projectItems`:
+
+* Tree: `parentItemId`, `sortKey`
+* Classification: `kind`, `category`, `flags`, `scope` (json)
+* Projections: `rollups` (json), `quoteDefaults` (json)
+* Governance: `status` enum alignment + `currentRevisionId` if not present
+
+You already have `itemRevisions`, `itemTemplates`, and `itemProjectionLocks`, so you’re structurally aligned for “agent proposals + locks + approvals”. 
+
+### 2.2 Tasks table: add link + optional nesting
+
+Add to `tasks`:
+
+* `itemId?: Id<"projectItems">`
+* `parentTaskId?: Id<"tasks">` (optional)
+* `sortKey?: string` (optional)
+  No breaking change—tasks can remain unlinked until backfill completes. 
+
+### 2.3 Accounting: pick one of these two approaches
+
+#### Option A (cleanest): introduce unified `accountingLines`
+
+Add new table `accountingLines` with:
+
+* `projectId`, `itemId?`, `taskId?`
+* `lineType: material|labor|purchase|rental|shipping|misc`
+* qty/unit/unitCost/currency/vat + vendor metadata
+  Then you can **migrate** `materialLines` + `workLines` into `accountingLines`, and later deprecate the old ones.
+
+#### Option B (minimal change): keep `materialLines` + `workLines`, add item/task links
+
+Add to both:
+
+* `itemId?`, `taskId?`
+  Then treat them as “typed accounting lines” and compute rollups from both tables.
+
+Given you already have a big accounting domain (sections/material/work/vendors/purchases), Option B is often fastest for a first cut. 
+
+---
+
+## 3) Wave 2 — Backfill migration (data movement + tree building)
+
+### 3.1 Create a migration “run record” (idempotency)
+
+Create `migrationRuns` (or reuse `settings`) to store:
+
+* `name: "items_model_v1"`
+* `startedAt`, `endedAt`
+* `status: running|done|failed`
+* `cursor/checkpoints`
+* counts summary
+
+**Rule:** every step must be restartable and safe to rerun.
+
+---
+
+## 4) Tree building algorithm (how to turn “current items” into a real hierarchy)
+
+Because we don’t know if `projectItems` are currently flat or partially structured, this plan works either way.
+
+### Step 4.1 Ensure a root item per project
+
+For each project:
+
+* create (or reuse) root item: `kind="group"`, name `"Project Scope"`
+* store root id on project as `project.rootItemId` (new field) OR via deterministic lookup.
+
+### Step 4.2 Attach existing items
+
+For every existing `projectItem`:
+
+* If it already has a parent field → map it to `parentItemId`
+* Else → attach directly under root
+
+### Step 4.3 Insert “template group items” when missing
+
+If your workflow expects standard buckets, create optional groups:
+
+* “Management”
+* “Moving / Transport”
+* “Installation”
+* “Studio production”
+* “Purchases / Rentals”
+  Then re-parent items into those groups based on:
+* existing template IDs (`itemTemplates`)
+* item tags/category heuristics (name matching)
+* project overview flags (requires moving, requires purchase, etc.)
+
+This matches your desire that planning agent can auto-add management/moving/install items. 
+
+### Step 4.4 Sort key generation
+
+For each sibling list under a parent:
+
+* stable order = existing createdAt order OR existing UI order field
+* assign `sortKey` like `"0001"`, `"0002"`, … (or dotted `"0001.0003"` for nested)
+
+---
+
+## 5) Linking tasks to items (backfill rules)
+
+### Step 5.1 Direct mapping if possible
+
+If tasks already have any “item-like” linkage (e.g., a reference to an item, plan card, section), map it:
+
+* `tasks.itemId = mappedItemId`
+
+### Step 5.2 If tasks are only plan-derived (no item reference)
+
+Use a deterministic heuristic:
+
+1. If task has `sectionId` (common in accounting-driven workflows), map:
+
+   * `section` → “section item” (create a group item per section if needed)
+   * attach the task to that item
+2. Else, title-based matching:
+
+   * find best matching item by name similarity (normalized)
+3. Else:
+
+   * attach task to root item
+
+### Step 5.3 Dependencies
+
+Keep existing dependency structure as-is. If you’re adding a separate `taskDependencies` table later, migrate edges:
+
+* read `tasks.dependencies[]` → insert into `taskDependencies`
+
+---
+
+## 6) Linking accounting to items (materials/labor)
+
+### If you chose Option B (keep materialLines/workLines)
+
+For every `materialLine` and `workLine`:
+
+* If it already references a `sectionId`, map section → item (create if missing)
+* else if it references a taskId, inherit from task:
+
+  * `line.itemId = tasks.itemId`
+* else attach to root item
+
+This makes accounting immediately “item-aware” with minimal disruption. 
+
+### If you chose Option A (new accountingLines)
+
+For each `materialLine`:
+
+* create `accountingLine(lineType="material", ...)`
+  For each `workLine`:
+* create `accountingLine(lineType="labor", ...)`
+  Preserve section grouping by copying:
+* `sourceSectionId` into metadata JSON (so you can rebuild sections view if needed)
+
+---
+
+## 7) Rollup recomputation (core requirement)
+
+### 7.1 Cost rollups (bottom-up, tree aggregation)
+
+For each item:
+
+* **Direct cost** = sum of its accounting lines:
+
+  * material, labor, purchases, rentals, shipping, misc
+* **Total cost** = direct cost + sum(children.totalCost)
+
+Store into:
+
+* `projectItems.rollups.cost.*`
+
+Also compute:
+
+* if sell price exists (from quoteDefaults or a field): margin = sellPrice - totalCost
+
+### 7.2 Schedule rollups (from tasks)
+
+For each item:
+
+* gather tasks where `task.itemId == item.id`
+* compute:
+
+  * durationHours = sum(task.durationHours where not cancelled)
+  * plannedStart = min(plannedStart)
+  * plannedEnd = max(plannedEnd)
+  * progressPct = doneTasks / totalTasks
+
+Then roll up to parents similarly:
+
+* parent.durationHours = sum(children.durationHours) + sum(own tasks)
+
+Store into:
+
+* `projectItems.rollups.schedule.*`
+* `projectItems.rollups.tasks.*`
+
+### 7.3 Recompute triggers
+
+After migration:
+
+* run once for all projects
+  Then:
+* add server-side “recompute on change” hooks:
+
+  * when tasks or accounting lines change → recompute affected item + ancestors only
+
+---
+
+## 8) Wave 3 — Cutover plan (dual-write + feature flags)
+
+### 8.1 Feature flags
+
+Add a per-project flag:
+
+* `project.features.itemsModelV1 = true`
+
+### 8.2 Dual-write period (1–2 weeks of real usage)
+
+Update mutations so that when user edits:
+
+* **Item editor** writes new fields on `projectItems`
+* **Accounting UI** writes `itemId` on lines (or creates `accountingLines`)
+* **Tasks UI** writes `itemId` on tasks
+
+### 8.3 Read switch
+
+Update tabs:
+
+* Items tab reads tree from `projectItems`
+* Accounting tab groups by item (and still supports old “sections” view)
+* Gantt tab can filter by item subtree
+
+### 8.4 Deprecation
+
+Once stable:
+
+* stop writing old compatibility fields
+* optionally migrate “sections” into items (or keep as accounting-only grouping)
+
+---
+
+## 9) Validation checklist (must pass before full enablement)
+
+### Data integrity checks
+
+Per project:
+
+* Every task has an `itemId` (or explicitly allowed null)
+* Every material/work line has `itemId` (or explicitly allowed null)
+* Every item (except root) has a valid `parentItemId`
+* No cycles in parent graph
+* Rollups match sums:
+
+  * item.totalCost == directCost + sum(children.totalCost) within rounding tolerance
+
+### Product sanity checks
+
+* Tasks count unchanged
+* Material/work totals unchanged (before vs after)
+* Quotes still generate (they rely on accounting/tasks in your architecture) 
+
+---
+
+## 10) Implementation outline (Convex-style, resumable)
+
+Create migration actions (internalActions) like:
+
+* `migrations.itemsModelV1.ensureRoots()`
+* `migrations.itemsModelV1.backfillItemTree()`
+* `migrations.itemsModelV1.linkTasksToItems()`
+* `migrations.itemsModelV1.linkAccountingToItems()`
+* `migrations.itemsModelV1.recomputeRollups(projectId?)`
+* `migrations.itemsModelV1.verify(projectId?)`
+
+Run them:
+
+* per project in batches
+* store checkpoints in `migrationRuns`
+
+(You already have a migrations mindset in the system: tasks numbering backfills and other utilities are referenced in the docs.) 
+
+---

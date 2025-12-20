@@ -1,0 +1,676 @@
+Here’s a **data structure design for “Items”** that will support your full workflow (overview → ideation/planning → solutioning → accounting → tasks/gantt → quotes), while keeping one rule true:
+
+> **Items are the hub. Everything else (tasks, gantt, accounting, quote) is a projection of Items + their linked records.**
+
+I’m going to propose a structure that is:
+
+* **Tree-friendly** (infinite expand/collapse)
+* **Agent-friendly** (agents propose changes → user approves → commit)
+* **Accounting/task/quote-friendly** (normalized line items, dependencies, scheduling)
+* **Editable** (rename any node, edit any generated field, override prices/durations)
+* **Safe** (locks + revisions, no silent overwrites)
+
+---
+
+## 1) Core design decisions
+
+### A. Items are nodes in a tree (parentId)
+
+Every “thing” you described can be an Item node:
+
+* Deliverables (set piece, printed PVC, linoleum floor)
+* Services (moving, install day, dismantle)
+* Internal work (studio production day)
+* Fees (management)
+* Rentals / purchases
+
+This lets the UI do your desired “accordion drill-down” forever.
+
+### B. Tasks and Accounting lines are **separate tables**
+
+Don’t embed tasks/materials/labor deep inside Item JSON as the canonical source, because:
+
+* Gantt needs dependencies across items/tasks
+* Accounting needs line-level costing, vendor links, VAT, PO status, etc.
+* You’ll want filtering, grouping, rollups, and history
+
+Instead:
+
+* **Item** holds *summaries + references*
+* **Task**, **MaterialLine**, **WorkLine**, **PurchaseLine** hold the detailed records
+
+### C. Agents don’t write directly (by default)
+
+Agents generate a **ChangeSet** that contains:
+
+* new items
+* patches to items
+* new tasks + task patches
+* new accounting lines + patches
+
+User clicks **Approve** → only then merge into canonical records.
+
+That prevents “agent overwrote my manual edits” chaos.
+
+---
+
+## 2) Canonical entities (tables / collections)
+
+Below is the minimal set you need to support everything cleanly.
+
+### 2.1 `projects`
+
+Holds overview fields and project-level constraints.
+
+### 2.2 `items` (canonical current state)
+
+Each record is one node in the tree.
+
+Key fields:
+
+* identity: `id`, `projectId`
+* tree: `parentItemId`, `sortKey`
+* classification: `kind`, `category`, flags
+* core text: `name`, `description`
+* lifecycle: `status`, timestamps
+* projections: `rollups` (cost/time/progress), `quoteDefaults`
+* governance: `currentRevisionId`, `lockedByPhase`
+
+### 2.3 `item_revisions` (history + approvals)
+
+Stores snapshots/patches tied to:
+
+* agent runs
+* manual edits
+* approvals
+
+This powers:
+
+* “approve these changes”
+* “rollback”
+* “show what changed”
+
+### 2.4 `change_sets` (what the user approves)
+
+A change set groups multiple changes produced by one agent run:
+
+* item creates/patches
+* task creates/patches
+* accounting creates/patches
+
+### 2.5 `tasks` (work plan + gantt backbone)
+
+Task is an executable unit with:
+
+* `itemId`
+* duration + schedule
+* dependencies (edge list)
+* status/progress
+* optionally `parentTaskId` for task trees
+
+### 2.6 `task_dependencies`
+
+Simple edge table:
+
+* `fromTaskId` → `toTaskId`
+* `type` (FS/SS/FF/SF)
+* lag
+
+### 2.7 `accounting_lines` (normalized lines)
+
+Split into types or keep one table with `lineType`:
+
+* `material` lines (BOM)
+* `labor/work` lines
+* `purchase` lines (vendor quotes, lead time, PO status)
+* `rental` lines
+* `shipping` lines
+* `misc` lines
+
+Each line references:
+
+* `projectId`
+* `itemId`
+* optional `taskId`
+* pricing fields + VAT flags
+* vendor/source links
+
+### 2.8 `quotes` + `quote_lines`
+
+Quote is a snapshot/versioned doc.
+Quote lines reference items but also allow overrides:
+
+* display name
+* grouping
+* line price override (don’t force changing item accounting)
+
+### 2.9 `concepts` (ideation output)
+
+Ideation should not directly pollute items until user converts.
+Concept → Item conversion creates one or more items.
+
+### 2.10 `locks` (or embedded lock fields)
+
+Prevents concurrent extraction overwrites:
+
+* per `itemId + phase` or `projectId + phase`
+
+---
+
+## 3) Item schema (recommended JSON shape)
+
+TypeScript-ish definition (works as JSON too):
+
+```ts
+type ItemStatus =
+  | "draft"        // user created but not committed to plan
+  | "proposed"     // created/updated by agent in a changeset
+  | "approved"     // committed
+  | "in_progress"
+  | "done"
+  | "blocked"
+  | "cancelled"
+  | "deleted";     // soft delete
+
+type ItemKind =
+  | "deliverable"  // physical element
+  | "service"      // moving, install, dismantle
+  | "day"          // shoot day, studio day
+  | "fee"          // management fee
+  | "group";       // optional: purely organizational node
+
+type Item = {
+  id: string;
+  projectId: string;
+
+  // Tree
+  parentItemId?: string | null;
+  sortKey: string; // stable ordering among siblings (e.g., "0003.0010")
+
+  // Classification
+  kind: ItemKind;
+  category:
+    | "set_piece"
+    | "print"
+    | "floor"
+    | "prop"
+    | "rental"
+    | "purchase"
+    | "transport"
+    | "installation"
+    | "studio_production"
+    | "management"
+    | "other";
+
+  // Core
+  name: string;
+  description?: string;
+
+  // Flags derived from overview + item details
+  flags: {
+    requiresStudio?: boolean;
+    requiresPurchase?: boolean;
+    purchaseMode?: "local" | "abroad" | "both" | "none";
+    requiresRental?: boolean;
+    requiresMoving?: boolean;
+    requiresInstallation?: boolean;
+  };
+
+  // Useful structured fields (editable)
+  scope?: {
+    quantity?: number;
+    unit?: string;         // "pcs", "sqm", "day", "service"
+    dimensions?: string;   // free text OR structured
+    location?: string;
+    dueDate?: string;      // ISO date
+    constraints?: string[]; // editable bullets
+    assumptions?: string[]; // editable bullets
+  };
+
+  // Knowledge & references
+  links?: {
+    knowledgeDocIds?: string[];
+    pastProjectIds?: string[];
+    externalUrls?: string[];
+    trelloCardIds?: string[];
+  };
+
+  // Rollups (computed, cached for UI speed)
+  rollups: {
+    cost: {
+      material: number;
+      labor: number;
+      rentals: number;
+      purchases: number;
+      shipping: number;
+      misc: number;
+      totalCost: number;
+      sellPrice?: number;   // optional default sell
+      margin?: number;      // computed if sellPrice exists
+      currency: "ILS" | "USD" | "EUR";
+    };
+    schedule: {
+      durationHours: number;
+      plannedStart?: string; // ISO datetime
+      plannedEnd?: string;
+      progressPct: number;   // from tasks
+      blocked?: boolean;
+    };
+    tasks: {
+      total: number;
+      done: number;
+      blocked: number;
+    };
+  };
+
+  // Quote defaults (not the final quote)
+  quoteDefaults?: {
+    includeByDefault: boolean;
+    displayName?: string;     // client-facing label (override internal name)
+    taxable?: boolean;
+    vatRate?: number;         // e.g. 0.17
+  };
+
+  // Governance
+  status: ItemStatus;
+  currentRevisionId: string;
+  createdAt: string;
+  updatedAt: string;
+
+  // Soft delete support
+  deletedAt?: string | null;
+  deleteRequestedAt?: string | null;
+  deleteRequestedBy?: string | null;
+};
+```
+
+### Why this works
+
+* Tree navigation is trivial (`parentItemId`, `sortKey`)
+* All tabs can compute from rollups + linked tables
+* Agents can propose edits to structured fields + add tasks/lines
+* Quote can use `quoteDefaults.displayName` without renaming internal structure
+
+---
+
+## 4) Tasks schema (supports Gantt + dependencies)
+
+```ts
+type TaskStatus = "todo" | "in_progress" | "done" | "blocked" | "cancelled";
+
+type Task = {
+  id: string;
+  projectId: string;
+  itemId: string;
+
+  parentTaskId?: string | null;  // optional for task nesting
+  sortKey: string;
+
+  title: string;
+  description?: string;
+
+  status: TaskStatus;
+  assignee?: string;             // userId or role
+  tags?: string[];
+
+  // Scheduling
+  durationHours?: number;
+  plannedStart?: string;         // ISO datetime
+  plannedEnd?: string;
+  earliestStart?: string;        // constraints
+  dueDate?: string;
+
+  // Gantt needs:
+  dependencyIds?: string[];      // or separate table
+
+  createdAt: string;
+  updatedAt: string;
+};
+```
+
+And dependencies:
+
+```ts
+type DependencyType = "FS" | "SS" | "FF" | "SF";
+
+type TaskDependency = {
+  id: string;
+  projectId: string;
+  fromTaskId: string;
+  toTaskId: string;
+  type: DependencyType;
+  lagHours?: number;
+};
+```
+
+---
+
+## 5) Accounting lines schema (materials + labor + purchases)
+
+One-table approach:
+
+```ts
+type AccountingLineType =
+  | "material"
+  | "labor"
+  | "purchase"
+  | "rental"
+  | "shipping"
+  | "misc";
+
+type AccountingLine = {
+  id: string;
+  projectId: string;
+  itemId: string;
+  taskId?: string | null;
+
+  lineType: AccountingLineType;
+
+  title: string;         // “Plywood 10mm”
+  notes?: string;
+
+  quantity?: number;
+  unit?: string;         // “sheet”, “m”, “hour”
+  unitCost?: number;     // internal cost
+  currency: "ILS" | "USD" | "EUR";
+  vatRate?: number;
+  taxable?: boolean;
+
+  // purchase/rental specific
+  vendorId?: string;
+  vendorNameFreeText?: string;
+  leadTimeDays?: number;
+  purchaseStatus?: "planned" | "quoted" | "ordered" | "received" | "cancelled";
+
+  // overrides
+  costOverride?: number; // if you want manual “total line cost”
+
+  createdAt: string;
+  updatedAt: string;
+};
+```
+
+This supports:
+
+* BOM per item/subtask
+* vendor quotes and lead times
+* accounting totals + margin
+* connecting a material line to the exact task that uses it
+
+---
+
+## 6) Quotes schema (versioned snapshot)
+
+```ts
+type Quote = {
+  id: string;
+  projectId: string;
+  version: number;
+  status: "draft" | "sent" | "approved" | "revised" | "archived";
+
+  currency: "ILS" | "USD" | "EUR";
+  subtotal: number;
+  vat: number;
+  total: number;
+
+  narrative: {
+    intro: string;
+    scopeNotes: string[];
+    terms: string[];
+    exclusions: string[];
+    scheduleAssumptions: string[];
+    paymentTerms: string[];
+  };
+
+  createdAt: string;
+  updatedAt: string;
+};
+
+type QuoteLine = {
+  id: string;
+  quoteId: string;
+  projectId: string;
+
+  itemId?: string;            // preferred link
+  displayName: string;        // client-facing
+  description?: string;
+  quantity?: number;
+  unit?: string;
+
+  price: number;              // SELL price, not cost
+  taxable?: boolean;
+  vatRate?: number;
+
+  sortKey: string;
+};
+```
+
+Key point: **quote lines are not forced to equal item accounting totals**.
+You can:
+
+* bundle items
+* apply discounts
+* present simplified pricing
+  without breaking internal accounting.
+
+---
+
+## 7) Agent change flow (the glue that makes this safe)
+
+### ChangeSet object (what agents output)
+
+This is what you persist, show in UI, and approve.
+
+```ts
+type ChangeSet = {
+  id: string;
+  projectId: string;
+  phase: "ideation" | "planning" | "solutioning" | "accounting" | "tasks" | "quote";
+  agentName: string;
+  runId: string;
+
+  // Proposed item operations
+  createItems?: Array<Partial<Item> & { tempId: string }>;
+  patchItems?: Array<{
+    itemId: string;
+    patch: Partial<Item>;
+  }>;
+
+  // Proposed task operations
+  createTasks?: Array<Partial<Task> & { tempId: string; itemTempIdOrItemId: string }>;
+  patchTasks?: Array<{ taskId: string; patch: Partial<Task> }>;
+  dependencies?: Array<Partial<TaskDependency>>;
+
+  // Proposed accounting operations
+  createLines?: Array<Partial<AccountingLine> & { tempId: string; itemTempIdOrItemId: string }>;
+  patchLines?: Array<{ lineId: string; patch: Partial<AccountingLine> }>;
+
+  warnings?: string[];     // “Missing dimensions for Item X”
+  assumptions?: string[];  // “Assumed 2 crew for install”
+  createdAt: string;
+
+  approval: {
+    status: "pending" | "approved" | "rejected";
+    decidedAt?: string;
+    decidedBy?: string;
+  };
+};
+```
+
+### Approval merge rules (important)
+
+* If a user manually edited a field since the base revision, don’t overwrite silently.
+* Store `baseRevisionId` for each patch, and do a 3-way merge:
+
+  * base → agent patch → current
+* On conflict: flag it in UI.
+
+---
+
+## 8) Example: one “Item tree” in UI (projection JSON)
+
+Your UI will usually query items and render a tree. You can also cache a prebuilt tree:
+
+```json
+{
+  "projectId": "P1",
+  "itemsTree": [
+    {
+      "id": "I100",
+      "name": "Set piece wall",
+      "kind": "deliverable",
+      "category": "set_piece",
+      "children": [
+        {
+          "id": "I101",
+          "name": "Printed PVC skin",
+          "kind": "deliverable",
+          "category": "print",
+          "children": []
+        },
+        {
+          "id": "I102",
+          "name": "Studio build + paint",
+          "kind": "service",
+          "category": "studio_production",
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "I200",
+      "name": "Linoleum floor",
+      "kind": "deliverable",
+      "category": "floor",
+      "children": []
+    },
+    {
+      "id": "I300",
+      "name": "Moving / Transport",
+      "kind": "service",
+      "category": "transport",
+      "children": []
+    },
+    {
+      "id": "I400",
+      "name": "Installation Day",
+      "kind": "day",
+      "category": "installation",
+      "children": []
+    }
+  ]
+}
+```
+
+The actual task and accounting details are linked by IDs, not embedded.
+
+---
+
+## 9) How each flow writes to this structure
+
+### Ideation Agent
+
+* writes `concepts`
+* on convert → generates `ChangeSet.createItems`
+
+### Clarification Agent
+
+* writes to `project.openQuestions`, maybe `item.scope.constraints`
+* does **not** create tasks/material lines yet
+
+### Planning Agent (Extract Plan)
+
+* proposes:
+
+  * create missing “template items” (management/moving/install)
+  * create tasks under each item (coarse plan)
+  * fill item.scope fields and constraints
+* outputs as `ChangeSet`
+
+### Solutioning Agent (Extract to Items)
+
+* proposes:
+
+  * accounting lines (materials/labor/purchases) per item/task
+  * improved task breakdowns
+  * method notes into `item.scope.assumptions/constraints`
+* outputs as `ChangeSet`
+
+### Accounting Agent
+
+* refines `AccountingLine.unitCost`, vendor data, lead times
+* updates rollups (system can compute rollups; agent shouldn’t)
+
+### Tasks Agent
+
+* updates `Task.durationHours`, dependencies, schedule
+* system computes item rollups for schedule/progress
+
+### Quote Agent
+
+* creates `quotes` + `quote_lines` (snapshot)
+* does not mutate items, except maybe quoteDefaults suggestions
+
+---
+
+## 10) Extra “must-have” fields for your UX requirements
+
+### Double-approval delete
+
+Don’t hard delete items. Add:
+
+* `deleteRequestedAt`, `deleteRequestedBy`
+* `deletedAt` only after second confirmation
+* keep descendants; either:
+
+  * cascade soft-delete to subtree, or
+  * block delete if children exist (your choice)
+
+### Manual overrides (critical)
+
+You’ll want explicit overrides everywhere:
+
+* `AccountingLine.costOverride`
+* `Task.durationHours` (manual always wins)
+* `Item.quoteDefaults.displayName` (client-facing label)
+* “lock field” toggles: `lockedFields: string[]`
+
+Example:
+
+```ts
+lockedFields?: Array<"scope.dimensions" | "rollups.cost.sellPrice" | "quoteDefaults.displayName">;
+```
+
+---
+
+## 11) If you want the *best* structure for agents: add a “Field Provenance”
+
+This makes debugging and trust easy:
+
+```ts
+type Provenance = {
+  fieldPath: string;
+  source: "user" | "planning_agent" | "solutioning_agent" | "accounting_agent";
+  runId?: string;
+  timestamp: string;
+  confidence?: number;
+};
+
+Item.provenance?: Provenance[];
+AccountingLine.provenance?: Provenance[];
+Task.provenance?: Provenance[];
+```
+
+Now you can show in UI: “This estimate was generated by Solutioning Agent, run X”.
+
+---
+
+## If you want, next step (I can do it in one shot)
+
+I can turn the above into:
+
+1. **Exact Convex schema tables + indexes** (optimized for your queries)
+2. The **agent JSON output contracts** per phase (planning/solutioning/tasks/accounting/quote)
+3. A **migration plan** from your current item/task/accounting structure into this model (including tree building + rollup recomputation)
+
+Just say: “generate convex schema + contracts + migration plan”.

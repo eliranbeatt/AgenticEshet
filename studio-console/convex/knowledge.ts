@@ -251,7 +251,8 @@ export const search: ReturnType<typeof action> = action({
     }
 });
 
-export const ingestArtifact: ReturnType<typeof internalAction> = internalAction({
+// INTERNAL ACTION - Used by scheduled jobs and internal workflows
+export const ingestArtifactInternal: ReturnType<typeof internalAction> = internalAction({
     args: {
         projectId: v.optional(v.id("projects")),
         sourceType: sourceTypeEnum,
@@ -334,6 +335,30 @@ export const ingestArtifact: ReturnType<typeof internalAction> = internalAction(
         await ctx.runMutation(internal.knowledge.insertChunks, { chunks: chunkPayload });
         await ctx.runMutation(internal.knowledge.updateDocStatus, { docId, status: "ready" });
         return docId;
+    },
+});
+
+// PUBLIC ACTION - Agents and external code can call this
+export const ingestArtifact: ReturnType<typeof action> = action({
+    args: {
+        projectId: v.optional(v.id("projects")),
+        sourceType: sourceTypeEnum,
+        sourceRefId: v.optional(v.string()),
+        title: v.string(),
+        text: v.string(),
+        summary: v.optional(v.string()),
+        tags: v.optional(v.array(v.string())),
+        topics: v.optional(v.array(v.string())),
+        domain: v.optional(v.string()),
+        clientName: v.optional(v.string()),
+        phase: v.optional(v.string()),
+        language: v.optional(v.string()),
+        chunkSize: v.optional(v.number()),
+        chunkOverlap: v.optional(v.number()),
+    },
+    handler: async (ctx, args) => {
+        // Delegate to internal implementation
+        return await ctx.runAction(internal.knowledge.ingestArtifactInternal, args);
     },
 });
 

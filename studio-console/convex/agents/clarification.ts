@@ -118,7 +118,8 @@ export const saveResult = internalMutation({
             .map((msg) => `${msg.role.toUpperCase()}: ${msg.content}`)
             .join("\n");
 
-        await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+        // Ingest conversation into knowledge base using public API
+        await ctx.runAction(api.knowledge.ingestArtifact, {
             projectId: args.projectId,
             sourceType: "conversation",
             sourceRefId: conversationId,

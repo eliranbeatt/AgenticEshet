@@ -137,9 +137,8 @@ export const saveQuote = internalMutation({
             normalized.clientDocumentText,
         ].join("\n");
 
-        const ingestArtifact = (internal as unknown as { knowledge: { ingestArtifact: unknown } }).knowledge.ingestArtifact;
-
-        await ctx.scheduler.runAfter(0, ingestArtifact, {
+        // Ingest quote into knowledge base using public API
+        await ctx.runAction(api.knowledge.ingestArtifact, {
             projectId: args.projectId,
             sourceType: "quote",
             sourceRefId: `quote-v${version}`,

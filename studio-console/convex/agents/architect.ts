@@ -372,7 +372,8 @@ export const saveTasks = internalMutation({
             .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority}) ${task.description || ""}`)
             .join("\n");
 
-        await ctx.scheduler.runAfter(0, internal.knowledge.ingestArtifact, {
+        // Ingest task snapshot into knowledge base using public API
+        await ctx.runAction(api.knowledge.ingestArtifact, {
             projectId: args.projectId,
             sourceType: "task",
             sourceRefId: `tasks-${Date.now()}`,

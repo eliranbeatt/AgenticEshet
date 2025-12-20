@@ -42,6 +42,7 @@ import type * as ingestion from "../ingestion.js";
 import type * as items from "../items.js";
 import type * as itemsMigrations from "../itemsMigrations.js";
 import type * as knowledge from "../knowledge.js";
+import type * as knowledgeDiagnostics from "../knowledgeDiagnostics.js";
 import type * as lib_architectTaskGeneration from "../lib/architectTaskGeneration.js";
 import type * as lib_costing from "../lib/costing.js";
 import type * as lib_fileParsers from "../lib/fileParsers.js";
@@ -113,6 +114,7 @@ declare const fullApi: ApiFromModules<{
   items: typeof items;
   itemsMigrations: typeof itemsMigrations;
   knowledge: typeof knowledge;
+  knowledgeDiagnostics: typeof knowledgeDiagnostics;
   "lib/architectTaskGeneration": typeof lib_architectTaskGeneration;
   "lib/costing": typeof lib_costing;
   "lib/fileParsers": typeof lib_fileParsers;

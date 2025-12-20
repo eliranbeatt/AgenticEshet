@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { action, internalMutation } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
+import { z } from "zod";
 import {
     ClarificationSchema,
     ItemSpecV2Schema,
@@ -209,7 +210,7 @@ export const send = action({
 
                 let itemUpdate: ItemUpdateOutput | null = null;
                 try {
-                    itemUpdate = await callChatWithSchema(ItemUpdateOutputSchema, {
+                    const rawUpdate = await callChatWithSchema(z.unknown(), {
                         model,
                         systemPrompt: [
                             "Update the item spec based on the conversation.",
@@ -237,6 +238,10 @@ export const send = action({
                         ].join("\n"),
                         maxRetries: 2,
                         language: project.defaultLanguage === "en" ? "en" : "he",
+                    });
+                    itemUpdate = normalizeItemUpdateOutput(rawUpdate, {
+                        itemId: String(item._id),
+                        baseSpec: spec,
                     });
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
@@ -424,3 +429,72 @@ export const send = action({
         return { ok: true, userMessageId, assistantMessageId };
     },
 });
+
+function normalizeItemUpdateOutput(
+    raw: unknown,
+    defaults: { itemId: string; baseSpec: ItemSpecV2 },
+): ItemUpdateOutput {
+    const record = typeof raw === "object" && raw ? (raw as Record<string, unknown>) : {};
+    const proposed = typeof record.proposedData === "object" && record.proposedData
+        ? (record.proposedData as Record<string, unknown>)
+        : {};
+
+    const breakdown = typeof proposed.breakdown === "object" && proposed.breakdown
+        ? (proposed.breakdown as Record<string, unknown>)
+        : {};
+
+    const materialsRaw = Array.isArray(breakdown.materials) ? breakdown.materials : [];
+    const laborRaw = Array.isArray(breakdown.labor) ? breakdown.labor : [];
+
+    const materials = materialsRaw.map((entry, index) => {
+        const m = typeof entry === "object" && entry ? (entry as Record<string, unknown>) : {};
+        return {
+            id: typeof m.id === "string" ? m.id : `mat_${index + 1}`,
+            category: typeof m.category === "string" ? m.category : undefined,
+            label: typeof m.label === "string" ? m.label : "Material",
+            description: typeof m.description === "string" ? m.description : undefined,
+            qty: typeof m.qty === "number" ? m.qty : undefined,
+            unit: typeof m.unit === "string" ? m.unit : undefined,
+            unitCostEstimate: typeof m.unitCostEstimate === "number" ? m.unitCostEstimate : undefined,
+            vendorName: typeof m.vendorName === "string" ? m.vendorName : undefined,
+            procurement: typeof m.procurement === "string" ? m.procurement : undefined,
+            status: typeof m.status === "string" ? m.status : undefined,
+            note: typeof m.note === "string" ? m.note : undefined,
+        };
+    });
+
+    const labor = laborRaw.map((entry, index) => {
+        const l = typeof entry === "object" && entry ? (entry as Record<string, unknown>) : {};
+        const rate = typeof l.rateType === "string" ? l.rateType.toLowerCase() : "hour";
+        const normalizedRate = rate === "day" || rate === "flat" || rate === "hour" ? rate : "hour";
+        return {
+            id: typeof l.id === "string" ? l.id : `labor_${index + 1}`,
+            workType: typeof l.workType === "string" ? l.workType : "studio",
+            role: typeof l.role === "string" ? l.role : "Role",
+            rateType: normalizedRate as "hour" | "day" | "flat",
+            quantity: typeof l.quantity === "number" ? l.quantity : undefined,
+            unitCost: typeof l.unitCost === "number" ? l.unitCost : undefined,
+            description: typeof l.description === "string" ? l.description : undefined,
+        };
+    });
+
+    const nextSpec = {
+        ...defaults.baseSpec,
+        ...(proposed as ItemSpecV2),
+        breakdown: {
+            ...defaults.baseSpec.breakdown,
+            ...(breakdown as ItemSpecV2["breakdown"]),
+            materials,
+            labor,
+        },
+    };
+
+    const normalized = {
+        itemId: typeof record.itemId === "string" ? record.itemId : defaults.itemId,
+        proposedData: nextSpec,
+        summaryMarkdown: typeof record.summaryMarkdown === "string" ? record.summaryMarkdown : "Updated item details.",
+        changeReason: typeof record.changeReason === "string" ? record.changeReason : undefined,
+    };
+
+    return ItemUpdateOutputSchema.parse(normalized);
+}

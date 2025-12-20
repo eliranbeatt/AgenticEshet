@@ -1,10 +1,9 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
-import { api, internal } from "../_generated/api";
+import { internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
 import { syncItemProjections } from "../lib/itemProjections";
 import {
-    ChangeSetSchema,
     ItemSpecV2Schema,
     SolutionItemPlanV1Schema,
     SolutioningExtractedPlanLooseSchema,
@@ -312,12 +311,34 @@ function fillStepDetailsFromMarkdown(
     const mapped = steps.map((step, index) => {
         const body = sections[index + 1] ?? "";
         const detailLines = body.split("\n").slice(1).join("\n").trim();
+        const { materials, tools } = extractResourcesFromText(detailLines);
         return {
             ...step,
             details: detailLines || step.details,
+            materials: step.materials?.length ? step.materials : materials,
+            tools: step.tools?.length ? step.tools : tools,
         };
     });
     return mapped;
+}
+
+function extractResourcesFromText(text: string) {
+    const materials: string[] = [];
+    const tools: string[] = [];
+    const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+    for (const line of lines) {
+        const normalized = line.replace(/^\-+\s*/, "").trim();
+        const [label, rest] = normalized.split(/:\s*/, 2);
+        if (!rest) continue;
+        const lower = label.toLowerCase();
+        if (lower === "materials" || lower === "material" || label === "חומרים") {
+            materials.push(...rest.split(",").map((item) => item.trim()).filter(Boolean));
+        }
+        if (lower === "tools" || lower === "tool" || label === "כלים") {
+            tools.push(...rest.split(",").map((item) => item.trim()).filter(Boolean));
+        }
+    }
+    return { materials, tools };
 }
 
 function normalizeExtractedPlan(extracted: {
@@ -342,6 +363,7 @@ function normalizeExtractedPlan(extracted: {
     if (plan.steps.length <= 1 && fallbackSteps.length > 1) {
         plan.steps = fillStepDetailsFromMarkdown(fallbackSteps, markdown);
     }
+    plan.steps = fillStepDetailsFromMarkdown(plan.steps, markdown);
 
     return { plan, markdown };
 }
@@ -682,7 +704,7 @@ export const extractPlanFromThread = action({
         const { project, scenario, messages } = await ctx.runQuery(internal.chat.getThreadContext, {
             threadId: args.threadId,
         });
-        const { systemPrompt, item } = await ctx.runQuery(internal.agents.solutioningV2.getContext, {
+        const { systemPrompt } = await ctx.runQuery(internal.agents.solutioningV2.getContext, {
             projectId: project._id,
             itemId: args.itemId,
         });
@@ -727,80 +749,6 @@ export const extractPlanFromThread = action({
                 solutionPlan: normalized.markdown,
                 solutionPlanJson: JSON.stringify(normalized.plan),
                 createdBy: "agent",
-            });
-
-            const projectTasks = await ctx.runQuery(api.tasks.listByProject, { projectId: project._id });
-            const relatedTasks = projectTasks.filter((task) => task.itemId === args.itemId);
-
-            const changeSetContext = {
-                mode: "EXTRACT",
-                phase: "solutioning",
-                actor: { userName: "user", studioName: "studio" },
-                project: {
-                    id: project._id,
-                    name: project.name,
-                    clientName: project.clientName,
-                    defaultLanguage: project.defaultLanguage ?? "he",
-                    budgetTier: project.budgetTier ?? "unknown",
-                    projectTypes: project.projectTypes ?? [],
-                    details: project.details,
-                    overview: project.overview,
-                    features: project.features ?? {},
-                },
-                selection: {
-                    selectedItemIds: [String(item._id)],
-                    selectedConceptIds: [],
-                    selectedTaskIds: relatedTasks.map((task) => String(task._id)),
-                },
-                items: [item],
-                tasks: relatedTasks,
-                accounting: {
-                    materialLines: [],
-                    workLines: [],
-                    accountingLines: [],
-                },
-                quotes: [],
-                concepts: [],
-                knowledge: {
-                    attachedDocs: [],
-                    pastProjects: [],
-                    retrievedSnippets: [],
-                },
-                settings: {
-                    currencyDefault: project.currency ?? "ILS",
-                    tax: { vatRate: project.vatRate ?? 0, pricesIncludeVat: project.pricesIncludeVat ?? false },
-                    pricingModel: {
-                        overheadOnExpensesPct: 0.15,
-                        overheadOnOwnerTimePct: 0.3,
-                        profitPct: 0.1,
-                    },
-                },
-                ui: {
-                    capabilities: {
-                        supportsChangeSets: true,
-                        supportsLocks: true,
-                        supportsDeepResearchTool: true,
-                    },
-                },
-                assistantMessage: lastAssistant.content,
-                extractedPlan: normalized.plan,
-            };
-
-            const changeSet = await callChatWithSchema(ChangeSetSchema, {
-                model,
-                systemPrompt: [
-                    systemPrompt,
-                    "",
-                    "Extract a ChangeSet proposal based on the solutioning conversation and the provided context.",
-                    "Return JSON only.",
-                ].join("\n"),
-                userPrompt: JSON.stringify(changeSetContext),
-                maxRetries: 2,
-                language: project.defaultLanguage === "en" ? "en" : "he",
-            });
-
-            await ctx.runAction(api.changeSets.createFromAgentOutput, {
-                agentOutput: changeSet,
             });
 
             await ctx.runMutation(internal.chat.createMessage, {

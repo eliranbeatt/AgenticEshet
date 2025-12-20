@@ -11,6 +11,7 @@ import { ImagePicker } from "../_components/images/ImagePicker";
 import { ItemsTreeSidebar } from "../_components/items/ItemsTreeSidebar";
 import { ItemEditorPanel } from "../_components/items/ItemEditorPanel";
 import { useItemsContext } from "../_components/items/ItemsContext";
+import { ChangeSetReviewBanner } from "../_components/changesets/ChangeSetReviewBanner";
 
 type PlanningItem = {
     _id: Id<"projectItems">;
@@ -205,6 +206,7 @@ export default function SolutioningPage() {
 
     return (
         <div className="flex flex-col gap-4 h-full">
+            <ChangeSetReviewBanner projectId={projectId} phase="solutioning" />
             <div className="flex items-center justify-between">
                 <h1 className="text-xl font-semibold text-gray-900">Solutioning</h1>
                 <div className="text-xs text-gray-500">Structured plans + images per item</div>

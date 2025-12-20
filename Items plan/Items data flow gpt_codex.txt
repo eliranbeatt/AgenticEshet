@@ -1,0 +1,87 @@
+ITEMS DATA FLOW (CODEX UPDATE)
+
+Purpose
+- Align the Items-as-hub model from the plan docs with what is already implemented in this repo.
+- Define the target flow and the bridge path from current ItemSpecV2 + sections to the new tree + ChangeSet model.
+
+Current implementation snapshot (already in code)
+- projectItems are a flat list with title/typeKey and revision history (itemRevisions).
+- ItemSpecV2 lives in itemRevisions and is edited via ItemEditorPanel; per-tab revisions are approved manually.
+- itemProjections syncs ItemSpecV2 -> sections + materialLines + workLines + tasks.
+- Agents:
+  - ideation -> concept cards (ideationConceptCards) already stored.
+  - clarification/solutioning -> propose ItemSpecV2 revisions per item.
+  - planning -> creates plan markdown only (plans table).
+  - architect/tasks + accountingGenerator -> write tasks or sections/lines directly.
+- tasks/materialLines/workLines already have optional itemId links.
+- accounting UI uses sections/materialLines/workLines with optional item links.
+
+Target flow (items tree + ChangeSet approvals)
+- Items become the canonical project structure (tree of deliverables/services/days/fees).
+- Every agent write is a ChangeSet (pending approval).
+- Tasks, accounting lines, and quotes are projections of Items and linked records.
+- Sections become a legacy grouping view during migration.
+
+Updated phased flow
+0) Project overview (entry)
+   - Persist: projects.overview (new), projects.details (existing), knowledge docs.
+   - Agents read overview + knowledge as hard constraints.
+
+1) Ideation flow (items unknown)
+   - Chat with Ideation agent -> Concept cards (already implemented).
+   - User selects a concept -> Convert-to-Item agent outputs ChangeSet(items.create).
+
+2) Planning entry (items known)
+   - User manually creates items (now using tree-aware UI).
+   - Items become the shared object for all agents.
+
+3) Clarification
+   - Clarification agent outputs ClarificationPacket (questions + summary).
+   - Optionally proposes item scope assumptions as ChangeSet patches.
+
+4) Planning extraction (first operational plan)
+   - Planning agent outputs ChangeSet:
+     - create missing template items (moving/install/management/etc)
+     - patch item scope/flags
+     - create task skeleton per item
+   - User approves -> canonical items/tasks updated.
+
+5) Solutioning extraction (how to build)
+   - Solutioning agent outputs ChangeSet:
+     - accountingLines.create for materials/labor/purchase/rental
+     - task.patch for method notes
+     - item.patch for assumptions/constraints
+
+6) Accounting refinement
+   - Accounting agent outputs ChangeSet:
+     - accountingLines.patch (unitCost, vendor, lead time, purchaseStatus)
+     - item.quoteDefaults patch (optional)
+
+7) Task scheduling + Gantt
+   - Tasks agent outputs ChangeSet:
+     - task.patch (durationHours, plannedStart/End)
+     - dependencies (FS/SS/etc)
+   - Gantt renders from tasks + dependencies.
+
+8) Quote generation
+   - Quote agent outputs QuoteDraft (no accounting mutation).
+   - Quote lines reference itemIds for traceability.
+
+9) Deep research (optional)
+   - Deep research agent outputs ResearchFindings.
+   - Suggested patches feed back into accounting ChangeSets.
+
+Approval and safety
+- Each ChangeSet is reviewed in UI and approved/rejected.
+- No direct destructive deletes; deleteRequest requires double-confirm.
+
+Compatibility during migration
+- ChangeSet apply writes to both:
+  - new accountingLines (if introduced)
+  - legacy materialLines/workLines/sections (dual write)
+- Existing tabs continue to function until cutover.
+
+Definition of done
+- Items tree is the only place users create scope.
+- Agents only propose ChangeSets; approvals update canonical data.
+- Tasks + accounting + quotes are projections of items.

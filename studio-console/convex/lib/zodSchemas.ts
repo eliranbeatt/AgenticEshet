@@ -287,6 +287,384 @@ export const ItemUpdateOutputSchema = z.object({
     changeReason: z.string().optional(),
 });
 
+const CurrencySchema = z.enum(["ILS", "USD", "EUR"]);
+const ItemKindSchema = z.enum(["deliverable", "service", "day", "fee", "group"]);
+const ItemCategorySchema = z.enum([
+    "set_piece",
+    "print",
+    "floor",
+    "prop",
+    "rental",
+    "purchase",
+    "transport",
+    "installation",
+    "studio_production",
+    "management",
+    "other",
+]);
+const PurchaseModeSchema = z.enum(["local", "abroad", "both", "none"]);
+const TaskStatusSchema = z.enum(["todo", "in_progress", "done", "blocked", "cancelled"]);
+const DependencyTypeSchema = z.enum(["FS", "SS", "FF", "SF"]);
+const AccountingLineTypeSchema = z.enum([
+    "material",
+    "labor",
+    "purchase",
+    "rental",
+    "shipping",
+    "misc",
+]);
+const PurchaseStatusSchema = z.enum(["planned", "quoted", "ordered", "received", "cancelled"]);
+
+const ItemFlagsSchema = z.object({
+    requiresStudio: z.boolean().optional(),
+    requiresPurchase: z.boolean().optional(),
+    purchaseMode: PurchaseModeSchema.optional(),
+    requiresRental: z.boolean().optional(),
+    requiresMoving: z.boolean().optional(),
+    requiresInstallation: z.boolean().optional(),
+    requiresDismantle: z.boolean().optional(),
+}).strict();
+
+const ItemScopeSchema = z.object({
+    quantity: z.number().min(0).optional(),
+    unit: z.string().min(1).optional(),
+    dimensions: z.string().optional(),
+    location: z.string().optional(),
+    dueDate: z.string().optional(),
+    constraints: z.array(z.string()).optional(),
+    assumptions: z.array(z.string()).optional(),
+}).strict();
+
+const QuoteDefaultsSchema = z.object({
+    includeByDefault: z.boolean().optional(),
+    displayName: z.string().optional(),
+    taxable: z.boolean().optional(),
+    vatRate: z.number().min(0).max(1).optional(),
+}).strict();
+
+const ItemRefSchema = z.object({
+    itemId: z.string().nullable(),
+    itemTempId: z.string().nullable(),
+}).strict().refine((value) => Boolean(value.itemId) || Boolean(value.itemTempId), {
+    message: "itemRef requires itemId or itemTempId",
+});
+
+const TaskRefSchema = z.object({
+    taskId: z.string().nullable(),
+    taskTempId: z.string().nullable(),
+}).strict().refine((value) => Boolean(value.taskId) || Boolean(value.taskTempId), {
+    message: "taskRef requires taskId or taskTempId",
+});
+
+const ItemCreateSchema = z.object({
+    tempId: z.string().min(1),
+    parentTempId: z.string().nullable().optional(),
+    parentItemId: z.string().nullable().optional(),
+    sortKey: z.string().min(1),
+    kind: ItemKindSchema,
+    category: ItemCategorySchema,
+    name: z.string().min(1),
+    description: z.string().optional(),
+    flags: ItemFlagsSchema,
+    scope: ItemScopeSchema.optional(),
+    quoteDefaults: QuoteDefaultsSchema.optional(),
+}).strict();
+
+const ItemPatchSchema = z.object({
+    itemId: z.string().min(1),
+    patch: z.object({
+        name: z.string().optional(),
+        description: z.string().optional(),
+        flags: ItemFlagsSchema.optional(),
+        scope: ItemScopeSchema.optional(),
+        quoteDefaults: QuoteDefaultsSchema.optional(),
+    }).strict(),
+}).strict();
+
+const ItemDeleteRequestSchema = z.object({
+    itemId: z.string().min(1),
+    reason: z.string(),
+    requiresDoubleConfirm: z.literal(true),
+}).strict();
+
+const TaskCreateSchema = z.object({
+    tempId: z.string().min(1),
+    itemRef: ItemRefSchema,
+    parentTaskTempId: z.string().nullable().optional(),
+    title: z.string().min(1),
+    description: z.string().optional(),
+    durationHours: z.number().min(0),
+    status: TaskStatusSchema,
+    tags: z.array(z.string()),
+    plannedStart: z.string().datetime().nullable(),
+    plannedEnd: z.string().datetime().nullable(),
+}).strict();
+
+const TaskPatchSchema = z.object({
+    taskId: z.string().min(1),
+    patch: z.object({
+        title: z.string().optional(),
+        description: z.string().optional(),
+        durationHours: z.number().min(0).optional(),
+        status: TaskStatusSchema.optional(),
+        tags: z.array(z.string()).optional(),
+        plannedStart: z.string().datetime().nullable().optional(),
+        plannedEnd: z.string().datetime().nullable().optional(),
+    }).strict(),
+}).strict();
+
+const TaskDependencySchema = z.object({
+    fromTaskRef: TaskRefSchema,
+    toTaskRef: TaskRefSchema,
+    type: DependencyTypeSchema,
+    lagHours: z.number().min(0),
+}).strict();
+
+const AccountingLineCreateSchema = z.object({
+    tempId: z.string().min(1),
+    itemRef: ItemRefSchema,
+    taskRef: TaskRefSchema,
+    lineType: AccountingLineTypeSchema,
+    title: z.string().min(1),
+    notes: z.string().optional(),
+    quantity: z.number().min(0).optional(),
+    unit: z.string().optional(),
+    unitCost: z.number().min(0).optional(),
+    currency: CurrencySchema,
+    taxable: z.boolean(),
+    vatRate: z.number().min(0).max(1),
+    vendorNameFreeText: z.string().optional(),
+    leadTimeDays: z.number().min(0).optional(),
+    purchaseStatus: PurchaseStatusSchema,
+}).strict();
+
+const AccountingLinePatchSchema = z.object({
+    lineId: z.string().min(1),
+    patch: z.object({
+        title: z.string().optional(),
+        notes: z.string().optional(),
+        quantity: z.number().min(0).optional(),
+        unit: z.string().optional(),
+        unitCost: z.number().min(0).optional(),
+        currency: CurrencySchema.optional(),
+        taxable: z.boolean().optional(),
+        vatRate: z.number().min(0).max(1).optional(),
+        vendorNameFreeText: z.string().optional(),
+        leadTimeDays: z.number().min(0).optional(),
+        purchaseStatus: PurchaseStatusSchema.optional(),
+    }).strict(),
+}).strict();
+
+export const ChangeSetSchema = z.object({
+    type: z.literal("ChangeSet"),
+    projectId: z.string().min(1),
+    phase: z.enum(["planning", "solutioning", "accounting", "tasks", "item_edit", "convert"]),
+    agentName: z.string().min(1),
+    summary: z.string(),
+    assumptions: z.array(z.string()),
+    openQuestions: z.array(z.string()),
+    warnings: z.array(z.string()),
+    items: z.object({
+        create: z.array(ItemCreateSchema),
+        patch: z.array(ItemPatchSchema),
+        deleteRequest: z.array(ItemDeleteRequestSchema),
+    }).strict(),
+    tasks: z.object({
+        create: z.array(TaskCreateSchema),
+        patch: z.array(TaskPatchSchema),
+        dependencies: z.array(TaskDependencySchema),
+    }).strict(),
+    accountingLines: z.object({
+        create: z.array(AccountingLineCreateSchema),
+        patch: z.array(AccountingLinePatchSchema),
+    }).strict(),
+    uiHints: z.object({
+        focusItemIds: z.array(z.string()),
+        expandItemIds: z.array(z.string()),
+        nextSuggestedAction: z.enum([
+            "approve_changeset",
+            "ask_questions",
+            "run_solutioning",
+            "run_tasks",
+            "generate_quote",
+        ]),
+    }).strict(),
+}).strict();
+
+export const ConceptPacketSchema = z.object({
+    type: z.literal("ConceptPacket"),
+    projectId: z.string().min(1),
+    agentName: z.string().min(1),
+    summary: z.string(),
+    assumptions: z.array(z.string()),
+    openQuestions: z.array(z.string()),
+    concepts: z.object({
+        create: z.array(z.object({
+            tempId: z.string().min(1),
+            title: z.string().min(1),
+            oneLiner: z.string().min(1),
+            narrative: z.string().min(1),
+            style: z.object({
+                materials: z.array(z.string()),
+                colors: z.array(z.string()),
+                lighting: z.array(z.string()),
+                references: z.array(z.string()),
+            }).strict(),
+            feasibility: z.object({
+                studioProduction: z.enum(["low", "medium", "high"]),
+                purchases: z.enum(["low", "medium", "high"]),
+                rentals: z.enum(["low", "medium", "high"]),
+                moving: z.enum(["low", "medium", "high"]),
+                installation: z.enum(["low", "medium", "high"]),
+                mainRisks: z.array(z.string()),
+            }).strict(),
+            impliedItemCandidates: z.array(z.object({
+                name: z.string().min(1),
+                category: z.enum([
+                    "set_piece",
+                    "print",
+                    "floor",
+                    "prop",
+                    "installation",
+                    "transport",
+                    "management",
+                    "other",
+                ]),
+                notes: z.string(),
+            }).strict()),
+        }).strict()),
+        patch: z.array(z.object({
+            conceptId: z.string().min(1),
+            patch: z.object({
+                title: z.string().optional(),
+                oneLiner: z.string().optional(),
+                narrative: z.string().optional(),
+            }).strict(),
+        }).strict()),
+    }).strict(),
+}).strict();
+
+export const ClarificationPacketSchema = z.object({
+    type: z.literal("ClarificationPacket"),
+    projectId: z.string().min(1),
+    agentName: z.string().min(1),
+    summaryOfKnowns: z.object({
+        project: z.array(z.string()),
+        constraints: z.array(z.string()),
+        selectedItems: z.array(z.string()),
+    }).strict(),
+    blockingQuestions: z.array(z.object({
+        id: z.string().min(1),
+        scope: z.enum(["project", "item"]),
+        itemId: z.string().nullable(),
+        question: z.string().min(1),
+        whyItMatters: z.string().min(1),
+    }).strict()),
+    assumptionsIfNoAnswer: z.array(z.string()),
+    readyToExtractPlanWhen: z.array(z.string()),
+}).strict();
+
+export const QuoteDraftSchema = z.object({
+    type: z.literal("QuoteDraft"),
+    projectId: z.string().min(1),
+    agentName: z.string().min(1),
+    versionNote: z.string(),
+    currency: CurrencySchema,
+    pricesIncludeVat: z.boolean(),
+    vatRate: z.number().min(0).max(1),
+    client: z.object({
+        name: z.string(),
+        company: z.string(),
+        email: z.string(),
+    }).strict(),
+    document: z.object({
+        title: z.string().min(1),
+        intro: z.string().min(1),
+        scopeBullets: z.array(z.string()),
+        lineItems: z.array(z.object({
+            sortKey: z.string().min(1),
+            displayName: z.string().min(1),
+            description: z.string().optional(),
+            quantity: z.number().min(0),
+            unit: z.string().min(1),
+            price: z.number().min(0),
+            taxable: z.boolean(),
+            vatRate: z.number().min(0).max(1).optional(),
+        }).strict()),
+        totals: z.object({
+            subtotal: z.number().min(0),
+            vat: z.number().min(0),
+            total: z.number().min(0),
+        }).strict(),
+        paymentTerms: z.array(z.string()),
+        scheduleAssumptions: z.array(z.string()),
+        included: z.array(z.string()),
+        excluded: z.array(z.string()),
+        termsAndConditions: z.array(z.string()),
+        validityDays: z.number().int().min(1),
+    }).strict(),
+    assumptions: z.array(z.string()),
+    openQuestions: z.array(z.string()),
+}).strict();
+
+export const ResearchFindingsSchema = z.object({
+    type: z.literal("ResearchFindings"),
+    projectId: z.string().min(1),
+    agentName: z.string().min(1),
+    goal: z.string().min(1),
+    queries: z.array(z.string()).min(1),
+    keyFindings: z.array(z.object({
+        topic: z.string().min(1),
+        summary: z.string().min(1),
+        options: z.array(z.object({
+            name: z.string().min(1),
+            pros: z.array(z.string()),
+            cons: z.array(z.string()),
+            bestFor: z.array(z.string()),
+        }).strict()),
+        estimatedRanges: z.array(z.object({
+            what: z.string().min(1),
+            low: z.number().min(0),
+            high: z.number().min(0),
+            currency: CurrencySchema,
+            notes: z.string(),
+        }).strict()),
+        leadTimeNotes: z.array(z.string()),
+        risks: z.array(z.string()),
+    }).strict()),
+    recommendedNextEdits: z.object({
+        targetItemIds: z.array(z.string()),
+        suggestedAccountingLinePatches: z.array(z.object({
+            lineId: z.string().min(1),
+            patch: z.object({
+                unitCost: z.number().min(0).optional(),
+                notes: z.string().optional(),
+                leadTimeDays: z.number().min(0).optional(),
+            }).strict(),
+        }).strict()),
+    }).strict(),
+    citations: z.array(z.object({
+        title: z.string(),
+        url: z.string(),
+        usedFor: z.string(),
+    }).strict()),
+    assumptions: z.array(z.string()),
+    openQuestions: z.array(z.string()),
+}).strict();
+
+export const AgentOutputSchema = z.union([
+    ChangeSetSchema,
+    ConceptPacketSchema,
+    ClarificationPacketSchema,
+    QuoteDraftSchema,
+    ResearchFindingsSchema,
+]);
+
 export type ItemSpecV2 = z.infer<typeof ItemSpecV2Schema>;
 export type ItemUpdateOutput = z.infer<typeof ItemUpdateOutputSchema>;
 export type SolutionItemPlanV1 = z.infer<typeof SolutionItemPlanV1Schema>;
+export type ChangeSet = z.infer<typeof ChangeSetSchema>;
+export type ConceptPacket = z.infer<typeof ConceptPacketSchema>;
+export type ClarificationPacket = z.infer<typeof ClarificationPacketSchema>;
+export type QuoteDraft = z.infer<typeof QuoteDraftSchema>;
+export type ResearchFindings = z.infer<typeof ResearchFindingsSchema>;

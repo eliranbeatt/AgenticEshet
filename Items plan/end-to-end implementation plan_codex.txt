@@ -1,0 +1,75 @@
+END-TO-END IMPLEMENTATION PLAN (CODEX UPDATE)
+
+Goal
+- Move from the current ItemSpecV2 + sections workflow to an Items-as-hub tree model with ChangeSet approvals, while keeping existing pages functional during migration.
+
+Current state (already implemented)
+- projectItems + itemRevisions (ItemSpecV2) + itemTemplates + itemProjectionLocks.
+- Items sidebar + ItemEditorPanel in Clarification/Planning/Solutioning.
+- itemProjections syncs ItemSpecV2 -> sections/materialLines/workLines/tasks.
+- Agents write directly to plans/tasks/accounting or propose ItemSpecV2 revisions.
+
+Ordered plan (use this order; each step references its plan file)
+
+1) Schema foundation + feature flags
+- Add projects.overview + projects.features + projects.rootItemId.
+- Extend projectItems with tree fields, flags, scope, rollups, quoteDefaults.
+- Add itemChangeSets + itemChangeSetOps + itemLocks tables.
+- Extend tasks/materialLines/workLines with taskId and scheduling fields.
+- See: convext schema plan_codex.txt
+
+2) Items tree core (backend)
+- Add items.listTree(projectId, parentItemId?) with sortKey ordering.
+- Add items.createItem / patchItem / moveItem / reorderSiblings / requestDelete / confirmDelete.
+- Keep legacy items.listSidebarTree for old UI, backed by title/typeKey until cutover.
+- Ensure searchText is maintained on every write.
+
+3) Rollups engine
+- Build itemRollups.recompute(projectId, itemIds?)
+- Cost rollups: sum accounting lines by lineType + child totals.
+- Schedule rollups: sum task durations, compute start/end, progressPct.
+- Hook into ChangeSet approvals and manual edits (tasks/accounting) to keep rollups fresh.
+
+4) ChangeSet pipeline (core safety feature)
+- Implement changeSets.createFromAgentOutput (validate JSON -> store itemChangeSets + ops).
+- Implement changeSets.apply (approve): resolve tempIds, apply ops, create itemRevisions snapshots.
+- Implement changeSets.reject.
+- Add conflict checks using inputSnapshot timestamps when present.
+
+5) Agent contract + validators
+- Standardize on ChangeSet / ConceptPacket / ClarificationPacket / QuoteDraft / ResearchFindings.
+- Add Zod validators aligned with JSON schema validators_codex.txt.
+- Update agent prompts and skill seeds to match prompts_codex.txt.
+
+6) UI updates (Items-first)
+- Replace ItemsTreeSidebar with a real tree accordion (expand/collapse).
+- Add ChangeSet review UI (banner + modal) in Planning/Solutioning/Accounting/Tasks.
+- Add item detail drawer (details, tasks, accounting, quote defaults, history).
+- Keep existing tabs working via dual-write during migration.
+
+7) Migration + backfill
+- Implement migration actions (itemsMigrations) to:
+  - backfill project overview defaults
+  - build items tree and assign sortKey
+  - map ItemSpecV2 to new item fields
+  - link tasks/materialLines/workLines to items
+  - compute initial rollups
+- See: migration plan - old_codex.txt
+
+8) Cutover strategy (dual-write -> feature flag -> default)
+- Enable projects.features.itemsModelV1 per project.
+- During dual-write: ChangeSet apply updates new fields and legacy sections/lines.
+- Switch items UI to tree mode; keep legacy views as optional.
+- After stability: deprecate ItemSpecV2 projections and plan/architect generators.
+
+9) QA + guardrails
+- Data integrity checks (no orphan tasks/lines, no item cycles).
+- Rollup validation (cost totals match line sums).
+- Snapshot validation (ChangeSet ops apply deterministically).
+- Manual test flows per phase.
+
+Definition of done
+- Items tree is the single source of truth for scope.
+- Agents only produce ChangeSets or Drafts; user approves to commit.
+- Accounting/Tasks/Quote are projections of items + linked records.
+- Legacy sections-based flow can be disabled without data loss.

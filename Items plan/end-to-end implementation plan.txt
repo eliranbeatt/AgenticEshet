@@ -1,0 +1,521 @@
+Below is an **end-to-end implementation plan** to introduce the new **Item-centric data model** (Items as the hub), the **agent ChangeSet approval workflow**, the **accordion Items UI**, and a safe **migration/cutover**—aligned with your existing Magnetic Studio Console architecture (Next.js App Router + Convex + agents + accounting/tasks/quote tabs). 
+
+---
+
+## 1) Target outcome (what “done” looks like)
+
+### The core rule
+
+> **Items are the hub.** Tasks, Gantt, Accounting, and Quote are *projections* of Items + linked records.  
+
+### What changes in practice
+
+1. Every atomic thing in a project is an **Item node** in a tree (deliverables, prints, floor, moving, install day, management fee, rentals, purchases…). 
+2. Agents **do not write directly** to canonical tables. They produce a **ChangeSet** (ops list) → user reviews diffs → **Approve** merges into canonical Items/Tasks/Accounting.  
+3. The UI gets a dedicated **Items accordion** with infinite expand/collapse + drill-down (exactly like your requested UX). 
+4. You can migrate without breaking the existing system by adding schema + backfill + dual-write, then gradually cutting over.  
+
+---
+
+## 2) Architecture changes (high-level)
+
+### Current system (baseline)
+
+Your app already has:
+
+* Projects, Tasks, Accounting (sections/materialLines/workLines), Quotes, Plans, Agents, Gantt, Ingestion/RAG, Trello sync. 
+
+### New pieces we add
+
+1. **Items subsystem** in Convex:
+
+   * `projectItems` (tree nodes + rollups)
+   * `itemRevisions`
+   * `itemChangeSets` + `itemChangeSetOps`
+   * `itemTemplates`
+   * `itemProjectionLocks` 
+
+2. **Agent outputs standardized** to:
+
+   * `AgentOutputEnvelope.v1` + `changeSet.ops[]` (planning/solutioning/tasks/accounting/quote) 
+
+3. **Adapters** (initially) so you can keep existing pages working while Items becomes the canonical “spine”.
+
+---
+
+## 3) Backend implementation plan (Convex)
+
+### 3.1 Schema changes (additive, safe)
+
+Implement the exact Items tables + indexes from your schema plan: 
+
+* `projectItems`
+* `itemRevisions`
+* `itemTemplates`
+* `itemProjectionLocks`
+* `itemChangeSets`
+* `itemChangeSetOps`
+
+Then extend existing tables with:
+
+* `tasks.itemId` (+ indexes by project+item)
+* `materialLines.itemId` + optional `taskId`
+* `workLines.itemId` + optional `taskId` 
+
+This preserves all existing functionality while enabling Items linkage.
+
+---
+
+### 3.2 Core Items API (queries/mutations)
+
+Create `convex/items.ts` with a clean surface area:
+
+**Queries**
+
+* `items.listTree(projectId, parentItemId?)` → returns children ordered by `sortKey`
+* `items.getItem(itemId)` → detail view
+* `items.search(projectId, text, filters)` → uses `search_items` index 
+* `items.getRollups(projectId)` → optional summary (for overview cards)
+
+**Mutations**
+
+* `items.createItem(...)`
+* `items.patchItem(itemId, patch)` (name/flags/scope/quoteDefaults/links/status)
+* `items.moveItem(itemId, newParentId, newSortKey)`
+* `items.reorderSiblings(parentItemId, orderedIds)`
+* `items.requestDelete(itemId)` + `items.confirmDelete(itemId)` (double-approval delete UX) 
+* `items.restoreDeleted(itemId)` (optional but practical during rollout)
+
+**Important implementation details**
+
+* Always maintain:
+
+  * `searchText = name + "\n" + description`
+  * `updatedAt`, `createdAt`
+  * `currentRevisionId` when committing changes (see revisions below) 
+
+---
+
+### 3.3 Rollups engine (cost, schedule, progress)
+
+Items need stored rollups for fast accordion rendering. 
+
+Create `convex/itemRollups.ts`:
+
+* `recomputeItemRollups(projectId, itemIds?)`
+
+  * Pull all accounting lines linked to item subtree
+  * Pull tasks linked to item subtree
+  * Compute:
+
+    * cost totals by lineType (material/labor/rentals/purchases/shipping/misc)
+    * `tasks.total/done/blocked`
+    * schedule: `durationHours`, `plannedStart`, `plannedEnd`, `progressPct`
+  * Propagate upward: leaf → parent → root
+
+**Trigger points**
+
+* After applying a ChangeSet
+* After manual edits to tasks/accounting lines that affect rollups
+* After migration backfill
+
+---
+
+### 3.4 ChangeSet + approval engine (the key workflow)
+
+Agents produce ops; users approve; system merges safely.  
+
+Create `convex/itemChangeSets.ts`:
+
+**Mutations**
+
+1. `changeSets.createFromAgentOutput(envelope)`
+
+   * Validate envelope + ops (Zod)
+   * Insert `itemChangeSets` row (status=pending)
+   * Normalize ops into `itemChangeSetOps` rows (entityType/opType/payloadJson)
+   * Store warnings/assumptions/openQuestions for UI badges 
+
+2. `changeSets.approve(changeSetId)`
+
+   * Acquire lock (see locks below)
+   * Apply ops in deterministic order:
+
+     1. creates (items/tasks/lines) resolving tempIds → real ids
+     2. patches
+     3. delete requests (never hard delete immediately)
+   * For each applied entity, write an `itemRevisions` record (snapshot recommended on commit) 
+   * Update `projectItems.currentRevisionId`
+   * Mark ChangeSet approved
+   * Recompute rollups for touched items
+   * Release lock
+
+3. `changeSets.reject(changeSetId, reason?)`
+
+   * Mark rejected; keep for audit/history
+
+**Queries**
+
+* `changeSets.listByProject(projectId, phase?, status?)`
+* `changeSets.getDetail(changeSetId)` (includes normalized ops grouped by entity)
+
+**Conflict safety (minimum viable)**
+
+* Before applying a patch op:
+
+  * Check `inputSnapshot` timestamps / revision ids from the agent envelope (planning/tasks/accounting timestamps) and warn if stale. 
+* If stale:
+
+  * Apply anyway but mark “needs review” warnings on the ChangeSet, or require user “force apply”.
+
+---
+
+### 3.5 Locks (avoid concurrent agent overwrites)
+
+Implement project-wide or item-scoped locks per phase. 
+
+* `locks.acquire(projectId, phase, itemId?)`
+* `locks.release(lockId)`
+* Auto-expire `expiresAt` in queries; if expired, considered free.
+
+Use locks in:
+
+* agent runs (planning/solutioning/accounting/tasks/quote)
+* approving ChangeSets
+
+---
+
+### 3.6 Item templates (auto-add “missing but required” items)
+
+Planning must propose management/moving/install/etc based on project overview flags.  
+
+Implement:
+
+* `itemTemplates.seedSystemTemplates()` once (migration or admin-only)
+* `items.expandTemplatesForProject(projectId, projectOverview)` → returns proposed ops
+
+This is how you guarantee that if overview says “requiresMoving”, you always get a Moving item even if user forgot.
+
+---
+
+## 4) Agents: how to implement the new outputs safely
+
+### 4.1 Adopt the AgentOutputEnvelope + ops contracts
+
+Use your v1 contracts as the single validation target. 
+
+**Implementation approach**
+
+* Add Zod schemas mirroring:
+
+  * `AgentOutputEnvelope.v1`
+  * each op payload shape
+  * per-phase constraints (planning must create items/tasks; quote must only create quote draft, etc.) 
+
+* In each agent action:
+
+  1. Build context (project overview + items + tasks + accounting + knowledge)
+  2. Call LLM with the phase prompt
+  3. Validate JSON output (Zod)
+  4. Persist as pending ChangeSet via `changeSets.createFromAgentOutput(...)`
+  5. UI shows “Review proposed changes” banner 
+
+### 4.2 Prompt pack integration
+
+You already drafted a full prompt pack with:
+
+* shared context payload
+* EXTRACT vs CHAT modes
+* per-agent responsibilities (Ideation, Convert-to-Item, Clarification, Planning Extract, Solutioning Extract, Accounting, Tasks/Gantt, Quote, Deep Research, Item Editor) 
+
+**What to implement first (highest leverage)**
+
+1. **Planning Extract (EXTRACT)** → creates initial item tree + coarse tasks. 
+2. **Accounting (EXTRACT)** → adds accounting lines per item/task. 
+3. **Tasks/Gantt (EXTRACT)** → durations + dependencies. 
+4. **Quote (EXTRACT)** → quote draft only (no accounting mutation). 
+
+Then add Ideation/Convert later (because it’s a new “Concepts” object).
+
+---
+
+## 5) Frontend plan (Next.js App Router)
+
+### 5.1 Add an Items tab + route
+
+Add:
+
+* `/projects/[id]/items`
+
+Update the project sidebar tabs (same layout pattern as existing project routes). 
+
+---
+
+### 5.2 Items accordion UI (your exact UX)
+
+Build `ItemsTreeAccordion`:
+
+* Infinite expand/collapse
+* Each row shows:
+
+  * name (inline editable)
+  * kind/category icon
+  * flags badges (studio/purchase/rental/moving/install)
+  * rollup chips (cost, hours, progress)
+  * status pill (draft/in_progress/done/blocked)
+* Row actions:
+
+  * “Add child”
+  * “Duplicate”
+  * “Move”
+  * “Delete” (starts deleteRequest flow)
+
+**Performance**
+
+* Fetch by parent on expand: `items.listTree(projectId, parentItemId)`
+* Keep a client-side expanded set
+
+This matches your “click-expand deeper until done” requirement. 
+
+---
+
+### 5.3 Item detail drawer (the “inspector”)
+
+When clicking an item, open a right drawer with tabs:
+
+1. **Details**
+
+   * name, description
+   * kind/category
+   * flags
+   * scope (dimensions, quantity, due date, constraints/assumptions)
+2. **Tasks**
+
+   * list tasks filtered by `itemId`
+   * create/edit tasks
+3. **Accounting**
+
+   * show material/work lines filtered by `itemId`
+   * quick-add line
+4. **Quote defaults**
+
+   * includeByDefault, displayName, vat settings
+5. **Links**
+
+   * knowledge docs, URLs, trelloCardIds
+6. **History**
+
+   * revisions + applied ChangeSets
+
+---
+
+### 5.4 Double approval delete (required)
+
+Implement exactly:
+
+1. First click “Delete” → calls `items.requestDelete(itemId)` and shows “Delete requested”
+2. Second click “Confirm delete” → calls `items.confirmDelete(itemId)` 
+
+Also add “Cancel delete request”.
+
+---
+
+### 5.5 ChangeSet review UI (critical)
+
+Add a reusable component used across tabs:
+
+* `PendingChangesBanner(projectId, phase)`:
+
+  * shows count of pending ChangeSets
+  * “Review” opens `ChangeSetReviewModal`
+
+`ChangeSetReviewModal`:
+
+* groups ops by entity (Items / Tasks / Accounting / Dependencies)
+* shows before/after diff (for patches)
+* shows warnings + assumptions + open questions
+* buttons: Approve / Reject
+
+This is how agent output becomes safe and editable.  
+
+---
+
+## 6) Integrating Items into existing tabs (without breaking them)
+
+### 6.1 Planning tab
+
+Keep existing plan markdown (plans table) for narrative, but:
+
+* “Generate plan” should now also create a **pending ChangeSet** with item tree + coarse tasks.  
+
+UI:
+
+* show plan markdown as today
+* plus a “Review proposed Items” banner
+
+---
+
+### 6.2 Tasks + Gantt tab
+
+Add item support incrementally:
+
+* Add an Item filter dropdown
+* Display task’s linked item name
+* When creating a task: must choose item (default to currently selected item, or “General”) 
+
+Gantt:
+
+* render tasks as today
+* optionally group by item
+
+---
+
+### 6.3 Accounting tab
+
+Stepwise approach:
+
+1. Add `itemId` to material/work lines (schema + UI)
+2. Show “Linked Item” column; allow setting it
+3. Add “View by Item” toggle:
+
+   * flat sections view (legacy)
+   * grouped by items view (new)
+
+Eventually:
+
+* sections become optional organizational UI,
+* item rollups become the summary truth.
+
+---
+
+### 6.4 Quote tab
+
+Quote agent should generate a **draft quote** based on Items rollups + accounting snapshot. 
+
+Important:
+
+* Quote phase should not patch accounting lines (per contract).
+* Quote lines should reference itemIds (with override displayName). 
+
+---
+
+## 7) Migration plan (old → new) with minimal risk
+
+You asked specifically for migration/tree building/rollup recomputation; here’s a safe sequence aligned with your older migration notes and the new schema model.  
+
+### 7.1 Migration strategy: additive + backfill + dual-write + cutover
+
+**Phase A — Add schema + fields (no UI change yet)**
+
+* Deploy new tables
+* Add `itemId` optional fields to tasks/materialLines/workLines
+* No data moved yet
+
+**Phase B — Backfill items tree per project**
+Create a Convex action: `migrations.backfillItems(projectId | allProjects)`
+
+* Create root grouping items (example):
+
+  * Deliverables
+  * Services
+  * Days
+  * Fees / Management
+  * General / Misc
+* For each accounting `section`:
+
+  * Create a group item under the closest root (heuristics via section name)
+  * Set all its lines’ `itemId` to that new item
+* For tasks:
+
+  * Try map task → item by:
+
+    1. existing task category/tag keywords
+    2. fuzzy match task title to item names
+    3. fallback to “General / Misc” item
+* For existing quotes:
+
+  * Link quote lines to items via name matching (best effort)
+
+**Phase C — Recompute rollups**
+Run `recomputeItemRollups(projectId)` after backfill.
+
+**Phase D — Dual-write**
+Update existing mutations:
+
+* when user creates a new accounting line and no itemId selected → auto-assign “General” itemId
+* when agent creates tasks/lines → always assign itemId (or refuse)
+
+**Phase E — UI cutover**
+
+* Enable Items tab for all projects (read-only at first)
+* Then enable editing + item-linked creation in tasks/accounting
+* Finally, shift default views to “by item”
+
+**Rollback**
+
+* Because old structures remain intact and itemId is optional, rollback is just “disable Items feature flag” and ignore itemId fields.
+
+---
+
+## 8) Validators (agent output + data integrity)
+
+### 8.1 Agent JSON validators (Zod)
+
+Implement:
+
+* `zod/agentOutputEnvelope.ts`
+* `zod/changeSetOps.ts`
+* `zod/perPhaseRules.ts` (planning must create items/tasks; quote must not mutate accounting; etc.) 
+
+Add server guards:
+
+* Reject outputs that:
+
+  * reference unknown ids
+  * patch immutable fields incorrectly
+  * omit required VAT fields where your accounting expects them
+
+### 8.2 ChangeSet apply validators (runtime)
+
+Before apply:
+
+* verify the project snapshot isn’t too stale (or warn)
+* verify tempId resolution consistency
+* verify tree invariants (no cycles, parent exists, sortKey valid)
+
+After apply:
+
+* ensure rollups are recomputed
+* ensure `searchText` updated
+* ensure tasks/lines `itemId` belongs to same project
+
+---
+
+## 9) Implementation order (the “no surprises” sequence)
+
+If you follow this order, you’ll be able to ship value early without destabilizing current workflows:
+
+1. **Schema + fields + indexes** (Items tables + add itemId to tasks/lines) 
+2. **Items API + rollups engine**
+3. **Items UI (accordion + inspector) read-only**, backed by migration backfill
+4. **ChangeSets + approval UI** (even before agents switch outputs) 
+5. **Update Planning agent → ChangeSet ops** (planning phase first)  
+6. **Update Accounting + Tasks agents → ops**
+7. **Quote agent → quote.createDraft ops**
+8. **Dual-write enforcement** (new tasks/lines must have itemId)
+9. **Cutover: default views by item**
+
+---
+
+## 10) What I’d implement as “feature flags”
+
+Add a project setting (or global setting) like:
+
+* `itemsFeatureMode: "off" | "read_only" | "on"`
+
+Use it to:
+
+* hide Items route
+* prevent ChangeSet approvals
+* keep old flows intact while migrating
+

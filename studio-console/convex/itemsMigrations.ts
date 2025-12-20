@@ -3,6 +3,7 @@ import { action, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { ItemSpecV2Schema, type ItemSpecV2 } from "./lib/zodSchemas";
 import type { Doc, Id } from "./_generated/dataModel";
+import { recomputeRollups } from "./lib/itemRollups";
 
 function normalizeRateType(rateType: string): "hour" | "day" | "flat" {
     if (rateType === "hour" || rateType === "day" || rateType === "flat") {
@@ -70,6 +71,55 @@ function buildSubtaskTitleMap(spec: ItemSpecV2) {
     const titleMap = new Map<string, string>();
     collectSubtaskTitles(spec.breakdown.subtasks, titleMap);
     return titleMap;
+}
+
+function mapTypeKeyToCategory(typeKey: string) {
+    const normalized = typeKey.trim().toLowerCase();
+    const mapping: Record<string, string> = {
+        build: "set_piece",
+        carpentry: "set_piece",
+        scenic: "set_piece",
+        print: "print",
+        graphics: "print",
+        floor: "floor",
+        prop: "prop",
+        rental: "rental",
+        purchase: "purchase",
+        transport: "transport",
+        moving: "transport",
+        install: "installation",
+        studio: "studio_production",
+        management: "management",
+        producer: "management",
+    };
+    return mapping[normalized] ?? "other";
+}
+
+function buildSearchText(name?: string, description?: string, typeKey?: string) {
+    return `${name ?? ""}\n${description ?? ""}${typeKey ? `\n${typeKey}` : ""}`.trim();
+}
+
+function mapSpecToItemFields(spec: ItemSpecV2) {
+    const flags = {
+        requiresPurchase: spec.procurement?.required ?? undefined,
+        purchaseMode: spec.procurement?.channel ?? undefined,
+        requiresStudio: spec.studioWork?.required ?? undefined,
+        requiresMoving: spec.logistics?.transportRequired ?? undefined,
+        requiresInstallation: spec.onsite?.installDays ? spec.onsite.installDays > 0 : undefined,
+        requiresDismantle: spec.onsite?.teardownDays ? spec.onsite.teardownDays > 0 : undefined,
+    };
+
+    const scope = {
+        assumptions: spec.state?.assumptions,
+        constraints: spec.state?.openQuestions,
+    };
+
+    const quoteDefaults = {
+        includeByDefault: spec.quote?.includeInQuote,
+        displayName: spec.quote?.clientTextOverride,
+    };
+
+    return { flags, scope, quoteDefaults };
 }
 
 export const listProjectIds = internalQuery({
@@ -153,8 +203,15 @@ export const backfillProjectFromAccounting = internalMutation({
 
             const itemId = await ctx.db.insert("projectItems", {
                 projectId: args.projectId,
+                parentItemId: null,
+                sortKey: String(section.sortOrder ?? now),
                 title: section.name,
                 typeKey: section.group,
+                name: section.name,
+                category: section.group,
+                kind: "deliverable",
+                description: section.description,
+                searchText: `${section.name}\n${section.description ?? ""}\n${section.group}`.trim(),
                 status: "approved",
                 sortOrder: section.sortOrder,
                 createdFrom: { source: "accountingBackfill", sourceId: String(section._id) },
@@ -401,8 +458,15 @@ export const proposeFromConceptCardsForProject = internalMutation({
 
             const itemId = await ctx.db.insert("projectItems", {
                 projectId: args.projectId,
+                parentItemId: null,
+                sortKey: String(now),
                 title: card.title,
                 typeKey: "concept",
+                name: card.title,
+                category: "concept",
+                kind: "deliverable",
+                description: card.detailsMarkdown,
+                searchText: `${card.title}\n${card.detailsMarkdown}\nconcept`.trim(),
                 status: "draft",
                 createdFrom: { source: "ideationCard", sourceId: card._id },
                 latestRevisionNumber: 1,
@@ -482,6 +546,348 @@ export const proposeFromConceptCards = action({
                 { projectId },
             );
             results.push(result);
+        }
+
+        return results;
+    },
+});
+
+export const backfillProjectOverview = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const project = await ctx.db.get(args.projectId);
+        if (!project) throw new Error("Project not found");
+
+        if (project.overview) {
+            return { projectId: args.projectId, updated: false };
+        }
+
+        const overview = {
+            projectType: project.projectTypes?.[0] ?? "other",
+            properties: {
+                requiresStudioProduction: false,
+                requiresPurchases: [],
+                requiresRentals: false,
+                requiresMoving: false,
+                requiresInstallation: false,
+                requiresDismantle: false,
+                includesShootDay: false,
+                includesManagementFee: false,
+            },
+            constraints: {
+                budgetRange: {
+                    max: project.details?.budgetCap,
+                    currency: project.currency ?? "ILS",
+                },
+                dates: {
+                    install: project.details?.eventDate,
+                },
+                location: project.details?.location,
+                qualityTier: project.budgetTier ?? undefined,
+            },
+        };
+
+        await ctx.db.patch(args.projectId, { overview });
+        return { projectId: args.projectId, updated: true };
+    },
+});
+
+export const ensureRoots = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const project = await ctx.db.get(args.projectId);
+        if (!project) throw new Error("Project not found");
+
+        if (project.rootItemId) {
+            return { projectId: args.projectId, rootItemId: project.rootItemId, created: false };
+        }
+
+        const now = Date.now();
+        const rootItemId = await ctx.db.insert("projectItems", {
+            projectId: args.projectId,
+            parentItemId: null,
+            sortKey: String(now),
+            kind: "group",
+            category: "other",
+            name: "Project Scope",
+            title: "Project Scope",
+            typeKey: "scope",
+            description: "Root scope group.",
+            searchText: buildSearchText("Project Scope", "Root scope group.", "scope"),
+            status: "approved",
+            createdFrom: { source: "manual" },
+            latestRevisionNumber: 1,
+            createdAt: now,
+            updatedAt: now,
+        });
+
+        await ctx.db.patch(args.projectId, { rootItemId });
+        return { projectId: args.projectId, rootItemId, created: true };
+    },
+});
+
+export const buildTree = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const rootResult = await ctx.db.get(args.projectId);
+        if (!rootResult) throw new Error("Project not found");
+
+        const project = rootResult;
+        let rootItemId = project.rootItemId;
+        if (!rootItemId) {
+            const created = await ctx.runMutation(internal.itemsMigrations.ensureRoots, { projectId: args.projectId });
+            rootItemId = created.rootItemId;
+        }
+
+        const items: Doc<"projectItems">[] = [];
+        for (const status of ["draft", "proposed", "approved", "in_progress", "done", "blocked", "cancelled", "archived"] as const) {
+            const batch = await ctx.db
+                .query("projectItems")
+                .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+                .collect();
+            items.push(...batch);
+        }
+
+        let patched = 0;
+        for (const item of items) {
+            if (item._id === rootItemId) continue;
+            if (item.parentItemId) continue;
+
+            await ctx.db.patch(item._id, {
+                parentItemId: rootItemId,
+                sortKey: item.sortKey ?? String(item.sortOrder ?? item.createdAt ?? Date.now()),
+                updatedAt: Date.now(),
+            });
+            patched += 1;
+        }
+
+        return { projectId: args.projectId, rootItemId, patched };
+    },
+});
+
+export const mapLegacySpecs = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const items: Doc<"projectItems">[] = [];
+        for (const status of ["draft", "proposed", "approved", "in_progress", "done", "blocked", "cancelled", "archived"] as const) {
+            const batch = await ctx.db
+                .query("projectItems")
+                .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+                .collect();
+            items.push(...batch);
+        }
+
+        let patched = 0;
+        for (const item of items) {
+            if (!item.approvedRevisionId) continue;
+            const revision = await ctx.db.get(item.approvedRevisionId);
+            if (!revision) continue;
+
+            const parsed = ItemSpecV2Schema.safeParse(revision.data);
+            if (!parsed.success) continue;
+
+            const spec = parsed.data;
+            const mapped = mapSpecToItemFields(spec);
+            const name = item.name ?? spec.identity.title ?? item.title;
+            const category = item.category ?? mapTypeKeyToCategory(spec.identity.typeKey ?? item.typeKey);
+            const description = item.description ?? spec.identity.description;
+
+            await ctx.db.patch(item._id, {
+                name,
+                category,
+                kind: item.kind ?? "deliverable",
+                description,
+                flags: mapped.flags,
+                scope: mapped.scope,
+                quoteDefaults: mapped.quoteDefaults,
+                searchText: buildSearchText(name, description, item.typeKey),
+                updatedAt: Date.now(),
+            });
+            patched += 1;
+        }
+
+        return { projectId: args.projectId, patched };
+    },
+});
+
+export const linkAccounting = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const sections = await ctx.db
+            .query("sections")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        const sectionItemMap = new Map<Id<"sections">, Id<"projectItems">>();
+        for (const section of sections) {
+            if (section.itemId) sectionItemMap.set(section._id, section.itemId);
+        }
+
+        const materials = await ctx.db
+            .query("materialLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        const workLines = await ctx.db
+            .query("workLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        let materialLinked = 0;
+        for (const line of materials) {
+            if (line.itemId) continue;
+            const itemId = sectionItemMap.get(line.sectionId);
+            if (!itemId) continue;
+            await ctx.db.patch(line._id, { itemId });
+            materialLinked += 1;
+        }
+
+        let workLinked = 0;
+        for (const line of workLines) {
+            if (line.itemId) continue;
+            const itemId = sectionItemMap.get(line.sectionId);
+            if (!itemId) continue;
+            await ctx.db.patch(line._id, { itemId });
+            workLinked += 1;
+        }
+
+        return { projectId: args.projectId, materialLinked, workLinked };
+    },
+});
+
+export const createAccountingLines = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const [materials, workLines] = await Promise.all([
+            ctx.db
+                .query("materialLines")
+                .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+                .collect(),
+            ctx.db
+                .query("workLines")
+                .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+                .collect(),
+        ]);
+
+        let created = 0;
+        const now = Date.now();
+
+        for (const line of materials) {
+            if (!line.itemId) continue;
+            await ctx.db.insert("accountingLines", {
+                projectId: args.projectId,
+                itemId: line.itemId,
+                taskId: line.taskId,
+                lineType: "material",
+                title: line.label,
+                notes: line.description,
+                quantity: line.plannedQuantity,
+                unit: line.unit,
+                unitCost: line.plannedUnitCost,
+                currency: "ILS",
+                taxable: false,
+                vatRate: line.taxRate ?? 0,
+                vendorNameFreeText: line.vendorName,
+                purchaseStatus: line.status as Doc<"accountingLines">["purchaseStatus"],
+                createdAt: now,
+                updatedAt: now,
+            });
+            created += 1;
+        }
+
+        for (const line of workLines) {
+            if (!line.itemId) continue;
+            await ctx.db.insert("accountingLines", {
+                projectId: args.projectId,
+                itemId: line.itemId,
+                taskId: line.taskId,
+                lineType: "labor",
+                title: line.role,
+                notes: line.description,
+                quantity: line.plannedQuantity,
+                unit: line.rateType,
+                unitCost: line.plannedUnitCost,
+                currency: "ILS",
+                taxable: false,
+                vatRate: 0,
+                createdAt: now,
+                updatedAt: now,
+            });
+            created += 1;
+        }
+
+        return { projectId: args.projectId, created };
+    },
+});
+
+export const recomputeRollupsForProject = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        await recomputeRollups(ctx, { projectId: args.projectId });
+        return { projectId: args.projectId, recomputed: true };
+    },
+});
+
+export const verifyProject = internalMutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const items: Doc<"projectItems">[] = [];
+        for (const status of ["draft", "proposed", "approved", "in_progress", "done", "blocked", "cancelled", "archived"] as const) {
+            const batch = await ctx.db
+                .query("projectItems")
+                .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
+                .collect();
+            items.push(...batch);
+        }
+
+        const roots = items.filter((item) => item.parentItemId === null);
+        const tasks = await ctx.db
+            .query("tasks")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        const tasksWithoutItem = tasks.filter((task) => !task.itemId).length;
+        const itemsWithoutParent = items.filter((item) => item.parentItemId === undefined).length;
+
+        return {
+            projectId: args.projectId,
+            rootCount: roots.length,
+            tasksWithoutItem,
+            itemsWithoutParent,
+        };
+    },
+});
+
+export const runItemsV3Migrations = action({
+    args: { projectId: v.optional(v.id("projects")) },
+    handler: async (ctx, args) => {
+        const projectIds = args.projectId
+            ? [args.projectId]
+            : await ctx.runQuery(internal.itemsMigrations.listProjectIds, {});
+
+        const results = [];
+        for (const projectId of projectIds) {
+            const overview = await ctx.runMutation(internal.itemsMigrations.backfillProjectOverview, { projectId });
+            const root = await ctx.runMutation(internal.itemsMigrations.ensureRoots, { projectId });
+            const tree = await ctx.runMutation(internal.itemsMigrations.buildTree, { projectId });
+            const mapped = await ctx.runMutation(internal.itemsMigrations.mapLegacySpecs, { projectId });
+            const linked = await ctx.runMutation(internal.itemsMigrations.linkTasksForProject, { projectId });
+            const accountingLinked = await ctx.runMutation(internal.itemsMigrations.linkAccounting, { projectId });
+            const accountingLines = await ctx.runMutation(internal.itemsMigrations.createAccountingLines, { projectId });
+            const rollups = await ctx.runMutation(internal.itemsMigrations.recomputeRollupsForProject, { projectId });
+            const verify = await ctx.runMutation(internal.itemsMigrations.verifyProject, { projectId });
+            results.push({
+                projectId,
+                overview,
+                root,
+                tree,
+                mapped,
+                linked,
+                accountingLinked,
+                accountingLines,
+                rollups,
+                verify,
+            });
         }
 
         return results;

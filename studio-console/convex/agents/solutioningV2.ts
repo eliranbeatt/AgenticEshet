@@ -1,9 +1,10 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
 import { syncItemProjections } from "../lib/itemProjections";
 import {
+    ChangeSetSchema,
     ItemSpecV2Schema,
     SolutionItemPlanV1Schema,
     SolutioningExtractedPlanLooseSchema,
@@ -681,7 +682,7 @@ export const extractPlanFromThread = action({
         const { project, scenario, messages } = await ctx.runQuery(internal.chat.getThreadContext, {
             threadId: args.threadId,
         });
-        const { systemPrompt } = await ctx.runQuery(internal.agents.solutioningV2.getContext, {
+        const { systemPrompt, item } = await ctx.runQuery(internal.agents.solutioningV2.getContext, {
             projectId: project._id,
             itemId: args.itemId,
         });
@@ -726,6 +727,80 @@ export const extractPlanFromThread = action({
                 solutionPlan: normalized.markdown,
                 solutionPlanJson: JSON.stringify(normalized.plan),
                 createdBy: "agent",
+            });
+
+            const projectTasks = await ctx.runQuery(api.tasks.listByProject, { projectId: project._id });
+            const relatedTasks = projectTasks.filter((task) => task.itemId === args.itemId);
+
+            const changeSetContext = {
+                mode: "EXTRACT",
+                phase: "solutioning",
+                actor: { userName: "user", studioName: "studio" },
+                project: {
+                    id: project._id,
+                    name: project.name,
+                    clientName: project.clientName,
+                    defaultLanguage: project.defaultLanguage ?? "he",
+                    budgetTier: project.budgetTier ?? "unknown",
+                    projectTypes: project.projectTypes ?? [],
+                    details: project.details,
+                    overview: project.overview,
+                    features: project.features ?? {},
+                },
+                selection: {
+                    selectedItemIds: [String(item._id)],
+                    selectedConceptIds: [],
+                    selectedTaskIds: relatedTasks.map((task) => String(task._id)),
+                },
+                items: [item],
+                tasks: relatedTasks,
+                accounting: {
+                    materialLines: [],
+                    workLines: [],
+                    accountingLines: [],
+                },
+                quotes: [],
+                concepts: [],
+                knowledge: {
+                    attachedDocs: [],
+                    pastProjects: [],
+                    retrievedSnippets: [],
+                },
+                settings: {
+                    currencyDefault: project.currency ?? "ILS",
+                    tax: { vatRate: project.vatRate ?? 0, pricesIncludeVat: project.pricesIncludeVat ?? false },
+                    pricingModel: {
+                        overheadOnExpensesPct: 0.15,
+                        overheadOnOwnerTimePct: 0.3,
+                        profitPct: 0.1,
+                    },
+                },
+                ui: {
+                    capabilities: {
+                        supportsChangeSets: true,
+                        supportsLocks: true,
+                        supportsDeepResearchTool: true,
+                    },
+                },
+                assistantMessage: lastAssistant.content,
+                extractedPlan: normalized.plan,
+            };
+
+            const changeSet = await callChatWithSchema(ChangeSetSchema, {
+                model,
+                systemPrompt: [
+                    systemPrompt,
+                    "",
+                    "Extract a ChangeSet proposal based on the solutioning conversation and the provided context.",
+                    "Return JSON only.",
+                ].join("\n"),
+                userPrompt: JSON.stringify(changeSetContext),
+                maxRetries: 2,
+                language: project.defaultLanguage === "en" ? "en" : "he",
+            });
+
+            await ctx.runAction(api.changeSets.createFromAgentOutput, {
+                agentOutput: changeSet,
             });
 
             await ctx.runMutation(internal.chat.createMessage, {

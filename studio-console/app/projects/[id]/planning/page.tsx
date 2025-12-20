@@ -10,6 +10,7 @@ import remarkGfm from "remark-gfm";
 import { useThinkingMode } from "../../../ThinkingModeContext";
 import { ItemsTreeSidebar } from "../_components/items/ItemsTreeSidebar";
 import { ItemEditorPanel } from "../_components/items/ItemEditorPanel";
+import { ChangeSetReviewBanner } from "../_components/changesets/ChangeSetReviewBanner";
 
 export default function PlanningPage() {
     const params = useParams();
@@ -108,6 +109,7 @@ export default function PlanningPage() {
                             : "No plan yet"
                 }
             />
+            <ChangeSetReviewBanner projectId={projectId} phase="planning" />
             <div className="grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
                 <ItemsTreeSidebar />
 

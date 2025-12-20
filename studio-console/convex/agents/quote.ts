@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, query } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
-import { ItemSpecV2Schema, QuoteSchema, type ItemSpecV2 } from "../lib/zodSchemas";
+import { ItemSpecV2Schema, QuoteDraftSchema, type ItemSpecV2 } from "../lib/zodSchemas";
 import { type Doc } from "../_generated/dataModel";
 
 type QuoteBreakdownItem = {
@@ -69,11 +69,45 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
 export const saveQuote = internalMutation({
     args: {
         projectId: v.id("projects"),
-        quoteData: v.any(), // QuoteSchema
+        quoteData: v.any(), // QuoteDraftSchema
     },
     handler: async (ctx, args) => {
         const project = await ctx.db.get(args.projectId);
-        const quoteData = args.quoteData as QuoteDataPayload;
+        const quoteData = args.quoteData as {
+            currency: string;
+            document: {
+                title: string;
+                intro: string;
+                scopeBullets: string[];
+                lineItems: Array<{
+                    displayName: string;
+                    description?: string;
+                    quantity: number;
+                    unit: string;
+                    price: number;
+                }>;
+                totals: { subtotal: number; vat: number; total: number };
+                paymentTerms: string[];
+                scheduleAssumptions: string[];
+                included: string[];
+                excluded: string[];
+                termsAndConditions: string[];
+                validityDays: number;
+            };
+        };
+        const internalBreakdown: QuoteBreakdownItem[] = quoteData.document.lineItems.map((item) => ({
+            label: item.displayName,
+            amount: item.price,
+            currency: quoteData.currency,
+            notes: item.description ?? null,
+        }));
+        const clientDocumentText = buildClientDocumentText(quoteData.document);
+        const normalized: QuoteDataPayload = {
+            internalBreakdown,
+            totalAmount: quoteData.document.totals.total,
+            currency: quoteData.currency,
+            clientDocumentText,
+        };
         // Determine version
         const existing = await ctx.db
             .query("quotes")
@@ -85,22 +119,22 @@ export const saveQuote = internalMutation({
         await ctx.db.insert("quotes", {
             projectId: args.projectId,
             version,
-            internalBreakdownJson: JSON.stringify(quoteData.internalBreakdown),
-            clientDocumentText: quoteData.clientDocumentText,
-            currency: quoteData.currency,
-            totalAmount: quoteData.totalAmount,
+            internalBreakdownJson: JSON.stringify(normalized.internalBreakdown),
+            clientDocumentText: normalized.clientDocumentText,
+            currency: normalized.currency,
+            totalAmount: normalized.totalAmount,
             createdAt: Date.now(),
             createdBy: "agent",
         });
 
         const quoteText = [
-            `Currency: ${quoteData.currency}`,
-            `Total: ${quoteData.totalAmount}`,
+            `Currency: ${normalized.currency}`,
+            `Total: ${normalized.totalAmount}`,
             "Breakdown:",
-            ...quoteData.internalBreakdown.map((item) => `- ${item.label}: ${item.amount} ${item.currency}`),
+            ...normalized.internalBreakdown.map((item) => `- ${item.label}: ${item.amount} ${item.currency}`),
             "",
             "Client Document:",
-            quoteData.clientDocumentText,
+            normalized.clientDocumentText,
         ].join("\n");
 
         const ingestArtifact = (internal as unknown as { knowledge: { ingestArtifact: unknown } }).knowledge.ingestArtifact;
@@ -206,17 +240,60 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                     .join("\n")
                 : "No pricing references available.";
 
-            const userPrompt = `Project: ${project.name}
-Details: ${JSON.stringify(project.details)}
-Items/Scope:
-${scopeSummary}
-
-Pricing Intelligence:
-${knowledgeSummary}
-
-User Instructions: ${args.instructions || "Generate initial quote based on known scope."}
-
-Always include a currency field (ILS by default) and ensure the internal breakdown matches the total amount.`;
+            const userPrompt = JSON.stringify({
+                mode: "EXTRACT",
+                phase: "quote",
+                actor: { userName: "user", studioName: "studio" },
+                project: {
+                    id: project._id,
+                    name: project.name,
+                    clientName: project.clientName,
+                    defaultLanguage: project.defaultLanguage ?? "he",
+                    budgetTier: project.budgetTier ?? "unknown",
+                    projectTypes: project.projectTypes ?? [],
+                    details: project.details,
+                    overview: project.overview,
+                    features: project.features ?? {},
+                },
+                selection: {
+                    selectedItemIds: [],
+                    selectedConceptIds: [],
+                    selectedTaskIds: [],
+                },
+                items,
+                tasks: [],
+                accounting: {
+                    materialLines: [],
+                    workLines: [],
+                    accountingLines: [],
+                },
+                quotes: [],
+                concepts: [],
+                knowledge: {
+                    attachedDocs: knowledgeDocs,
+                    pastProjects: [],
+                    retrievedSnippets: [],
+                },
+                settings: {
+                    currencyDefault: project.currency ?? "ILS",
+                    tax: { vatRate: project.vatRate ?? 0, pricesIncludeVat: project.pricesIncludeVat ?? false },
+                    pricingModel: {
+                        overheadOnExpensesPct: 0.15,
+                        overheadOnOwnerTimePct: 0.3,
+                        profitPct: 0.1,
+                    },
+                },
+                ui: {
+                    capabilities: {
+                        supportsChangeSets: true,
+                        supportsLocks: true,
+                        supportsDeepResearchTool: true,
+                    },
+                },
+                scopeSummary,
+                knowledgeSummary,
+                instructions: args.instructions || "Generate initial quote based on known scope.",
+            });
 
             if (agentRunId) {
                 await ctx.runMutation(internal.agentRuns.appendEvent, {
@@ -227,7 +304,7 @@ Always include a currency field (ILS by default) and ensure the internal breakdo
                 });
             }
 
-            const result = await callChatWithSchema(QuoteSchema, {
+            const result = await callChatWithSchema(QuoteDraftSchema, {
                 model,
                 systemPrompt,
                 userPrompt,
@@ -305,3 +382,53 @@ export const run: ReturnType<typeof action> = action({
         return { queued: true, runId: agentRunId };
     },
 });
+
+function buildClientDocumentText(document: {
+    title: string;
+    intro: string;
+    scopeBullets: string[];
+    lineItems: Array<{ displayName: string; description?: string; quantity: number; unit: string; price: number }>;
+    totals: { subtotal: number; vat: number; total: number };
+    paymentTerms: string[];
+    scheduleAssumptions: string[];
+    included: string[];
+    excluded: string[];
+    termsAndConditions: string[];
+    validityDays: number;
+}) {
+    const lines = [
+        document.title,
+        "",
+        document.intro,
+        "",
+        "Scope:",
+        ...(document.scopeBullets.length ? document.scopeBullets.map((line) => `- ${line}`) : ["- (none)"]),
+        "",
+        "Line items:",
+        ...document.lineItems.map(
+            (item) =>
+                `- ${item.displayName}: ${item.quantity} ${item.unit} @ ${item.price}` +
+                (item.description ? ` (${item.description})` : ""),
+        ),
+        "",
+        `Totals: subtotal ${document.totals.subtotal}, vat ${document.totals.vat}, total ${document.totals.total}`,
+        "",
+        "Payment terms:",
+        ...(document.paymentTerms.length ? document.paymentTerms.map((line) => `- ${line}`) : ["- (none)"]),
+        "",
+        "Schedule assumptions:",
+        ...(document.scheduleAssumptions.length ? document.scheduleAssumptions.map((line) => `- ${line}`) : ["- (none)"]),
+        "",
+        "Included:",
+        ...(document.included.length ? document.included.map((line) => `- ${line}`) : ["- (none)"]),
+        "",
+        "Excluded:",
+        ...(document.excluded.length ? document.excluded.map((line) => `- ${line}`) : ["- (none)"]),
+        "",
+        "Terms and conditions:",
+        ...(document.termsAndConditions.length ? document.termsAndConditions.map((line) => `- ${line}`) : ["- (none)"]),
+        "",
+        `Validity: ${document.validityDays} days`,
+    ];
+    return lines.join("\n");
+}

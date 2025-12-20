@@ -1,0 +1,128 @@
+ITEM DATA STRUCTURE (CODEX UPDATE)
+
+Goal
+- Define the canonical Item tree model and how it maps to the current ItemSpecV2/sections system.
+- Keep legacy fields during migration so the existing UI and agents continue to work.
+
+1) Canonical Item (projectItems v3)
+
+Enums
+- ItemStatus: draft | proposed | approved | in_progress | done | blocked | cancelled | archived | deleted
+- ItemKind: deliverable | service | day | fee | group
+- ItemCategory: set_piece | print | floor | prop | rental | purchase | transport | installation | studio_production | management | other
+- PurchaseMode: local | abroad | both | none
+
+ProjectItemV3
+- id, projectId
+- parentItemId?, sortKey (tree)
+- kind, category
+- name, description?
+- flags:
+  - requiresStudio?
+  - requiresPurchase?
+  - purchaseMode?
+  - requiresRental?
+  - requiresMoving?
+  - requiresInstallation?
+  - requiresDismantle?
+- scope:
+  - quantity?, unit?, dimensions?, location?, dueDate?
+  - constraints?, assumptions?
+- links:
+  - knowledgeDocIds?, pastProjectIds?, externalUrls?, trelloCardIds?
+- rollups:
+  - cost { material, labor, rentals, purchases, shipping, misc, totalCost, sellPrice?, margin?, currency }
+  - schedule { durationHours, plannedStart?, plannedEnd?, progressPct, blocked? }
+  - tasks { total, done, blocked }
+- quoteDefaults:
+  - includeByDefault, displayName?, taxable?, vatRate?
+- status, currentRevisionId?, lockedByPhase?
+- deleteRequestedAt?, deleteRequestedBy?, deletedAt?
+- searchText
+- createdAt, updatedAt
+
+Legacy compatibility fields (kept during migration)
+- title (alias of name)
+- typeKey (alias of category or kind)
+- tags?
+- sortOrder?
+- createdFrom?
+- approvedRevisionId?
+- latestRevisionNumber?
+- legacySpecJson? (optional: last ItemSpecV2 snapshot)
+
+Notes
+- title/typeKey remain in schema until all UI/agents switch to name/category.
+- searchText = name + "\n" + description.
+
+2) Mapping from ItemSpecV2 -> ItemV3
+- identity.title -> name/title
+- identity.typeKey -> category (via mapping table), kind defaults to deliverable
+- procurement.required -> flags.requiresPurchase
+- procurement.channel -> flags.purchaseMode
+- studioWork.required -> flags.requiresStudio
+- logistics.transportRequired -> flags.requiresMoving
+- onsite.installDays -> flags.requiresInstallation (if >0)
+- onsite.teardownDays -> flags.requiresDismantle (if >0)
+- quote.includeInQuote -> quoteDefaults.includeByDefault
+- quote.clientTextOverride -> quoteDefaults.displayName
+- state.assumptions -> scope.assumptions (append)
+- state.openQuestions -> scope.constraints (append)
+- breakdown.subtasks/materials/labor -> Tasks + AccountingLines
+
+Suggested typeKey -> category mapping (fallback = other)
+- build, carpentry, scenic -> set_piece
+- print, graphics -> print
+- floor -> floor
+- prop -> prop
+- rental -> rental
+- purchase -> purchase
+- transport, moving -> transport
+- install -> installation
+- studio -> studio_production
+- management, producer -> management
+
+3) Task schema (existing + new)
+
+Task
+- id, projectId, itemId
+- parentTaskId?, sortKey?
+- title, description?
+- status: todo | in_progress | done | blocked | cancelled (cancelled optional)
+- tags?
+- durationHours? (new; source of truth)
+- plannedStart?, plannedEnd? (ISO datetime; stored as ms in DB)
+- dependencies? (array of task ids, legacy)
+
+Legacy fields kept during migration
+- startDate?, endDate?, estimatedDuration?, estimatedMinutes?, itemSubtaskId?
+
+4) Accounting lines (new canonical form)
+
+AccountingLine
+- id, projectId, itemId, taskId?
+- lineType: material | labor | purchase | rental | shipping | misc
+- title, notes?
+- quantity?, unit?, unitCost?, currency, taxable?, vatRate?
+- vendorNameFreeText?, leadTimeDays?, purchaseStatus?
+- createdAt, updatedAt
+
+Compatibility
+- materialLines/workLines remain during migration.
+- accountingLines.create maps to materialLines/workLines or a new accountingLines table based on lineType.
+
+5) Quote model
+
+QuoteDraft
+- id, projectId, version, status
+- currency, pricesIncludeVat, vatRate
+- narrative + lineItems + totals
+
+6) ChangeSet (agent proposal)
+
+ChangeSet
+- id, projectId, phase, agentName, runId, status
+- items.create/patch/deleteRequest
+- tasks.create/patch/dependencies
+- accountingLines.create/patch
+- warnings, assumptions, openQuestions

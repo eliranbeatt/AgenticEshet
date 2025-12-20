@@ -111,7 +111,20 @@ export function TaskModal({
             JSON.stringify(task.steps ?? []) !== JSON.stringify(steps) ||
             JSON.stringify(task.subtasks ?? []) !== JSON.stringify(subtasks)
         );
-    }, [assignee, category, description, estimatedMinutes, priority, status, stepsText, subtasks, task, title]);
+    }, [
+        assignee,
+        category,
+        description,
+        estimatedMinutes,
+        linkedItemId,
+        linkedSubtaskId,
+        priority,
+        status,
+        stepsText,
+        subtasks,
+        task,
+        title,
+    ]);
 
     async function save() {
         const steps = stepsText

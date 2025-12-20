@@ -1,0 +1,84 @@
+MIGRATION PLAN (CODEX UPDATE)
+
+Goal
+- Migrate from the current ItemSpecV2 + sections model to the new Items tree + ChangeSet model with minimal downtime.
+- Keep existing UIs working via dual-write while the new model stabilizes.
+
+Preflight
+- Add a migrationRuns table or reuse settings to track progress and idempotency.
+- Ensure a full backup or export of projects, items, sections, materialLines, workLines, tasks.
+
+Phase 1: Schema extension (safe to deploy first)
+- Add projects.overview + projects.features + projects.rootItemId.
+- Extend projectItems with tree/flags/scope/rollups/quoteDefaults/searchText.
+- Add itemChangeSets + itemChangeSetOps + itemLocks.
+- Extend tasks/materialLines/workLines with itemId indexes + taskId where needed.
+
+Phase 2: Backfill project overview
+- Map existing fields:
+  - details.budgetCap -> overview.constraints.budgetRange.max
+  - currency -> overview.constraints.budgetRange.currency
+  - details.eventDate -> overview.constraints.dates.install (default)
+  - details.location -> overview.constraints.location
+  - budgetTier -> overview.constraints.qualityTier
+  - projectTypes -> overview.projectType (best-fit) or other
+- Set properties defaults to false/empty until user confirms.
+
+Phase 3: Build item tree
+- For each project:
+  - Create root item (kind=group, name="Project Scope") if none exists.
+  - Create optional group items (Deliverables, Services, Days, Fees) when needed.
+  - Attach existing projectItems under root or group using typeKey heuristics.
+  - Generate sortKey for siblings (use sortOrder if present, otherwise createdAt).
+
+Phase 4: Map ItemSpecV2 -> ItemV3 fields
+- For each projectItem with approvedRevisionId:
+  - Parse ItemSpecV2 and map to flags/scope/quoteDefaults.
+  - Store legacySpecJson on item (optional) for audit.
+  - Set name/title and category/typeKey if missing.
+
+Phase 5: Link tasks and accounting lines
+- Tasks:
+  - If task.itemId already set, keep.
+  - Else map by accountingSectionId -> section.itemId.
+  - Else try fuzzy match on item title.
+- Material/work lines:
+  - If line.itemId set, keep.
+  - Else map via section.itemId.
+  - If taskId is added, link from tasks that reference the line.
+
+Phase 6: AccountingLines (if introduced)
+- Create accountingLines rows from existing materialLines/workLines.
+- Store sourceRef (materialLineId/workLineId) for traceability.
+
+Phase 7: Rollup computation
+- Compute rollups per item (cost, schedule, tasks).
+- Propagate to parents.
+- Store in projectItems.rollups.
+
+Phase 8: Dual-write + feature flag
+- Enable projects.features.itemsModelV1 for pilot projects.
+- ChangeSet apply writes:
+  - new fields (items/tasks/accountingLines)
+  - legacy sections/materialLines/workLines (for existing UI)
+
+Phase 9: Validation checklist
+- Each project has exactly one root item.
+- No parent cycles; every item has a valid parentId (except root).
+- All tasks have itemId or explicit exception.
+- All material/work lines have itemId.
+- Rollups match line sums (within rounding).
+
+Rollback plan
+- Disable itemsModelV1 feature flag and continue with legacy UI.
+- Because legacy tables remain intact, no data loss occurs.
+
+Recommended migration actions (Convex internal actions)
+- migrations.itemsV3.ensureRoots(projectId?)
+- migrations.itemsV3.buildTree(projectId?)
+- migrations.itemsV3.mapLegacySpecs(projectId?)
+- migrations.itemsV3.linkTasks(projectId?)
+- migrations.itemsV3.linkAccounting(projectId?)
+- migrations.itemsV3.createAccountingLines(projectId?)
+- migrations.itemsV3.recomputeRollups(projectId?)
+- migrations.itemsV3.verify(projectId?)

@@ -61,7 +61,7 @@ export default function GanttView() {
                 dependencies: (t.dependencies ?? []).map(d => d as string),
             };
         });
-    }, [tasks]);
+    }, [itemsData?.items, tasks]);
 
     const handleTaskChange = useCallback(
         async (task: Task) => {

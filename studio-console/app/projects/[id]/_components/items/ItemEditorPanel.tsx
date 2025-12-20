@@ -12,6 +12,7 @@ import { ItemBreakdownEditor } from "./ItemBreakdownEditor";
 import { ItemRevisionBanner } from "./ItemRevisionBanner";
 import { ImageGeneratorPanel } from "../images/ImageGeneratorPanel";
 import { ImagePicker } from "../images/ImagePicker";
+import { ItemDetailDrawer } from "./ItemDetailDrawer";
 
 function parseLines(value: string) {
     return value
@@ -68,6 +69,7 @@ export function ItemEditorPanel() {
     const [specDraft, setSpecDraft] = useState<ItemSpecV2 | null>(null);
     const [changeReason, setChangeReason] = useState("");
     const [isSaving, setIsSaving] = useState(false);
+    const [showDetails, setShowDetails] = useState(false);
 
     const { item, draftRevision, approvedRevision } = useMemo(() => {
         if (!itemData) {
@@ -145,14 +147,23 @@ export function ItemEditorPanel() {
                         {item.typeKey} - {item.status}
                     </div>
                 </div>
-                <button
-                    type="button"
-                    className="text-sm px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                    disabled={!tabScope || isSaving}
-                    onClick={saveRevision}
-                >
-                    {isSaving ? "Saving..." : tabScope ? `Save ${tabScope} draft` : "Save draft"}
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        className="text-sm px-3 py-2 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                        onClick={() => setShowDetails(true)}
+                    >
+                        Details
+                    </button>
+                    <button
+                        type="button"
+                        className="text-sm px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                        disabled={!tabScope || isSaving}
+                        onClick={saveRevision}
+                    >
+                        {isSaving ? "Saving..." : tabScope ? `Save ${tabScope} draft` : "Save draft"}
+                    </button>
+                </div>
             </div>
 
             {draftRevision && (
@@ -694,6 +705,12 @@ export function ItemEditorPanel() {
                 />
                 <ImagePicker projectId={projectId} entityType="projectItem" entityId={String(item._id)} />
             </div>
+
+            <ItemDetailDrawer
+                itemId={item._id}
+                open={showDetails}
+                onClose={() => setShowDetails(false)}
+            />
         </div>
     );
 }

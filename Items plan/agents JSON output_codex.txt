@@ -1,0 +1,161 @@
+AGENT JSON OUTPUT CONTRACTS (CODEX UPDATE)
+
+These contracts replace the current ItemSpecV2-only agent outputs with ChangeSet-based proposals.
+All agent writes are proposals and must be approved before merging into canonical data.
+
+1) Common ChangeSet (v1)
+
+ChangeSet JSON (strict, JSON only):
+{
+  "type": "ChangeSet",
+  "projectId": "P123",
+  "phase": "planning|solutioning|accounting|tasks|item_edit|convert",
+  "agentName": "planning_agent_v1",
+  "summary": "One sentence summary of what changed",
+  "assumptions": ["..."],
+  "openQuestions": ["..."],
+  "warnings": ["..."],
+
+  "items": {
+    "create": [ ItemCreate ],
+    "patch": [ ItemPatch ],
+    "deleteRequest": [ ItemDeleteRequest ]
+  },
+  "tasks": {
+    "create": [ TaskCreate ],
+    "patch": [ TaskPatch ],
+    "dependencies": [ TaskDependency ]
+  },
+  "accountingLines": {
+    "create": [ AccountingLineCreate ],
+    "patch": [ AccountingLinePatch ]
+  },
+  "uiHints": {
+    "focusItemIds": ["..."],
+    "expandItemIds": ["..."],
+    "nextSuggestedAction": "approve_changeset|ask_questions|run_solutioning|run_tasks|generate_quote"
+  }
+}
+
+ID rules
+- tempId is required for new entities. Format: "tmp_item_1", "tmp_task_1", "tmp_line_1".
+- Patches must use real ids.
+- itemRef/taskRef must contain either real id or tempId.
+
+ItemCreate
+- tempId, parentTempId?, parentItemId?
+- sortKey
+- kind, category
+- name, description?
+- flags (requiresStudio, requiresPurchase, purchaseMode, requiresRental, requiresMoving, requiresInstallation, requiresDismantle)
+- scope (quantity, unit, dimensions, location, dueDate, constraints, assumptions)
+- quoteDefaults (includeByDefault, displayName?, taxable?, vatRate?)
+
+TaskCreate
+- tempId
+- itemRef { itemId?, itemTempId? }
+- parentTaskTempId?
+- title, description?
+- durationHours, status
+- tags[]
+- plannedStart, plannedEnd (ISO date-time or null)
+
+TaskDependency
+- fromTaskRef { taskId?, taskTempId? }
+- toTaskRef { taskId?, taskTempId? }
+- type: FS|SS|FF|SF
+- lagHours
+
+AccountingLineCreate
+- tempId
+- itemRef { itemId?, itemTempId? }
+- taskRef { taskId?, taskTempId? }
+- lineType: material|labor|purchase|rental|shipping|misc
+- title, notes?
+- quantity, unit, unitCost, currency, taxable, vatRate
+- vendorNameFreeText?, leadTimeDays?, purchaseStatus
+
+Mapping notes (current DB)
+- plannedStart/plannedEnd are stored as ms in tasks.startDate/endDate (convert in apply).
+- durationHours maps to estimatedDuration (ms) unless durationHours is stored separately.
+- accountingLines.lineType maps to:
+  - material -> materialLines
+  - labor -> workLines
+  - other types -> accountingLines (if introduced) or materialLines with category=misc (legacy fallback).
+
+2) Phase-specific requirements
+
+Planning phase
+- Must include at least one item.create or task.create.
+- Should add template items (moving/install/dismantle/management) when required by overview.
+
+Solutioning phase
+- Should create accounting lines and patch task descriptions with method notes.
+- Should not set final sell prices.
+
+Accounting phase
+- Should patch unitCost, vendor, leadTimeDays, purchaseStatus.
+- Should not overwrite user-locked costs; add warnings instead.
+
+Tasks phase
+- Must add dependencies and durations.
+- If dates are unknown, leave plannedStart/End null.
+
+Convert phase
+- Only item.create/patch. No tasks/accounting.
+
+Item edit phase
+- Patch/move/rename only; deletes are deleteRequest with double-confirm flag.
+
+3) Other agent outputs
+
+ConceptPacket (ideation)
+{
+  "type": "ConceptPacket",
+  "projectId": "...",
+  "agentName": "ideation_agent_v1",
+  "summary": "...",
+  "assumptions": ["..."],
+  "openQuestions": ["..."],
+  "concepts": { "create": [...], "patch": [...] }
+}
+
+ClarificationPacket
+{
+  "type": "ClarificationPacket",
+  "projectId": "...",
+  "agentName": "clarification_agent_v1",
+  "summaryOfKnowns": { "project": [...], "constraints": [...], "selectedItems": [...] },
+  "blockingQuestions": [ { "id": "Q1", "scope": "project|item", "itemId": null, "question": "...", "whyItMatters": "..." } ],
+  "assumptionsIfNoAnswer": ["..."],
+  "readyToExtractPlanWhen": ["..."]
+}
+
+QuoteDraft
+{
+  "type": "QuoteDraft",
+  "projectId": "...",
+  "agentName": "quote_agent_v1",
+  "versionNote": "draft",
+  "currency": "ILS",
+  "pricesIncludeVat": false,
+  "vatRate": 0.17,
+  "client": { "name": "...", "company": "...", "email": "..." },
+  "document": { "title": "...", "intro": "...", "scopeBullets": [...], "lineItems": [...], "totals": {"subtotal":0,"vat":0,"total":0}, "paymentTerms": [...], "scheduleAssumptions": [...], "included": [...], "excluded": [...], "termsAndConditions": [...], "validityDays": 14 },
+  "assumptions": ["..."],
+  "openQuestions": ["..."]
+}
+
+ResearchFindings
+{
+  "type": "ResearchFindings",
+  "projectId": "...",
+  "agentName": "deep_research_agent_v1",
+  "goal": "...",
+  "queries": ["..."],
+  "keyFindings": [...],
+  "recommendedNextEdits": { "targetItemIds": [...], "suggestedAccountingLinePatches": [...] },
+  "citations": [...],
+  "assumptions": ["..."],
+  "openQuestions": ["..."]
+}

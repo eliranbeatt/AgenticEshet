@@ -1,0 +1,142 @@
+CONVEX SCHEMA PLAN (CODEX UPDATE)
+
+Scope
+- Apply changes in studio-console/convex/schema.ts.
+- Extend existing tables to avoid breaking current UI/agents.
+- Add new tables for ChangeSets and locks; keep legacy tables during migration.
+
+A) projects table (extend)
+Add:
+- overview: object
+  - projectType: "photo_shoot" | "pop_up" | "window_display" | "event" | "commercial_set" | "other"
+  - properties:
+    - requiresStudioProduction: boolean
+    - requiresPurchases: array of "local" | "abroad"
+    - requiresRentals: boolean
+    - requiresMoving: boolean
+    - requiresInstallation: boolean
+    - requiresDismantle: boolean
+    - includesShootDay: boolean
+    - includesManagementFee: boolean
+  - constraints:
+    - budgetRange { min, max, currency }
+    - dates { install, shoot, dismantle } (ISO date)
+    - location, venueRules[], qualityTier
+- features: object (feature flags)
+  - itemsModelV1, itemsTree, changeSetFlow, accountingLinesV1
+- rootItemId?: Id<"projectItems">
+
+B) projectItems table (extend existing)
+Add fields (keep legacy fields title/typeKey/etc):
+- parentItemId?: Id<"projectItems">
+- sortKey: string (optional until backfill)
+- kind: ItemKind
+- category: ItemCategory
+- name: string (alias of title during migration)
+- description?: string
+- flags: { requiresStudio?, requiresPurchase?, purchaseMode?, requiresRental?, requiresMoving?, requiresInstallation?, requiresDismantle? }
+- scope?: { quantity?, unit?, dimensions?, location?, dueDate?, constraints?, assumptions? }
+- links?: { knowledgeDocIds?, pastProjectIds?, externalUrls?, trelloCardIds? }
+- rollups: { cost{}, schedule{}, tasks{} }
+- quoteDefaults?: { includeByDefault, displayName?, taxable?, vatRate? }
+- lockedByPhase?: Phase
+- deleteRequestedBy?: string
+- deletedAt?: number
+- searchText: string
+
+Extend status enum to include:
+- proposed, in_progress, done, blocked, cancelled, deleted
+(keep existing draft/approved/archived values)
+
+Add indexes:
+- by_project_parent_sort (projectId, parentItemId, sortKey)
+- by_project_kind, by_project_category, by_project_status
+- search_items index on searchText
+
+C) itemRevisions table (extend existing)
+Add:
+- phase: Phase
+- source: "user" | "agent"
+- agentName?, runId?
+- revisionType: "snapshot" | "patch"
+- snapshotJson?, patchJson?
+- changeSetId?: Id<"itemChangeSets">
+- parentRevisionId?, baseRevisionId?
+- appliedAt?, appliedBy?
+- summary?: string
+
+Keep legacy fields:
+- tabScope, state, revisionNumber, baseApprovedRevisionId, data, summaryMarkdown
+
+Add indexes:
+- by_project_phase, by_changeSet, by_item
+
+D) itemChangeSets table (new)
+Fields:
+- projectId, phase, agentName, runId
+- status: pending | approved | rejected
+- createdAt, decidedAt?, decidedBy?
+- title?, warnings?, assumptions?
+- counts? { items, tasks, accountingLines, dependencies }
+Indexes:
+- by_project_phase_status, by_run
+
+E) itemChangeSetOps table (new)
+Fields:
+- projectId, changeSetId
+- entityType: item | task | accountingLine | dependency
+- opType: create | patch | delete
+- targetId?, tempId?, baseRevisionId?
+- payloadJson
+- createdAt
+Indexes:
+- by_changeSet, by_changeSet_entity, by_project
+
+F) itemLocks table (new; do not reuse itemProjectionLocks)
+Fields:
+- projectId, itemId?
+- phase
+- lockedBy, runId?
+- lockedAt, expiresAt
+Indexes:
+- by_project_phase, by_item_phase, by_run
+
+Keep existing itemProjectionLocks unchanged for ItemSpecV2 projection sync.
+
+G) tasks table (extend existing)
+Add:
+- parentTaskId?: Id<"tasks">
+- sortKey?: string
+- durationHours?: number
+- plannedStart?: string (ISO) or number (ms) (standardize in API)
+- plannedEnd?: string (ISO) or number (ms)
+
+Keep legacy fields:
+- startDate, endDate, estimatedDuration, estimatedMinutes, itemSubtaskId
+
+Add indexes:
+- by_project_item (projectId, itemId)
+- by_project_parentTask (projectId, parentTaskId)
+
+H) materialLines + workLines (extend)
+Add:
+- taskId?: Id<"tasks">
+Add indexes:
+- by_project_item, by_project_task
+
+I) accountingLines table (optional but recommended)
+If introducing unified accountingLines:
+- projectId, itemId, taskId?
+- lineType, title, notes
+- quantity, unit, unitCost, currency, taxable, vatRate
+- vendorNameFreeText, leadTimeDays, purchaseStatus
+Indexes:
+- by_project_item, by_project_task, by_project_lineType
+
+J) quoteLines table (optional)
+If moving to line-level quotes:
+- quoteId, projectId, itemId?, displayName, description, quantity, unit, price, taxable, vatRate, sortKey
+
+Notes
+- Keep legacy tables operational until dual-write is stable.
+- All new fields should be optional at first; enforce requiredness after backfill.

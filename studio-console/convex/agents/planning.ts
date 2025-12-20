@@ -1,8 +1,8 @@
 import { v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery } from "../_generated/server";
+import { action, internalAction, internalQuery } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
-import { PlanSchema } from "../lib/zodSchemas";
+import { ChangeSetSchema } from "../lib/zodSchemas";
 
 // 1. DATA ACCESS
 export const getContext: ReturnType<typeof internalQuery> = internalQuery({
@@ -39,75 +39,43 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
       sourceTypes: ["doc_upload"],
     });
 
+    const items = await ctx.db
+      .query("projectItems")
+      .withIndex("by_project_parent_sort", (q) => q.eq("projectId", args.projectId))
+      .collect();
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+
+    const materialLines = await ctx.db
+      .query("materialLines")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+
+    const workLines = await ctx.db
+      .query("workLines")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+
+    const accountingLines = await ctx.db
+      .query("accountingLines")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+
     return {
       project,
       systemPrompt: skill?.content || "You are an expert planner.",
       existingPlans,
       latestClarification,
       knowledgeDocs,
+      items,
+      tasks,
+      materialLines,
+      workLines,
+      accountingLines,
     };
-  },
-});
-
-// 2. DATA ACCESS
-export const saveResult = internalMutation({
-  args: {
-    projectId: v.id("projects"),
-    userRequest: v.string(),
-    planData: v.any(), // PlanSchema
-  },
-  handler: async (ctx, args) => {
-    const project = await ctx.db.get(args.projectId);
-    // Determine version
-    const existing = await ctx.db
-      .query("plans")
-      .withIndex("by_project_phase", (q) =>
-        q.eq("projectId", args.projectId).eq("phase", "planning")
-      )
-      .collect();
-
-    const version = existing.length + 1;
-
-    // Create new Draft Plan
-    const planId = await ctx.db.insert("plans", {
-      projectId: args.projectId,
-      version,
-      phase: "planning", // default for this agent
-      isDraft: true,
-      isActive: false,
-      contentMarkdown: args.planData.contentMarkdown,
-      reasoning: args.planData.reasoning,
-      createdAt: Date.now(),
-      createdBy: "agent",
-    });
-
-    await ctx.db.insert("conversations", {
-      projectId: args.projectId,
-      phase: "planning",
-      agentRole: "planning_agent",
-      messagesJson: JSON.stringify([
-        { role: "user", content: args.userRequest },
-        { role: "assistant", content: args.planData.contentMarkdown },
-      ]),
-      createdAt: Date.now(),
-    });
-
-    const ingestArtifact = (internal as unknown as { knowledge: { ingestArtifact: unknown } }).knowledge.ingestArtifact;
-
-    await ctx.scheduler.runAfter(0, ingestArtifact, {
-      projectId: args.projectId,
-      sourceType: "plan",
-      sourceRefId: planId,
-      title: `Plan v${version}`,
-      text: args.planData.contentMarkdown,
-      summary: args.planData.reasoning || "Plan reasoning",
-      tags: ["plan", "planning"],
-      topics: [],
-      phase: "planning",
-      clientName: project?.clientName,
-    });
-
-    return planId;
   },
 });
 
@@ -140,7 +108,18 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
     }
 
     try {
-      const { project, systemPrompt, existingPlans, latestClarification, knowledgeDocs: recentUploads } = await ctx.runQuery(internal.agents.planning.getContext, {
+      const {
+        project,
+        systemPrompt,
+        existingPlans,
+        latestClarification,
+        knowledgeDocs: recentUploads,
+        items,
+        tasks,
+        materialLines,
+        workLines,
+        accountingLines,
+      } = await ctx.runQuery(internal.agents.planning.getContext, {
         projectId: args.projectId,
       });
 
@@ -190,23 +169,66 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
           .join("\n")
         : "No relevant knowledge documents found.";
 
-      const context = [
-        `Project: ${project.name}`,
-        `Client: ${project.clientName}`,
-        `Project Details: ${JSON.stringify(project.details)}`,
-        `Existing Plans Count: ${existingPlans.length}`,
-        "",
-        "Latest Clarification Summary:",
-        clarificationSection,
-        "",
-        "Recently Uploaded Documents:",
-        uploadedDocsSection,
-        "",
-        "Relevant Knowledge Snippets:",
+      const context = {
+        mode: "EXTRACT",
+        phase: "planning",
+        actor: { userName: "user", studioName: "studio" },
+        project: {
+          id: project._id,
+          name: project.name,
+          clientName: project.clientName,
+          defaultLanguage: project.defaultLanguage ?? "he",
+          budgetTier: project.budgetTier ?? "unknown",
+          projectTypes: project.projectTypes ?? [],
+          details: project.details,
+          overview: project.overview,
+          features: project.features ?? {},
+        },
+        selection: {
+          selectedItemIds: [],
+          selectedConceptIds: [],
+          selectedTaskIds: [],
+        },
+        items,
+        tasks,
+        accounting: {
+          materialLines,
+          workLines,
+          accountingLines,
+        },
+        quotes: [],
+        concepts: [],
+        knowledge: {
+          attachedDocs: recentUploads ?? [],
+          pastProjects: [],
+          retrievedSnippets: knowledgeResults.map((entry: { doc: { _id: string; title: string }; text?: string; tags?: string[] }) => ({
+            sourceId: entry.doc._id,
+            text: entry.text ?? "",
+            tags: entry.tags ?? [],
+          })),
+        },
+        settings: {
+          currencyDefault: project.currency ?? "ILS",
+          tax: { vatRate: project.vatRate ?? 0, pricesIncludeVat: project.pricesIncludeVat ?? false },
+          pricingModel: {
+            overheadOnExpensesPct: 0.15,
+            overheadOnOwnerTimePct: 0.3,
+            profitPct: 0.1,
+          },
+        },
+        ui: {
+          capabilities: {
+            supportsChangeSets: true,
+            supportsLocks: true,
+            supportsDeepResearchTool: true,
+          },
+        },
+        clarificationSummary: clarificationSection,
+        userRequest: args.userRequest,
+        existingPlansCount: existingPlans.length,
+        recentUploads: uploadedDocsSection,
         knowledgeSection,
-        "",
-        `User Request: ${args.userRequest}`,
-      ].join("\n");
+      };
 
       if (agentRunId) {
         await ctx.runMutation(internal.agentRuns.appendEvent, {
@@ -217,10 +239,10 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         });
       }
 
-      const result = await callChatWithSchema(PlanSchema, {
+      const result = await callChatWithSchema(ChangeSetSchema, {
         model,
         systemPrompt,
-        userPrompt: context,
+        userPrompt: JSON.stringify(context),
         thinkingMode: args.thinkingMode,
       });
 
@@ -233,10 +255,8 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         });
       }
 
-      await ctx.runMutation(internal.agents.planning.saveResult, {
-        projectId: args.projectId,
-        userRequest: args.userRequest,
-        planData: result,
+      await ctx.runAction(api.changeSets.createFromAgentOutput, {
+        agentOutput: result,
       });
 
       if (agentRunId) {

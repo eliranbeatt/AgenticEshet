@@ -9,6 +9,7 @@ import SummaryTab from "./_components/SummaryTab";
 import MaterialsTab from "./_components/MaterialsTab";
 import LaborTab from "./_components/LaborTab";
 import DeepResearchTab from "./_components/DeepResearchTab";
+import { ChangeSetReviewBanner } from "../_components/changesets/ChangeSetReviewBanner";
 
 export default function AccountingPage() {
   const params = useParams();
@@ -24,6 +25,7 @@ export default function AccountingPage() {
 
   return (
     <div className="flex flex-col h-full space-y-4">
+      <ChangeSetReviewBanner projectId={projectId} phase="accounting" />
       <div className="flex space-x-2 border-b">
         <TabButton 
           label="Detailed Costs Planning (Summary)" 

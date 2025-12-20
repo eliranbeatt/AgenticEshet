@@ -1,8 +1,9 @@
 import { v } from "convex/values";
+import { z } from "zod";
 import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { callChatWithSchema, streamChatText } from "../lib/openai";
-import { IdeationConceptsSchema } from "../lib/zodSchemas";
+import { callChatWithSchema } from "../lib/openai";
+import { ConceptPacketSchema } from "../lib/zodSchemas";
 
 const FALLBACK_SYSTEM_PROMPT = [
     "You are an ideation assistant for experiential design / studio build projects.",
@@ -147,48 +148,121 @@ export const send = action({
             transcript,
         ].join("\n");
 
-        let buffer = "";
-        let lastFlushedAt = 0;
         try {
-            await streamChatText({
+            let extracted = await callChatWithSchema(ConceptPacketSchema, {
                 model,
-                systemPrompt,
-                userPrompt,
-                thinkingMode: args.thinkingMode,
+                systemPrompt: [
+                    systemPrompt,
+                    "",
+                    "Return JSON only that matches the ConceptPacket schema exactly.",
+                    "Do not wrap the output in a `conceptPacket` key.",
+                    "Always include: type, projectId, agentName, summary, assumptions, openQuestions, concepts.",
+                    "concepts.create must be an array of objects with the required fields.",
+                    "concepts.patch must be an array of objects (use [] unless patching).",
+                    "Use only these enums:",
+                    "- feasibility: low | medium | high",
+                    "- candidate.category: set_piece | print | floor | prop | installation | transport | management | other",
+                ].join("\n"),
+                userPrompt: JSON.stringify({
+                    mode: "EXTRACT",
+                    phase: "ideation",
+                    actor: { userName: "user", studioName: "studio" },
+                    project: {
+                        id: project._id,
+                        name: project.name,
+                        clientName: project.clientName,
+                        defaultLanguage: project.defaultLanguage ?? "he",
+                        budgetTier: project.budgetTier ?? "unknown",
+                        projectTypes: project.projectTypes ?? [],
+                        details: project.details,
+                        overview: project.overview,
+                        features: project.features ?? {},
+                    },
+                    selection: {
+                        selectedItemIds: [],
+                        selectedConceptIds: [],
+                        selectedTaskIds: [],
+                    },
+                    items: [],
+                    tasks: [],
+                    accounting: {
+                        materialLines: [],
+                        workLines: [],
+                        accountingLines: [],
+                    },
+                    quotes: [],
+                    concepts: [],
+                    knowledge: {
+                        attachedDocs: [],
+                        pastProjects: [],
+                        retrievedSnippets: [],
+                    },
+                    settings: {
+                        currencyDefault: project.currency ?? "ILS",
+                        tax: { vatRate: project.vatRate ?? 0, pricesIncludeVat: project.pricesIncludeVat ?? false },
+                        pricingModel: {
+                            overheadOnExpensesPct: 0.15,
+                            overheadOnOwnerTimePct: 0.3,
+                            profitPct: 0.1,
+                        },
+                    },
+                    ui: {
+                        capabilities: {
+                            supportsChangeSets: true,
+                            supportsLocks: true,
+                            supportsDeepResearchTool: true,
+                        },
+                    },
+                    userRequest: args.userContent,
+                }),
+                maxRetries: 3,
                 language: project.defaultLanguage === "en" ? "en" : "he",
-                onDelta: async (delta) => {
-                    buffer += delta;
-                    const now = Date.now();
-                    if (now - lastFlushedAt < 200) return;
-                    lastFlushedAt = now;
-                    await ctx.runMutation(internal.chat.patchMessage, {
-                        messageId: assistantMessageId,
-                        content: buffer,
-                        status: "streaming",
-                    });
-                },
             });
 
-            const finalContent = buffer.trim() ? buffer : "(empty)";
-            await ctx.runMutation(internal.chat.patchMessage, {
-                messageId: assistantMessageId,
-                content: finalContent,
-                status: "final",
-            });
+            if (!extracted.concepts.patch) {
+                extracted = {
+                    ...extracted,
+                    concepts: { ...extracted.concepts, patch: [] },
+                };
+            }
 
-            const extracted = await callChatWithSchema(IdeationConceptsSchema, {
-                model,
-                systemPrompt:
-                    "Extract exactly 3 concept cards from the assistant markdown. Use the same language as the content.",
-                userPrompt: finalContent,
-                maxRetries: 2,
-                language: project.defaultLanguage === "en" ? "en" : "he",
-            });
+            const concepts = extracted.concepts.create.slice(0, 7).map((concept) => ({
+                title: concept.title,
+                oneLiner: concept.oneLiner,
+                detailsMarkdown: [
+                    concept.narrative,
+                    "",
+                    "Style:",
+                    `- Materials: ${concept.style.materials.join(", ") || "n/a"}`,
+                    `- Colors: ${concept.style.colors.join(", ") || "n/a"}`,
+                    `- Lighting: ${concept.style.lighting.join(", ") || "n/a"}`,
+                    `- References: ${concept.style.references.join(", ") || "n/a"}`,
+                    "",
+                    "Feasibility:",
+                    `- Studio production: ${concept.feasibility.studioProduction}`,
+                    `- Purchases: ${concept.feasibility.purchases}`,
+                    `- Rentals: ${concept.feasibility.rentals}`,
+                    `- Moving: ${concept.feasibility.moving}`,
+                    `- Installation: ${concept.feasibility.installation}`,
+                    `- Main risks: ${concept.feasibility.mainRisks.join(", ") || "n/a"}`,
+                    "",
+                    "Implied item candidates:",
+                    ...concept.impliedItemCandidates.map(
+                        (candidate) => `- ${candidate.name} (${candidate.category})${candidate.notes ? `: ${candidate.notes}` : ""}`,
+                    ),
+                ].join("\n"),
+            }));
 
             await ctx.runMutation(internal.agents.ideation.upsertConceptCards, {
                 projectId: project._id,
                 threadId: args.threadId,
-                concepts: extracted.concepts.slice(0, 3),
+                concepts,
+            });
+
+            await ctx.runMutation(internal.chat.patchMessage, {
+                messageId: assistantMessageId,
+                content: renderConceptPacketMarkdown(extracted),
+                status: "final",
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -210,3 +284,38 @@ export const send = action({
         return { ok: true, userMessageId, assistantMessageId };
     },
 });
+
+function renderConceptPacketMarkdown(packet: z.infer<typeof ConceptPacketSchema>) {
+    const concepts = packet.concepts.create;
+    if (!concepts.length) return "No concepts generated.";
+    return concepts
+        .map((concept, index) => {
+            const candidates = concept.impliedItemCandidates.length
+                ? concept.impliedItemCandidates.map((candidate) => `- ${candidate.name} (${candidate.category})${candidate.notes ? `: ${candidate.notes}` : ""}`)
+                : ["- n/a"];
+            return [
+                `## Concept ${index + 1}: ${concept.title}`,
+                `**${concept.oneLiner}**`,
+                "",
+                concept.narrative,
+                "",
+                "Style:",
+                `- Materials: ${concept.style.materials.join(", ") || "n/a"}`,
+                `- Colors: ${concept.style.colors.join(", ") || "n/a"}`,
+                `- Lighting: ${concept.style.lighting.join(", ") || "n/a"}`,
+                `- References: ${concept.style.references.join(", ") || "n/a"}`,
+                "",
+                "Feasibility:",
+                `- Studio production: ${concept.feasibility.studioProduction}`,
+                `- Purchases: ${concept.feasibility.purchases}`,
+                `- Rentals: ${concept.feasibility.rentals}`,
+                `- Moving: ${concept.feasibility.moving}`,
+                `- Installation: ${concept.feasibility.installation}`,
+                `- Main risks: ${concept.feasibility.mainRisks.join(", ") || "n/a"}`,
+                "",
+                "Implied item candidates:",
+                ...candidates,
+            ].join("\n");
+        })
+        .join("\n\n");
+}

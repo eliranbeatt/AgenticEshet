@@ -183,8 +183,15 @@ export const applyGeneratedAccounting = internalMutation({
 
             const itemId = await ctx.db.insert("projectItems", {
                 projectId: args.projectId,
+                parentItemId: null,
+                sortKey: String(sortOrder),
                 title: spec.identity.title,
                 typeKey: spec.identity.typeKey,
+                name: spec.identity.title,
+                category: spec.identity.typeKey,
+                kind: "deliverable",
+                description: spec.identity.description,
+                searchText: `${spec.identity.title}\n${spec.identity.description ?? ""}\n${spec.identity.typeKey}`.trim(),
                 status: "approved",
                 sortOrder,
                 createdFrom: { source: "accountingBackfill" },

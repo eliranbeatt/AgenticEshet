@@ -24,6 +24,13 @@ function parseItemSpec(data: unknown) {
     return parsed.data;
 }
 
+function buildSearchText(args: { name?: string; description?: string; title?: string; typeKey?: string }) {
+    const name = args.name ?? args.title ?? "";
+    const description = args.description ?? "";
+    const typeKey = args.typeKey ? `\n${args.typeKey}` : "";
+    return `${name}\n${description}${typeKey}`.trim();
+}
+
 function buildBaseItemSpec(title: string, typeKey: string, description?: string) {
     return parseItemSpec({
         version: "ItemSpecV2",
@@ -193,6 +200,76 @@ export const listSidebarTree = query({
     },
 });
 
+export const listTreeSidebar = query({
+    args: {
+        projectId: v.id("projects"),
+        includeTab: v.optional(tabScopeValidator),
+        includeDrafts: v.optional(v.boolean()),
+    },
+    handler: async (ctx, args) => {
+        const statuses: Array<"draft" | "approved"> = args.includeDrafts
+            ? ["approved", "draft"]
+            : ["approved"];
+
+        const items = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project_parent_sort", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        const filtered = items.filter((item) => statuses.includes(item.status));
+        filtered.sort((a, b) => (a.sortKey ?? "").localeCompare(b.sortKey ?? ""));
+
+        if (!args.includeTab) {
+            return { items: filtered };
+        }
+
+        const drafts = await ctx.db
+            .query("itemRevisions")
+            .withIndex("by_project_tab_state", (q) =>
+                q.eq("projectId", args.projectId).eq("tabScope", args.includeTab).eq("state", "proposed")
+            )
+            .collect();
+
+        const draftByItemId = new Map<string, Doc<"itemRevisions">>();
+        for (const draft of drafts) {
+            const existing = draftByItemId.get(draft.itemId);
+            if (!existing || existing.revisionNumber < draft.revisionNumber) {
+                draftByItemId.set(draft.itemId, draft);
+            }
+        }
+
+        return {
+            items: filtered.map((item) => {
+                const draft = draftByItemId.get(item._id);
+                return {
+                    ...item,
+                    draftRevisionId: draft?._id ?? null,
+                    draftRevisionNumber: draft?.revisionNumber ?? null,
+                };
+            }),
+        };
+    },
+});
+
+export const listTree = query({
+    args: {
+        projectId: v.id("projects"),
+        parentItemId: v.optional(v.union(v.id("projectItems"), v.null())),
+    },
+    handler: async (ctx, args) => {
+        const parentItemId = args.parentItemId ?? null;
+        const items = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project_parent_sort", (q) =>
+                q.eq("projectId", args.projectId).eq("parentItemId", parentItemId)
+            )
+            .collect();
+
+        items.sort((a, b) => (a.sortKey ?? "").localeCompare(b.sortKey ?? ""));
+        return items;
+    },
+});
+
 export const getItem = query({
     args: {
         itemId: v.id("projectItems"),
@@ -212,6 +289,54 @@ export const getItem = query({
             : revisions;
 
         return { item, revisions: filtered };
+    },
+});
+
+export const getItemDetails = query({
+    args: {
+        itemId: v.id("projectItems"),
+        includeTab: v.optional(tabScopeValidator),
+    },
+    handler: async (ctx, args) => {
+        const item = await ctx.db.get(args.itemId);
+        if (!item) return null;
+
+        const revisions = await ctx.db
+            .query("itemRevisions")
+            .withIndex("by_item_revision", (q) => q.eq("itemId", args.itemId))
+            .collect();
+
+        const filtered = args.includeTab
+            ? revisions.filter((rev) => rev.tabScope === args.includeTab)
+            : revisions;
+
+        const [tasks, materialLines, workLines, accountingLines] = await Promise.all([
+            ctx.db
+                .query("tasks")
+                .withIndex("by_project_item", (q) => q.eq("projectId", item.projectId).eq("itemId", item._id))
+                .collect(),
+            ctx.db
+                .query("materialLines")
+                .withIndex("by_project_item", (q) => q.eq("projectId", item.projectId).eq("itemId", item._id))
+                .collect(),
+            ctx.db
+                .query("workLines")
+                .withIndex("by_project_item", (q) => q.eq("projectId", item.projectId).eq("itemId", item._id))
+                .collect(),
+            ctx.db
+                .query("accountingLines")
+                .withIndex("by_project_item", (q) => q.eq("projectId", item.projectId).eq("itemId", item._id))
+                .collect(),
+        ]);
+
+        return {
+            item,
+            revisions: filtered,
+            tasks,
+            materialLines,
+            workLines,
+            accountingLines,
+        };
     },
 });
 
@@ -251,8 +376,15 @@ export const createManual = mutation({
 
         const itemId = await ctx.db.insert("projectItems", {
             projectId: args.projectId,
+            parentItemId: null,
+            sortKey: String(now),
             title: args.title,
             typeKey: args.typeKey,
+            name: args.title,
+            category: args.typeKey,
+            kind: "deliverable",
+            description: args.description,
+            searchText: buildSearchText({ name: args.title, description: args.description, typeKey: args.typeKey }),
             status: "draft",
             createdFrom: { source: "manual" },
             latestRevisionNumber: 1,
@@ -291,8 +423,19 @@ export const createFromTemplate = mutation({
 
         const itemId = await ctx.db.insert("projectItems", {
             projectId: args.projectId,
+            parentItemId: null,
+            sortKey: String(now),
             title: spec.identity.title,
             typeKey: template.typeKey,
+            name: spec.identity.title,
+            category: template.typeKey,
+            kind: "deliverable",
+            description: spec.identity.description,
+            searchText: buildSearchText({
+                name: spec.identity.title,
+                description: spec.identity.description,
+                typeKey: template.typeKey,
+            }),
             status: "draft",
             createdFrom: { source: "manual", sourceId: template.key },
             latestRevisionNumber: 1,
@@ -326,8 +469,19 @@ export const createFromConceptCard = mutation({
 
         const itemId = await ctx.db.insert("projectItems", {
             projectId: args.projectId,
+            parentItemId: null,
+            sortKey: String(now),
             title: card.title,
             typeKey: "concept",
+            name: card.title,
+            category: "concept",
+            kind: "deliverable",
+            description: card.detailsMarkdown,
+            searchText: buildSearchText({
+                name: card.title,
+                description: card.detailsMarkdown,
+                typeKey: "concept",
+            }),
             status: "draft",
             createdFrom: { source: "ideationCard", sourceId: card._id },
             latestRevisionNumber: 1,
@@ -355,8 +509,129 @@ export const renameItem = mutation({
     handler: async (ctx, args) => {
         await ctx.db.patch(args.itemId, {
             title: args.newTitle,
+            name: args.newTitle,
+            searchText: buildSearchText({ name: args.newTitle }),
             updatedAt: Date.now(),
         });
+    },
+});
+
+export const createItem = mutation({
+    args: {
+        projectId: v.id("projects"),
+        parentItemId: v.optional(v.id("projectItems")),
+        sortKey: v.string(),
+        kind: v.string(),
+        category: v.string(),
+        name: v.string(),
+        description: v.optional(v.string()),
+        flags: v.optional(v.any()),
+        scope: v.optional(v.any()),
+        quoteDefaults: v.optional(v.any()),
+    },
+    handler: async (ctx, args) => {
+        const now = Date.now();
+        const itemId = await ctx.db.insert("projectItems", {
+            projectId: args.projectId,
+            parentItemId: args.parentItemId ?? null,
+            sortKey: args.sortKey,
+            kind: args.kind,
+            category: args.category,
+            name: args.name,
+            title: args.name,
+            typeKey: args.category,
+            description: args.description,
+            flags: args.flags,
+            scope: args.scope,
+            quoteDefaults: args.quoteDefaults,
+            searchText: buildSearchText({ name: args.name, description: args.description, typeKey: args.category }),
+            status: "draft",
+            createdFrom: { source: "manual" },
+            latestRevisionNumber: 1,
+            createdAt: now,
+            updatedAt: now,
+        });
+
+        return { itemId };
+    },
+});
+
+export const patchItem = mutation({
+    args: {
+        itemId: v.id("projectItems"),
+        patch: v.object({
+            name: v.optional(v.string()),
+            description: v.optional(v.string()),
+            kind: v.optional(v.string()),
+            category: v.optional(v.string()),
+            flags: v.optional(v.any()),
+            scope: v.optional(v.any()),
+            quoteDefaults: v.optional(v.any()),
+        }),
+    },
+    handler: async (ctx, args) => {
+        const item = await ctx.db.get(args.itemId);
+        if (!item) throw new Error("Item not found");
+
+        const name = args.patch.name ?? item.name ?? item.title;
+        const description = args.patch.description ?? item.description;
+        const category = args.patch.category ?? item.category ?? item.typeKey;
+
+        await ctx.db.patch(args.itemId, {
+            ...args.patch,
+            title: args.patch.name ?? item.title,
+            typeKey: args.patch.category ?? item.typeKey,
+            searchText: buildSearchText({
+                name,
+                description: description ?? undefined,
+                typeKey: category ?? undefined,
+            }),
+            updatedAt: Date.now(),
+        });
+    },
+});
+
+export const moveItem = mutation({
+    args: {
+        itemId: v.id("projectItems"),
+        parentItemId: v.optional(v.union(v.id("projectItems"), v.null())),
+        sortKey: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.itemId, {
+            parentItemId: args.parentItemId ?? null,
+            sortKey: args.sortKey ?? undefined,
+            updatedAt: Date.now(),
+        });
+    },
+});
+
+export const reorderSiblings = mutation({
+    args: {
+        projectId: v.id("projects"),
+        parentItemId: v.optional(v.union(v.id("projectItems"), v.null())),
+        orderedItems: v.array(v.object({ itemId: v.id("projectItems"), sortKey: v.string() })),
+    },
+    handler: async (ctx, args) => {
+        const parentItemId = args.parentItemId ?? null;
+        const itemIds = new Set(args.orderedItems.map((entry) => entry.itemId));
+
+        const siblings = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project_parent_sort", (q) =>
+                q.eq("projectId", args.projectId).eq("parentItemId", parentItemId)
+            )
+            .collect();
+
+        for (const entry of args.orderedItems) {
+            if (!itemIds.has(entry.itemId)) continue;
+            await ctx.db.patch(entry.itemId, { sortKey: entry.sortKey, updatedAt: Date.now() });
+        }
+
+        const untouched = siblings.filter((item) => !itemIds.has(item._id));
+        for (const item of untouched) {
+            await ctx.db.patch(item._id, { sortKey: item.sortKey ?? item._id, updatedAt: Date.now() });
+        }
     },
 });
 
@@ -424,6 +699,14 @@ export const approveRevision = mutation({
             status: "approved",
             title: spec.identity.title,
             typeKey: spec.identity.typeKey,
+            name: spec.identity.title,
+            category: spec.identity.typeKey,
+            description: spec.identity.description,
+            searchText: buildSearchText({
+                name: spec.identity.title,
+                description: spec.identity.description,
+                typeKey: spec.identity.typeKey,
+            }),
             tags: spec.identity.tags,
             updatedAt: now,
         });
@@ -475,10 +758,11 @@ export const restoreItem = mutation({
 });
 
 export const requestDelete = mutation({
-    args: { itemId: v.id("projectItems") },
+    args: { itemId: v.id("projectItems"), requestedBy: v.optional(v.string()) },
     handler: async (ctx, args) => {
         await ctx.db.patch(args.itemId, {
             deleteRequestedAt: Date.now(),
+            deleteRequestedBy: args.requestedBy,
             updatedAt: Date.now(),
         });
     },

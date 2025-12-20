@@ -18,6 +18,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
 import { TaskModal } from "./_components/TaskModal";
+import { ChangeSetReviewBanner } from "../_components/changesets/ChangeSetReviewBanner";
 
 type UpdateTaskInput = {
     taskId: Id<"tasks">;
@@ -254,6 +255,7 @@ export default function TasksPage() {
 
     return (
         <div className="flex flex-col gap-6">
+            <ChangeSetReviewBanner projectId={projectId} phase="tasks" />
             <div className="flex justify-between items-center flex-wrap gap-4">
                 <form onSubmit={handleCreateManual} className="flex gap-2 w-full md:w-1/3 min-w-[260px]">
                     <input

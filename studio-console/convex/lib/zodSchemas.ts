@@ -104,6 +104,13 @@ export const SolutioningExtractedPlanSchema = z.object({
     markdown: z.string(),
 });
 
+export const SolutioningExtractedPlanLooseSchema = z.object({
+    plan: z.unknown().optional(),
+    markdown: z.string().optional(),
+    SolutionItemPlanV1: z.unknown().optional(),
+    MarkdownPlan: z.string().optional(),
+});
+
 export const TaskEditorPatchSchema = z.object({
     summary: z.string().describe("Short summary of what was changed/applied."),
     patch: z.object({
@@ -282,3 +289,4 @@ export const ItemUpdateOutputSchema = z.object({
 
 export type ItemSpecV2 = z.infer<typeof ItemSpecV2Schema>;
 export type ItemUpdateOutput = z.infer<typeof ItemUpdateOutputSchema>;
+export type SolutionItemPlanV1 = z.infer<typeof SolutionItemPlanV1Schema>;

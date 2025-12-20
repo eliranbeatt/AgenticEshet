@@ -122,31 +122,55 @@ export default function SolutioningPage() {
     const [markdownDraft, setMarkdownDraft] = useState("");
     const [isSaving, setIsSaving] = useState(false);
     const previousSelectedItemIdRef = useRef<string | null>(null);
+    const lastRemotePlanJsonRef = useRef<string | null>(null);
+    const lastRemoteMarkdownRef = useRef<string | null>(null);
 
     useEffect(() => {
         if (!selectedItemId) return;
         if (!items) return;
 
         const selectedItemIdString = String(selectedItemId);
-        if (previousSelectedItemIdRef.current === selectedItemIdString) return;
-        previousSelectedItemIdRef.current = selectedItemIdString;
-
         const item = items.find((i) => i._id === selectedItemId) ?? null;
         const title = item ? `${item.title} (${item.typeKey})` : "Solution Plan";
-        setPlanDraft(safeParsePlanJson(item?.planJson, title));
-        setMarkdownDraft(item?.planMarkdown || "");
+        const remotePlanJson = item?.planJson ?? null;
+        const remoteMarkdown = item?.planMarkdown || "";
 
-        void (async () => {
-            const result = await ensureThread({
-                projectId,
-                phase: "solutioning",
-                scenarioKey: `item:${selectedItemIdString}`,
-                title: item?.title,
-            });
-            setThreadId(result.threadId);
-            setScenarioId(result.scenarioId);
-        })();
-    }, [ensureThread, items, projectId, selectedItemId]);
+        const isSameItem = previousSelectedItemIdRef.current === selectedItemIdString;
+        if (!isSameItem) {
+            previousSelectedItemIdRef.current = selectedItemIdString;
+            setPlanDraft(safeParsePlanJson(remotePlanJson, title));
+            setMarkdownDraft(remoteMarkdown);
+            lastRemotePlanJsonRef.current = remotePlanJson;
+            lastRemoteMarkdownRef.current = remoteMarkdown;
+
+            void (async () => {
+                const result = await ensureThread({
+                    projectId,
+                    phase: "solutioning",
+                    scenarioKey: `item:${selectedItemIdString}`,
+                    title: item?.title,
+                });
+                setThreadId(result.threadId);
+                setScenarioId(result.scenarioId);
+            })();
+            return;
+        }
+
+        const lastRemotePlanJson = lastRemotePlanJsonRef.current;
+        const lastRemoteMarkdown = lastRemoteMarkdownRef.current ?? "";
+        const localPlanJson = planDraft ? JSON.stringify(planDraft) : null;
+        const isPlanDirty = lastRemotePlanJson !== null && localPlanJson !== lastRemotePlanJson;
+        const isMarkdownDirty = markdownDraft !== lastRemoteMarkdown;
+
+        if (!isPlanDirty && !isMarkdownDirty) {
+            if (remotePlanJson !== lastRemotePlanJson || remoteMarkdown !== lastRemoteMarkdown) {
+                setPlanDraft(safeParsePlanJson(remotePlanJson, title));
+                setMarkdownDraft(remoteMarkdown);
+                lastRemotePlanJsonRef.current = remotePlanJson;
+                lastRemoteMarkdownRef.current = remoteMarkdown;
+            }
+        }
+    }, [ensureThread, items, projectId, selectedItemId, planDraft, markdownDraft]);
 
     useEffect(() => {
         if (!selectedItemId) return;
@@ -171,6 +195,8 @@ export default function SolutioningPage() {
                 solutionPlan: markdown,
                 solutionPlanJson: planJson,
             });
+            lastRemotePlanJsonRef.current = planJson;
+            lastRemoteMarkdownRef.current = markdown;
         } finally {
             setIsSaving(false);
         }
@@ -223,6 +249,8 @@ export default function SolutioningPage() {
                                         if (result?.plan) {
                                             setPlanDraft(result.plan);
                                             setMarkdownDraft(result.markdown ?? "");
+                                            lastRemotePlanJsonRef.current = JSON.stringify(result.plan);
+                                            lastRemoteMarkdownRef.current = result.markdown ?? "";
                                         }
                                     }}
                                 >

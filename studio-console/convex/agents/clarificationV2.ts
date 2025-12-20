@@ -2,7 +2,13 @@ import { v } from "convex/values";
 import { action, internalMutation } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
-import { ClarificationSchema, ItemSpecV2Schema, ItemUpdateOutputSchema, type ItemSpecV2 } from "../lib/zodSchemas";
+import {
+    ClarificationSchema,
+    ItemSpecV2Schema,
+    ItemUpdateOutputSchema,
+    type ItemSpecV2,
+    type ItemUpdateOutput,
+} from "../lib/zodSchemas";
 import type { Doc, Id } from "../_generated/dataModel";
 
 function parseItemSpec(data: unknown): ItemSpecV2 | null {
@@ -201,44 +207,67 @@ export const send = action({
                     status: "final",
                 });
 
-                const itemUpdate = await callChatWithSchema(ItemUpdateOutputSchema, {
-                    model,
-                    systemPrompt: [
-                        "Update the item spec based on the conversation.",
-                        "Return JSON only that matches the ItemUpdateOutput schema.",
-                        "Keep all existing fields unless new info is provided.",
-                        `itemId must be exactly "${String(item._id)}".`,
-                    ].join("\n"),
-                    userPrompt: JSON.stringify(
-                        {
-                            itemId: String(item._id),
-                            baseSpec: spec,
-                            userMessage: args.userContent,
-                            assistantMessage: finalContent,
-                        },
-                        null,
-                        2,
-                    ),
-                    maxRetries: 2,
-                    language: project.defaultLanguage === "en" ? "en" : "he",
-                });
+                let itemUpdate: ItemUpdateOutput | null = null;
+                try {
+                    itemUpdate = await callChatWithSchema(ItemUpdateOutputSchema, {
+                        model,
+                        systemPrompt: [
+                            "Update the item spec based on the conversation.",
+                            "Return JSON only that matches the ItemUpdateOutput schema.",
+                            "Keep all existing fields unless new info is provided.",
+                            `itemId must be exactly "${String(item._id)}".`,
+                            "If the conversation includes actionable steps or tasks, add them to breakdown.subtasks.",
+                            "Use subtask fields: id, title, description, estMinutes (if stated).",
+                        ].join("\n"),
+                        userPrompt: [
+                            "Use the input JSON below to update the item spec.",
+                            "Return JSON only with keys: itemId, proposedData, summaryMarkdown, changeReason (optional).",
+                            "Do not include baseSpec in the output.",
+                            "INPUT_JSON:",
+                            JSON.stringify(
+                                {
+                                    itemId: String(item._id),
+                                    baseSpec: spec,
+                                    userMessage: args.userContent,
+                                    assistantMessage: finalContent,
+                                },
+                                null,
+                                2,
+                            ),
+                        ].join("\n"),
+                        maxRetries: 2,
+                        language: project.defaultLanguage === "en" ? "en" : "he",
+                    });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    await ctx.runMutation(internal.chat.createMessage, {
+                        projectId: project._id,
+                        scenarioId: scenario._id,
+                        threadId: args.threadId,
+                        role: "system",
+                        content: `Unable to parse structured item update. ${message}`,
+                        status: "error",
+                    });
+                }
 
-                await ctx.runMutation(api.items.upsertRevision, {
-                    itemId: args.itemId,
-                    tabScope: "clarification",
-                    dataOrPatch: itemUpdate.proposedData,
-                    changeReason: itemUpdate.changeReason ?? itemUpdate.summaryMarkdown,
-                    createdByKind: "agent",
-                });
+                if (itemUpdate) {
+                    await ctx.runMutation(api.items.upsertRevision, {
+                        itemId: args.itemId,
+                        tabScope: "clarification",
+                        dataOrPatch: itemUpdate.proposedData,
+                        changeReason: itemUpdate.changeReason ?? itemUpdate.summaryMarkdown,
+                        createdByKind: "agent",
+                    });
 
-                await ctx.runMutation(internal.chat.createMessage, {
-                    projectId: project._id,
-                    scenarioId: scenario._id,
-                    threadId: args.threadId,
-                    role: "system",
-                    content: `Proposed item update saved. ${itemUpdate.summaryMarkdown}`,
-                    status: "final",
-                });
+                    await ctx.runMutation(internal.chat.createMessage, {
+                        projectId: project._id,
+                        scenarioId: scenario._id,
+                        threadId: args.threadId,
+                        role: "system",
+                        content: `Proposed item update saved. ${itemUpdate.summaryMarkdown}`,
+                        status: "final",
+                    });
+                }
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 await ctx.runMutation(internal.chat.patchMessage, {

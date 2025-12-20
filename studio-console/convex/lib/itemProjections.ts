@@ -204,7 +204,7 @@ async function syncLaborToWorkLines(
         if (labor.description !== undefined) patch.description = labor.description;
 
         if (existing) {
-            await ctx.db.patch(existing._id, { ...patch, updatedAt: Date.now() });
+            await ctx.db.patch(existing._id, patch);
         } else {
             await ctx.db.insert("workLines", {
                 projectId: args.item.projectId,

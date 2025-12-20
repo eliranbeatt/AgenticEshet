@@ -3,6 +3,7 @@ import { action, internalMutation, internalQuery, mutation, query } from "../_ge
 import { internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ItemSpecV2Schema, type ItemSpecV2 } from "../lib/zodSchemas";
+import { syncItemProjections } from "../lib/itemProjections";
 import type { Doc, Id } from "../_generated/dataModel";
 import { z } from "zod";
 
@@ -224,6 +225,11 @@ export const updateSolution = mutation({
             status: "approved",
             updatedAt: now,
         });
+
+        const spec = parseItemSpec(revision.data);
+        if (spec) {
+            await syncItemProjections(ctx, { item, revision, spec, force: true });
+        }
 
         return { solutioned: true };
     },

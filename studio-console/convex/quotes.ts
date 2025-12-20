@@ -52,7 +52,7 @@ export const generateFromAccounting = mutation({
             .first();
 
         if (!activePlan) {
-            throw new Error("Approve a planning document first (Planning tab â†’ Approve Plan).");
+            throw new Error("Approve a planning document first (Planning tab -> Approve Plan).");
         }
 
         const sections = await ctx.db
@@ -229,8 +229,7 @@ function buildWizardClientDocument(args: {
         lines.push("");
         lines.push(args.notesToClient.trim());
     }
-    return lines.join("
-");
+    return lines.join("\n");
 }
 
 export const createFromWizard = mutation({

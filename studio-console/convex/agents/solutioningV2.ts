@@ -2,7 +2,14 @@ import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
-import { ItemSpecV2Schema, SolutioningExtractedPlanSchema, type ItemSpecV2 } from "../lib/zodSchemas";
+import { syncItemProjections } from "../lib/itemProjections";
+import {
+    ItemSpecV2Schema,
+    SolutionItemPlanV1Schema,
+    SolutioningExtractedPlanLooseSchema,
+    type ItemSpecV2,
+    type SolutionItemPlanV1,
+} from "../lib/zodSchemas";
 import type { Doc, Id } from "../_generated/dataModel";
 
 const FALLBACK_SYSTEM_PROMPT = [
@@ -40,6 +47,227 @@ function withSolutionPlan(spec: ItemSpecV2, planMarkdown: string, planJson?: str
             buildPlanJson: planJson ?? undefined,
         },
     });
+}
+
+function parsePlanJson(planJson?: string | null): SolutionItemPlanV1 | null {
+    if (!planJson) return null;
+    try {
+        const parsed = JSON.parse(planJson) as unknown;
+        const result = SolutionItemPlanV1Schema.safeParse(parsed);
+        return result.success ? result.data : null;
+    } catch {
+        return null;
+    }
+}
+
+function buildSubtasksFromPlan(plan: SolutionItemPlanV1) {
+    return plan.steps.map((step, index) => ({
+        id: step.id?.trim() ? step.id : `step:${index + 1}`,
+        title: step.title,
+        description: [
+            step.details,
+            step.materials && step.materials.length ? `Materials: ${step.materials.join(", ")}` : "",
+            step.tools && step.tools.length ? `Tools: ${step.tools.join(", ")}` : "",
+        ]
+            .filter((line) => line.trim())
+            .join("\n"),
+        status: "todo",
+        estMinutes: step.estimatedMinutes,
+    }));
+}
+
+function renderPlanMarkdown(plan: SolutionItemPlanV1): string {
+    const lines: string[] = [];
+    lines.push(`# ${plan.title}`);
+    if (plan.summary?.trim()) {
+        lines.push("", plan.summary.trim());
+    }
+    lines.push("", "## Steps");
+    for (const step of plan.steps) {
+        lines.push("", `### ${step.title}`);
+        if (step.details.trim()) lines.push(step.details.trim());
+        if (typeof step.estimatedMinutes === "number") {
+            lines.push("", `- Est. minutes: ${step.estimatedMinutes}`);
+        }
+        if (step.materials && step.materials.length) {
+            lines.push("", `- Materials: ${step.materials.join(", ")}`);
+        }
+        if (step.tools && step.tools.length) {
+            lines.push("", `- Tools: ${step.tools.join(", ")}`);
+        }
+    }
+    return lines.join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
+function getString(source: Record<string, unknown>, keys: string[]) {
+    for (const key of keys) {
+        const value = source[key];
+        if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return "";
+}
+
+function coercePlanFromLooseFormat(value: unknown): SolutionItemPlanV1 | null {
+    if (!isRecord(value)) return null;
+    const parsed = SolutionItemPlanV1Schema.safeParse(value);
+    if (parsed.success) return parsed.data;
+
+    const title =
+        getString(value, ["project_title", "ProjectTitle", "title", "Title"]) ||
+        getString(value, ["name", "Name"]) ||
+        "Solution Plan";
+
+    const goals = isRecord(value.Goals) ? value.Goals : null;
+    const summary =
+        (goals ? getString(goals, ["Description", "description"]) : "") ||
+        getString(value, ["Summary", "summary"]);
+
+    const planNode =
+        (isRecord(value.ConciseStepByStepPlan) ? value.ConciseStepByStepPlan : null) ||
+        (isRecord(value.StepByStepPlan) ? value.StepByStepPlan : null) ||
+        (isRecord(value.StepsPlan) ? value.StepsPlan : null);
+    const stepsNode =
+        planNode && Array.isArray((planNode as Record<string, unknown>).Steps)
+            ? (planNode as Record<string, unknown>).Steps
+            : planNode && Array.isArray((planNode as Record<string, unknown>).steps)
+            ? (planNode as Record<string, unknown>).steps
+            : null;
+
+    const steps = Array.isArray(stepsNode)
+        ? stepsNode.map((step, index) => {
+              const stepObj = isRecord(step) ? step : {};
+              const stepTitle =
+                  getString(stepObj, ["Title", "title"]) || `Step ${index + 1}`;
+              const details =
+                  getString(stepObj, ["Details", "details", "Description", "description"]) || "";
+              return {
+                  id: `S${index + 1}`,
+                  title: stepTitle,
+                  details,
+              };
+          })
+        : [];
+
+    const normalized: SolutionItemPlanV1 = {
+        version: "SolutionItemPlanV1",
+        title,
+        summary: summary || undefined,
+        steps: steps.length
+            ? steps
+            : [
+                  {
+                      id: "S1",
+                      title: "Step 1",
+                      details: summary || "Draft plan requires clarification.",
+                  },
+              ],
+    };
+
+    const normalizedParsed = SolutionItemPlanV1Schema.safeParse(normalized);
+    if (!normalizedParsed.success) return null;
+    return normalizedParsed.data;
+}
+
+function parseStepsFromMarkdown(markdown: string): SolutionItemPlanV1["steps"] {
+    const steps: SolutionItemPlanV1["steps"] = [];
+    const lines = markdown.split("\n");
+    let current: { title: string; details: string[] } | null = null;
+    for (const line of lines) {
+        const trimmed = line.trimStart();
+        const headingMatch = trimmed.match(/^###\s+(.*)$/);
+        if (headingMatch) {
+            if (current) {
+                steps.push({
+                    id: `S${steps.length + 1}`,
+                    title: current.title,
+                    details: current.details.join("\n").trim(),
+                });
+            }
+            current = {
+                title: headingMatch[1].trim() || `Step ${steps.length + 1}`,
+                details: [],
+            };
+            continue;
+        }
+
+        const numberedMatch = trimmed.match(/^(?:-?\s*)?\d+[\.\)]\s+(.*)$/);
+        if (numberedMatch) {
+            if (current) {
+                steps.push({
+                    id: `S${steps.length + 1}`,
+                    title: current.title,
+                    details: current.details.join("\n").trim(),
+                });
+            }
+            current = {
+                title: numberedMatch[1].trim() || `Step ${steps.length + 1}`,
+                details: [],
+            };
+            continue;
+        }
+
+        if (current && trimmed.startsWith("-")) {
+            current.details.push(trimmed.replace(/^-\s*/, ""));
+        }
+    }
+
+    if (current) {
+        steps.push({
+            id: `S${steps.length + 1}`,
+            title: current.title,
+            details: current.details.join("\n").trim(),
+        });
+    }
+
+    return steps;
+}
+
+function fillStepDetailsFromMarkdown(
+    steps: SolutionItemPlanV1["steps"],
+    markdown: string,
+) {
+    if (steps.length === 0) return steps;
+    const sections = markdown.split(/^###\s+/m);
+    if (sections.length <= 1) return steps;
+    const mapped = steps.map((step, index) => {
+        const body = sections[index + 1] ?? "";
+        const detailLines = body.split("\n").slice(1).join("\n").trim();
+        return {
+            ...step,
+            details: detailLines || step.details,
+        };
+    });
+    return mapped;
+}
+
+function normalizeExtractedPlan(extracted: {
+    plan?: unknown;
+    markdown?: string;
+    SolutionItemPlanV1?: unknown;
+    MarkdownPlan?: string;
+}) {
+    const plan =
+        coercePlanFromLooseFormat(extracted.plan) ||
+        coercePlanFromLooseFormat(extracted.SolutionItemPlanV1);
+    if (!plan) {
+        throw new Error("Extracted plan did not contain a usable structure.");
+    }
+
+    const markdown =
+        extracted.markdown?.trim() ||
+        extracted.MarkdownPlan?.trim() ||
+        renderPlanMarkdown(plan);
+
+    const fallbackSteps = parseStepsFromMarkdown(markdown);
+    if (plan.steps.length <= 1 && fallbackSteps.length > 1) {
+        plan.steps = fillStepDetailsFromMarkdown(fallbackSteps, markdown);
+    }
+
+    return { plan, markdown };
 }
 
 function findSolutioningDraft(revisions: Doc<"itemRevisions">[]) {
@@ -124,7 +352,17 @@ export const saveDraftPlan = internalMutation({
             : buildBaseItemSpec(item);
 
         const planMarkdown = args.solutionPlan.trim();
-        const spec = withSolutionPlan(baseSpec, planMarkdown, args.solutionPlanJson ?? undefined);
+        const plan = parsePlanJson(args.solutionPlanJson ?? undefined);
+        let spec = withSolutionPlan(baseSpec, planMarkdown, args.solutionPlanJson ?? undefined);
+        if (plan && plan.steps.length > 0) {
+            spec = ItemSpecV2Schema.parse({
+                ...spec,
+                breakdown: {
+                    ...spec.breakdown,
+                    subtasks: buildSubtasksFromPlan(plan),
+                },
+            });
+        }
 
         const now = Date.now();
         if (draft) {
@@ -133,6 +371,12 @@ export const saveDraftPlan = internalMutation({
                 summaryMarkdown: "Solutioning draft updated.",
             });
             await ctx.db.patch(item._id, { updatedAt: now });
+            if (args.createdBy === "agent") {
+                const revision = await ctx.db.get(draft._id);
+                if (revision) {
+                    await syncItemProjections(ctx, { item, revision, spec, force: true });
+                }
+            }
             return { revisionId: draft._id };
         }
 
@@ -154,6 +398,13 @@ export const saveDraftPlan = internalMutation({
             latestRevisionNumber: revisionNumber,
             updatedAt: now,
         });
+
+        if (args.createdBy === "agent") {
+            const revision = await ctx.db.get(revisionId);
+            if (revision) {
+                await syncItemProjections(ctx, { item, revision, spec, force: true });
+            }
+        }
 
         return { revisionId };
     },
@@ -239,7 +490,8 @@ export const send = action({
             "",
             "Instructions:",
             "- Ask any critical clarifying questions before committing to a final build plan.",
-            "- When you can, propose a concise step-by-step build/procurement method.",
+            "- Always include a draft step-by-step build/procurement plan, even if you must state assumptions.",
+            "- If assumptions are needed, list them explicitly before the steps.",
             "- Keep the response actionable and specific (dimensions, materials, suppliers, tools, sequencing).",
         ].join("\n");
 
@@ -270,6 +522,54 @@ export const send = action({
                 content: buffer.trim() ? buffer : "(empty)",
                 status: "final",
             });
+
+            const finalContent = buffer.trim() ? buffer : "(empty)";
+            if (finalContent.length > 40) {
+                try {
+                    const extracted = await callChatWithSchema(SolutioningExtractedPlanLooseSchema, {
+                        model,
+                        systemPrompt: [
+                            systemPrompt,
+                            "",
+            "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
+            "Return JSON with keys: plan and markdown.",
+            "The plan.steps array must contain multiple atomic steps (each is a single task).",
+            "If the message is long, split it into 4-10 steps.",
+                            "Use the same language as the message content.",
+                            "Return valid JSON only.",
+                        ].join("\n"),
+                        userPrompt: finalContent,
+                        maxRetries: 2,
+                        language: project.defaultLanguage === "en" ? "en" : "he",
+                    });
+
+                    const normalized = normalizeExtractedPlan(extracted);
+                    await ctx.runMutation(internal.agents.solutioningV2.saveDraftPlan, {
+                        itemId: args.itemId,
+                        solutionPlan: normalized.markdown,
+                        solutionPlanJson: JSON.stringify(normalized.plan),
+                        createdBy: "agent",
+                    });
+                    await ctx.runMutation(internal.chat.createMessage, {
+                        projectId: project._id,
+                        scenarioId: scenario._id,
+                        threadId: args.threadId,
+                        role: "system",
+                        content: "Draft plan extracted and saved to the item.",
+                        status: "final",
+                    });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    await ctx.runMutation(internal.chat.createMessage, {
+                        projectId: project._id,
+                        scenarioId: scenario._id,
+                        threadId: args.threadId,
+                        role: "system",
+                        content: `Auto-extract failed: ${message}`,
+                        status: "error",
+                    });
+                }
+            }
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             await ctx.runMutation(internal.chat.patchMessage, {
@@ -303,7 +603,7 @@ export const extractPlanFromThread = action({
             windowMs: 60_000,
         });
 
-        const { project, messages } = await ctx.runQuery(internal.chat.getThreadContext, {
+        const { project, scenario, messages } = await ctx.runQuery(internal.chat.getThreadContext, {
             threadId: args.threadId,
         });
         const { systemPrompt } = await ctx.runQuery(internal.agents.solutioningV2.getContext, {
@@ -312,32 +612,68 @@ export const extractPlanFromThread = action({
         });
 
         const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim());
-        if (!lastAssistant) throw new Error("No assistant message found to extract from");
+        if (!lastAssistant) {
+            await ctx.runMutation(internal.chat.createMessage, {
+                projectId: project._id,
+                scenarioId: scenario._id,
+                threadId: args.threadId,
+                role: "system",
+                content: "Extract failed: no assistant message found in this thread.",
+                status: "error",
+            });
+            throw new Error("No assistant message found to extract from");
+        }
 
         const settings = await ctx.runQuery(internal.settings.getAll);
         const model = settings.modelConfig?.solutioning || "gpt-5.2";
 
-        const extracted = await callChatWithSchema(SolutioningExtractedPlanSchema, {
-            model,
-            systemPrompt: [
-                systemPrompt,
-                "",
-                "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
-                "Use the same language as the message content.",
-                "Return valid JSON only.",
-            ].join("\n"),
-            userPrompt: lastAssistant.content,
-            maxRetries: 2,
-            language: project.defaultLanguage === "en" ? "en" : "he",
-        });
+        try {
+            const extracted = await callChatWithSchema(SolutioningExtractedPlanLooseSchema, {
+                model,
+                systemPrompt: [
+                    systemPrompt,
+                    "",
+                    "Extract a structured plan (SolutionItemPlanV1) and a clean Markdown plan from the assistant message.",
+                    "Return JSON with keys: plan and markdown.",
+                    "The plan.steps array must contain multiple atomic steps (each is a single task).",
+                    "If the message is long, split it into 4-10 steps.",
+                    "Use the same language as the message content.",
+                    "Return valid JSON only.",
+                ].join("\n"),
+                userPrompt: lastAssistant.content,
+                maxRetries: 2,
+                language: project.defaultLanguage === "en" ? "en" : "he",
+            });
 
-        await ctx.runMutation(internal.agents.solutioningV2.saveDraftPlan, {
-            itemId: args.itemId,
-            solutionPlan: extracted.markdown,
-            solutionPlanJson: JSON.stringify(extracted.plan),
-            createdBy: "agent",
-        });
+            const normalized = normalizeExtractedPlan(extracted);
+            await ctx.runMutation(internal.agents.solutioningV2.saveDraftPlan, {
+                itemId: args.itemId,
+                solutionPlan: normalized.markdown,
+                solutionPlanJson: JSON.stringify(normalized.plan),
+                createdBy: "agent",
+            });
 
-        return { ok: true, plan: extracted.plan, markdown: extracted.markdown };
+            await ctx.runMutation(internal.chat.createMessage, {
+                projectId: project._id,
+                scenarioId: scenario._id,
+                threadId: args.threadId,
+                role: "system",
+                content: "Plan extracted and saved to the item.",
+                status: "final",
+            });
+
+            return { ok: true, plan: normalized.plan, markdown: normalized.markdown };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await ctx.runMutation(internal.chat.createMessage, {
+                projectId: project._id,
+                scenarioId: scenario._id,
+                threadId: args.threadId,
+                role: "system",
+                content: `Extract failed: ${message}`,
+                status: "error",
+            });
+            throw error;
+        }
     },
 });

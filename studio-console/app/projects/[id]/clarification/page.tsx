@@ -11,7 +11,7 @@ import { ItemsTreeSidebar } from "../_components/items/ItemsTreeSidebar";
 import { ItemEditorPanel } from "../_components/items/ItemEditorPanel";
 import { useItemsContext } from "../_components/items/ItemsContext";
 
-export default function ClarificationPage() {
+export default function PlanningChatPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
     const { thinkingMode } = useThinkingMode();
@@ -32,7 +32,7 @@ export default function ClarificationPage() {
     useEffect(() => {
         if (threadId) return;
         void (async () => {
-            const result = await ensureThread({ projectId, phase: "clarification", title: "Clarification" });
+        const result = await ensureThread({ projectId, phase: "clarification", title: "Planning" });
             setThreadId(result.threadId);
         })();
     }, [ensureThread, projectId, threadId]);
@@ -103,7 +103,7 @@ export default function ClarificationPage() {
             <div className="bg-white rounded shadow-sm border">
                 <div className="flex justify-between items-center p-4 border-b">
                     <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
-                        Clarification document
+                        Planning document
                     </h3>
                     <button
                         type="button"
@@ -117,7 +117,7 @@ export default function ClarificationPage() {
                 <div className="p-4">
                     <textarea
                         className="w-full h-[360px] border rounded p-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder={`# Clarifications\n\n## Goals\n- ...\n\n## Scope\n- In scope: ...\n- Out of scope: ...\n\n## Assumptions\n- ...\n\n## Open questions\n- ...\n`}
+                        placeholder={`# Planning Notes\n\n## Goals\n- ...\n\n## Scope\n- In scope: ...\n- Out of scope: ...\n\n## Assumptions\n- ...\n\n## Open questions\n- ...\n`}
                         value={clarificationMarkdown}
                         onChange={(e) => setClarificationMarkdown(e.target.value)}
                     />
@@ -135,7 +135,7 @@ function PhaseBadges({ projectReady, activePlanLabel }: { projectReady: boolean;
                     projectReady ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
                 }`}
             >
-                Clarification {projectReady ? "captured" : "pending"}
+                Planning {projectReady ? "captured" : "pending"}
             </span>
             <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
                 {activePlanLabel}

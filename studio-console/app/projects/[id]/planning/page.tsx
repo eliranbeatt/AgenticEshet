@@ -118,7 +118,7 @@ export default function PlanningPage() {
                         {/* Left: Controls */}
                         <div className="w-1/3 flex flex-col space-y-4">
                             <div className="bg-white p-4 rounded shadow-sm border flex-1 flex flex-col">
-                                <h2 className="text-lg font-bold mb-4">Planning Agent</h2>
+                                <h2 className="text-lg font-bold mb-4">Planning OLD Agent</h2>
                                 <p className="text-sm text-gray-600 mb-4">
                                     Describe the scope or ask for changes to the plan.
                                 </p>
@@ -313,7 +313,7 @@ function PlanStatusBadge({ label, tone }: { label: string; tone: "green" | "ambe
 function TranscriptPanel({ conversations }: { conversations: Doc<"conversations">[] }) {
     return (
         <div className="bg-white rounded shadow-sm border p-4 flex flex-col flex-1">
-            <h3 className="text-sm font-semibold text-gray-600 uppercase mb-3">Planning transcript</h3>
+            <h3 className="text-sm font-semibold text-gray-600 uppercase mb-3">Planning OLD transcript</h3>
             <div className="space-y-3 max-h-48 overflow-y-auto">
                 {conversations.map((conversation) => {
                     const content = parseLatestAssistant(conversation.messagesJson);
@@ -366,7 +366,7 @@ function PhaseBadges({ clarificationReady, planningLabel }: { clarificationReady
     return (
         <div className="flex flex-wrap gap-3 text-xs">
             <span className={`px-3 py-1 rounded-full font-semibold ${clarificationReady ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"}`}>
-                Clarification {clarificationReady ? "captured" : "pending"}
+                Planning OLD {clarificationReady ? "captured" : "pending"}
             </span>
             <span className="px-3 py-1 rounded-full font-semibold bg-blue-50 text-blue-700">{planningLabel}</span>
         </div>

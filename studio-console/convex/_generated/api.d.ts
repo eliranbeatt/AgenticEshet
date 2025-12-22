@@ -62,6 +62,7 @@ import type * as management from "../management.js";
 import type * as migrations from "../migrations.js";
 import type * as prices from "../prices.js";
 import type * as projects from "../projects.js";
+import type * as prompts_itemsPromptPack from "../prompts/itemsPromptPack.js";
 import type * as quests from "../quests.js";
 import type * as quotes from "../quotes.js";
 import type * as rateLimit from "../rateLimit.js";
@@ -134,6 +135,7 @@ declare const fullApi: ApiFromModules<{
   migrations: typeof migrations;
   prices: typeof prices;
   projects: typeof projects;
+  "prompts/itemsPromptPack": typeof prompts_itemsPromptPack;
   quests: typeof quests;
   quotes: typeof quotes;
   rateLimit: typeof rateLimit;

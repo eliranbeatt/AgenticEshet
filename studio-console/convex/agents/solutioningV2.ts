@@ -168,7 +168,6 @@ function deriveMaterialsFromPlan(plan: SolutionItemPlanV1) {
             const id = `plan-mat:${stepToken}:${token}`;
             if (materialMap.has(id)) continue;
             const descriptionParts = [`Step: ${step.title}`];
-            if (material.notes) descriptionParts.push(material.notes);
             materialMap.set(id, {
                 id,
                 category: "General",
@@ -178,6 +177,7 @@ function deriveMaterialsFromPlan(plan: SolutionItemPlanV1) {
                 unit: material.unit ?? "unit",
                 unitCostEstimate: material.unitCostEstimate ?? 0,
                 status: "planned",
+                note: material.notes,
             });
         }
     }
@@ -548,6 +548,38 @@ function extractResourcesFromText(text: string) {
     return { materials, tools };
 }
 
+function derivePlanFromMarkdown(markdown: string, fallbackTitle: string): SolutionItemPlanV1 | null {
+    const trimmed = markdown.trim();
+    if (!trimmed) return null;
+    const titleLine = trimmed
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.startsWith("# "));
+    const title = titleLine ? titleLine.replace(/^#\s+/, "").trim() || fallbackTitle : fallbackTitle;
+    let steps = parseStepsFromMarkdown(trimmed);
+    if (steps.length === 0) {
+        const { materials, tools } = extractResourcesFromText(trimmed);
+        steps = [
+            {
+                id: "S1",
+                title: "Step 1",
+                details: trimmed,
+                materials: materials.length ? materials : undefined,
+                tools: tools.length ? tools : undefined,
+            },
+        ];
+    } else {
+        steps = fillStepDetailsFromMarkdown(steps, trimmed);
+    }
+    const plan: SolutionItemPlanV1 = {
+        version: "SolutionItemPlanV1",
+        title,
+        steps,
+    };
+    const parsed = SolutionItemPlanV1Schema.safeParse(plan);
+    return parsed.success ? parsed.data : null;
+}
+
 function normalizeExtractedPlan(extracted: {
     plan?: unknown;
     markdown?: string;
@@ -657,8 +689,16 @@ export const saveDraftPlan = internalMutation({
             : buildBaseItemSpec(item);
 
         const planMarkdown = args.solutionPlan.trim();
-        const plan = parsePlanJson(args.solutionPlanJson ?? undefined);
-        let spec = withSolutionPlan(baseSpec, planMarkdown, args.solutionPlanJson ?? undefined);
+        let planJson = args.solutionPlanJson ?? undefined;
+        let plan = parsePlanJson(planJson);
+        if (!plan) {
+            const derived = derivePlanFromMarkdown(planMarkdown, baseSpec.identity.title);
+            if (derived) {
+                plan = derived;
+                planJson = JSON.stringify(derived);
+            }
+        }
+        let spec = withSolutionPlan(baseSpec, planMarkdown, planJson ?? undefined);
         if (plan && plan.steps.length > 0) {
             const derivedMaterials = deriveMaterialsFromPlan(plan);
             const derivedLabor = deriveLaborFromPlan(plan);

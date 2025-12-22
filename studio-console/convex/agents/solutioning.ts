@@ -227,11 +227,17 @@ export const updateSolution = mutation({
         });
 
         const spec = parseItemSpec(revision.data);
+        let materialsSynced = 0;
+        let planMaterialCount = 0;
         if (spec) {
-            await syncItemProjections(ctx, { item, revision, spec, force: true });
+            planMaterialCount = spec.breakdown.materials.filter((material) =>
+                material.id.startsWith("plan-mat:")
+            ).length;
+            const projection = await syncItemProjections(ctx, { item, revision, spec, force: true });
+            materialsSynced = projection.materialsSynced ?? 0;
         }
 
-        return { solutioned: true };
+        return { solutioned: true, materialsSynced, planMaterialCount };
     },
 });
 

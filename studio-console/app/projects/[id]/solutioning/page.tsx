@@ -242,11 +242,19 @@ export default function SolutioningPage() {
         try {
             const planJson = JSON.stringify(planDraft);
             const markdown = markdownDraft.trim() ? markdownDraft : renderPlanMarkdown(planDraft);
-            await updateSolutionMutation({
+            const planMaterialCount = planDraft.steps.reduce(
+                (sum, step) => sum + (step.materials?.length ?? 0),
+                0
+            );
+            const result = await updateSolutionMutation({
                 itemId: selectedItemId,
                 solutionPlan: markdown,
                 solutionPlanJson: planJson,
             });
+            if (planMaterialCount > 0 && (!result?.materialsSynced || result.materialsSynced === 0)) {
+                alert("Materials were generated but not applied to accounting. Please re-apply or review the plan JSON.");
+                return;
+            }
             lastRemotePlanJsonRef.current = planJson;
             lastRemoteMarkdownRef.current = markdown;
         } finally {

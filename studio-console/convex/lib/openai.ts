@@ -158,7 +158,7 @@ export async function callChatWithSchema<T>(
                     ...(supportsReasoningEffort(model)
                         ? { reasoning: { effort: params.thinkingMode ? "high" : "low" } }
                         : {}),
-                    text: { format, verbosity: params.thinkingMode ? "medium" : "low" },
+                    text: { format, verbosity: "medium" },
                     parallel_tool_calls: true,
                 });
             };
@@ -242,7 +242,7 @@ export async function streamChatText(
         ...(supportsReasoningEffort(model)
             ? { reasoning: { effort: params.thinkingMode ? "high" : "low" } }
             : {}),
-        text: { format: { type: "text" }, verbosity: params.thinkingMode ? "medium" : "low" },
+        text: { format: { type: "text" }, verbosity: "medium" },
         parallel_tool_calls: true,
     });
 

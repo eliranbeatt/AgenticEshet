@@ -12,7 +12,7 @@ const modeValidator = v.union(v.literal("clarify"), v.literal("generate"));
 const scopeTypeValidator = v.union(v.literal("allProject"), v.literal("singleItem"), v.literal("multiItem"));
 
 const AgentAParsedSchema = z.object({
-    clarificationQuestions: z.array(z.string()).length(3),
+    clarificationQuestions: z.array(z.string()),
     suggestions: z
         .array(
             z.object({
@@ -20,8 +20,7 @@ const AgentAParsedSchema = z.object({
                 details: z.string(),
                 whyItHelps: z.string(),
             })
-        )
-        .length(3),
+        ),
 });
 
 const AgentBWorkspaceSchema = z.object({
@@ -44,9 +43,11 @@ function buildAgentASystemPrompt(args: {
         return [
             `You are assisting in ${focus}.`,
             "Generate/Expand mode.",
-            "Return exactly 3 targeted clarification questions and exactly 3 actionable suggestions.",
+            "Your goal is to propose new items, expanded approaches, or detailed plans based on the user's request.",
+            "Do NOT ask clarification questions unless absolutely necessary (return empty list if none).",
+            "Return 3 to 5 actionable suggestions that are relevant to the user's request (features, efficiency improvements, etc.).",
             "Use this markdown format exactly:",
-            "## Clarification questions\n1. ...\n2. ...\n3. ...\n\n## Suggestions\n1. **Title**: ...\n   - Details: ...\n   - Why it helps: ...\n2. ...\n3. ...",
+            "## Clarification questions\n(Optional, leave empty if none)\n\n## Suggestions\n1. **Title**: ...\n   - Details: ...\n   - Why it helps: ...\n2. ...",
             "Do not claim to have updated any structured fields.",
         ].join("\n");
     }
@@ -55,6 +56,7 @@ function buildAgentASystemPrompt(args: {
         `You are assisting in ${focus}.`,
         "Clarify & Suggest mode.",
         "Return exactly 3 targeted clarification questions and exactly 3 actionable suggestions.",
+        "Suggestions should be relevant to the questions asked (features, efficiency improvements, etc.), not just implementation details.",
         "Use this markdown format exactly:",
         "## Clarification questions\n1. ...\n2. ...\n3. ...\n\n## Suggestions\n1. **Title**: ...\n   - Details: ...\n   - Why it helps: ...\n2. ...\n3. ...",
         "Do not output a full item spec. Do not say you updated fields.",
@@ -314,6 +316,7 @@ export const generateItemUpdate = action({
     args: {
         threadId: v.id("chatThreads"),
         workspaceText: v.string(),
+        model: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
         const { project, scenario } = await ctx.runQuery(internal.chat.getThreadContext, {
@@ -335,7 +338,7 @@ Do not invent information not present or implied by the text.`;
             {
                 systemPrompt,
                 userPrompt: args.workspaceText,
-                model: "gpt-4o",
+                model: args.model || "gpt-4o",
                 temperature: 0.1,
             }
         );

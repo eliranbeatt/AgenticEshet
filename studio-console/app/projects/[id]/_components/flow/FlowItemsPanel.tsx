@@ -48,12 +48,12 @@ export function FlowItemsPanel(props: Props) {
 
     const selectedSet = useMemo(() => new Set(props.selectedItemIds.map(String)), [props.selectedItemIds]);
 
-    const toggleItem = (itemId: Id<"projectItems">) => {
+    const handleRowClick = (itemId: Id<"projectItems">) => {
+        props.onSetSelectedItemIds([itemId]);
+    };
+
+    const handleCheckboxChange = (itemId: Id<"projectItems">) => {
         const idString = String(itemId);
-        if (!props.multiSelectEnabled) {
-            props.onSetSelectedItemIds([itemId]);
-            return;
-        }
         const next = new Set(props.selectedItemIds.map(String));
         if (next.has(idString)) next.delete(idString);
         else next.add(idString);
@@ -65,14 +65,6 @@ export function FlowItemsPanel(props: Props) {
             <div className="p-3 border-b space-y-2">
                 <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Items</div>
-                    <label className="flex items-center gap-2 text-xs text-gray-600">
-                        <input
-                            type="checkbox"
-                            checked={props.multiSelectEnabled}
-                            onChange={(e) => props.onToggleMultiSelect(e.target.checked)}
-                        />
-                        Multi
-                    </label>
                 </div>
 
                 <button
@@ -129,7 +121,7 @@ export function FlowItemsPanel(props: Props) {
                                             props.onSetSelectedItemIds([item._id]);
                                             return;
                                         }
-                                        toggleItem(item._id);
+                                        handleRowClick(item._id);
                                     }}
                                 >
                                     <div className="flex items-start gap-2">
@@ -142,7 +134,7 @@ export function FlowItemsPanel(props: Props) {
                                                     props.onSetSelectedItemIds([item._id]);
                                                     return;
                                                 }
-                                                toggleItem(item._id);
+                                                handleCheckboxChange(item._id);
                                             }}
                                             onClick={(e) => e.stopPropagation()}
                                         />

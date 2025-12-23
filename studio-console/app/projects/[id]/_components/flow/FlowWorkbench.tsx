@@ -69,6 +69,8 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const saveWorkspaceText = useMutation(api.flowWorkspaces.saveText);
     const ensureThread = useMutation(api.chat.ensureThread);
     const sendFlowTurn = useAction(api.agents.flow.send);
+    const generateUploadUrl = useMutation(api.assets.generateUploadUrl);
+    const createAssetFromUpload = useMutation(api.assets.createAssetFromUpload);
 
     const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
     const [selectedAllProject, setSelectedAllProject] = useState(true);
@@ -169,6 +171,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
             const result = await generateItemUpdate({
                 threadId,
                 workspaceText: textDraft,
+                model: selectedModel,
             });
             setPreviewSpec(result as ItemSpecV2);
         } catch (e) {
@@ -297,6 +300,24 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                         thinkingMode,
                                     });
                                 }}
+                                onUpload={async (file) => {
+                                    const postUrl = await generateUploadUrl();
+                                    const result = await fetch(postUrl, {
+                                        method: "POST",
+                                        headers: { "Content-Type": file.type },
+                                        body: file,
+                                    });
+                                    if (!result.ok) throw new Error("Upload failed");
+                                    const { storageId } = await result.json();
+                                    const { url } = await createAssetFromUpload({
+                                        projectId,
+                                        storageId,
+                                        mimeType: file.type,
+                                        filename: file.name,
+                                    });
+                                    return `![${file.name}](${url})`;
+                                }}
+                                heightClassName="h-full"
                                 heightClassName="h-full"
                             />
                         )}

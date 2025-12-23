@@ -32,7 +32,17 @@ export const createAssetFromUpload = mutation({
             createdBy: "user",
         });
 
-        return { assetId };
+        const url = await ctx.storage.getUrl(args.storageId);
+        return { assetId, url };
+    },
+});
+
+export const getAssetUrl = query({
+    args: { assetId: v.id("projectAssets") },
+    handler: async (ctx, args) => {
+        const asset = await ctx.db.get(args.assetId);
+        if (!asset) return null;
+        return await ctx.storage.getUrl(asset.storageId);
     },
 });
 

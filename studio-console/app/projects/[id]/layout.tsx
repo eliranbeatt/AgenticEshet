@@ -69,7 +69,7 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
     const tabs = [
         { name: "Overview", href: "overview" },
         { name: "Ideation", href: "ideation" },
-        { name: "Planning", href: "clarification", phaseKey: "clarification" as const },
+        { name: "Planning", href: "planning", phaseKey: "planning" as const },
         { name: "Solutioning", href: "solutioning" },
         { name: "Accounting", href: "accounting" },
         { name: "Tasks", href: "tasks" },

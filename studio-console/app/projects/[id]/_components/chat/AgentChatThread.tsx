@@ -48,12 +48,14 @@ export function AgentChatThread({
     placeholder,
     systemPrompt,
     onSend,
+    onUpload,
     heightClassName,
 }: {
     threadId: Id<"chatThreads">;
     placeholder?: string;
     systemPrompt?: string;
     onSend?: (content: string) => Promise<void>;
+    onUpload?: (file: File) => Promise<string>;
     heightClassName?: string;
 }) {
     const messages = useQuery(api.chat.listMessages, { threadId }) as Array<Doc<"chatMessages">> | undefined;
@@ -78,6 +80,7 @@ export function AgentChatThread({
             <ChatComposer
                 placeholder={placeholder}
                 disabled={isLoading}
+                onUpload={onUpload}
                 onSend={async (content) => {
                     if (onSend) {
                         await onSend(content);

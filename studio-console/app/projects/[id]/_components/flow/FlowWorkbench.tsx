@@ -77,8 +77,8 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const [selectedItemIds, setSelectedItemIds] = useState<Array<Id<"projectItems">>>([]);
 
     const scopeType: FlowScopeType = useMemo(() => {
-        if (selectedAllProject) return "allProject";
-        if (selectedItemIds.length <= 1) return "singleItem";
+        if (selectedAllProject || selectedItemIds.length === 0) return "allProject";
+        if (selectedItemIds.length === 1) return "singleItem";
         return "multiItem";
     }, [selectedAllProject, selectedItemIds.length]);
 
@@ -239,8 +239,13 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                         setSelectedItemIds([]);
                     }}
                     onSetSelectedItemIds={(ids) => {
-                        setSelectedAllProject(false);
-                        setSelectedItemIds(ids);
+                        if (ids.length === 0) {
+                            setSelectedAllProject(true);
+                            setSelectedItemIds([]);
+                        } else {
+                            setSelectedAllProject(false);
+                            setSelectedItemIds(ids);
+                        }
                     }}
                 />
 

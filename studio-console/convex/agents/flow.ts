@@ -341,13 +341,28 @@ CRITICAL INSTRUCTIONS:
 IMPORTANT SCHEMA DETAILS:
 - "materials" array items MUST have:
   - "id" (string, generate a unique one e.g. "mat_1")
-  - "label" (string)
+  - "label" (string) - REQUIRED. If unknown, use a generic label like "Material".
 - "labor" array items MUST have:
   - "id" (string, generate a unique one e.g. "lab_1")
-  - "workType" (string, e.g. "Studio", "Field")
-  - "role" (string, e.g. "Carpenter")
-  - "rateType" (one of "hour", "day", "flat")
+  - "workType" (string, e.g. "Studio", "Field") - REQUIRED. Default to "Studio" if unsure.
+  - "role" (string, e.g. "Carpenter") - REQUIRED. Default to "General Labor" if unsure.
+  - "rateType" (one of "hour", "day", "flat") - REQUIRED. Default to "hour".
 - "openQuestions" MUST be an array of strings, NOT objects.
+
+EXAMPLE JSON STRUCTURE:
+{
+  "version": "ItemSpecV2",
+  "identity": { "title": "Example Item", "typeKey": "custom" },
+  "breakdown": {
+    "materials": [
+      { "id": "mat_1", "label": "Plywood Sheets", "qty": 5, "unit": "pcs" }
+    ],
+    "labor": [
+      { "id": "lab_1", "workType": "Studio", "role": "Carpenter", "rateType": "hour", "quantity": 10 }
+    ]
+  },
+  "state": { "openQuestions": [], "assumptions": [], "decisions": [] }
+}
 
 The goal is to convert the unstructured text into a rich, actionable structured plan.`;
 

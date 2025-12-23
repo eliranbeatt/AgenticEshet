@@ -232,21 +232,15 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                     projectId={projectId}
                     selectedAllProject={selectedAllProject}
                     selectedItemIds={selectedItemIds}
-                    multiSelectEnabled={multiSelectEnabled}
-                    onToggleMultiSelect={(enabled) => {
-                        setMultiSelectEnabled(enabled);
-                        if (!enabled && selectedItemIds.length > 1) {
-                            setSelectedItemIds(selectedItemIds.slice(0, 1));
-                        }
-                    }}
+                    multiSelectEnabled={true}
+                    onToggleMultiSelect={() => {}}
                     onSelectAllProject={() => {
                         setSelectedAllProject(true);
                         setSelectedItemIds([]);
                     }}
                     onSetSelectedItemIds={(ids) => {
-                        const normalized = ids.map((id) => id).slice(0, multiSelectEnabled ? ids.length : 1);
                         setSelectedAllProject(false);
-                        setSelectedItemIds(normalized);
+                        setSelectedItemIds(ids);
                     }}
                 />
 

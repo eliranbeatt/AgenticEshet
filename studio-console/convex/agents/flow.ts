@@ -329,7 +329,11 @@ export const generateItemUpdate = action({
         const systemPrompt = `You are an expert project manager.
 Analyze the provided "Current Understanding" text and extract the full specification for the main item described.
 Return it as a structured ItemSpecV2 object.
-Ensure the title and typeKey are populated.
+You MUST include the following fields:
+- "version": "ItemSpecV2"
+- "identity": { "title": "...", "typeKey": "..." }
+
+Ensure the title and typeKey are populated in the identity object.
 If specific details are missing, leave them optional or use reasonable defaults based on the context.
 Do not invent information not present or implied by the text.`;
 

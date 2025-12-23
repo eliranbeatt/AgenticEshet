@@ -104,7 +104,7 @@ export const SolutionItemPlanV1Schema = z.object({
             id: z.string(),
             title: z.string(),
             details: z.string(),
-            estimatedMinutes: z.number().optional(),
+            estimatedMinutes: z.number().nullable().optional(),
             materials: z.array(z.union([
                 z.string(),
                 z.object({
@@ -140,7 +140,7 @@ export const TaskEditorPatchSchema = z.object({
         status: z.enum(["todo", "in_progress", "blocked", "done"]).optional(),
         category: z.enum(["Logistics", "Creative", "Finance", "Admin", "Studio"]).optional(),
         priority: z.enum(["High", "Medium", "Low"]).optional(),
-        estimatedMinutes: z.number().optional(),
+        estimatedMinutes: z.number().nullable().optional(),
         steps: z.array(z.string()).optional(),
         subtasks: z.array(z.object({ title: z.string(), done: z.boolean() })).optional(),
         assignee: z.string().nullable().optional(),
@@ -184,7 +184,7 @@ const SubtaskSpecSchema: z.ZodType<{
     title: string;
     description?: string;
     status?: string;
-    estMinutes?: number;
+    estMinutes?: number | null;
     children?: unknown[];
     taskProjection?: {
         createTask: boolean;
@@ -196,7 +196,7 @@ const SubtaskSpecSchema: z.ZodType<{
         title: z.string(),
         description: z.string().optional(),
         status: z.string().optional(),
-        estMinutes: z.number().optional(),
+        estMinutes: z.number().nullable().optional(),
         children: z.array(SubtaskSpecSchema).optional(),
         taskProjection: z.object({
             createTask: z.boolean(),
@@ -239,13 +239,13 @@ export const ItemSpecV2Schema = z.object({
     procurement: z.object({
         required: z.boolean(),
         channel: z.enum(["none", "local", "abroad", "both"]),
-        leadTimeDays: z.number().optional(),
+        leadTimeDays: z.number().nullable().optional(),
         purchaseList: z.array(PurchaseNeedSchema).optional(),
     }).optional(),
     studioWork: z.object({
         required: z.boolean(),
         workTypes: z.array(z.string()).optional(),
-        estMinutes: z.number().optional(),
+        estMinutes: z.number().nullable().optional(),
         buildPlanMarkdown: z.string().optional(),
         buildPlanJson: z.string().optional(),
     }).optional(),
@@ -255,9 +255,9 @@ export const ItemSpecV2Schema = z.object({
         storageRequired: z.boolean().optional(),
     }).optional(),
     onsite: z.object({
-        installDays: z.number().optional(),
-        shootDays: z.number().optional(),
-        teardownDays: z.number().optional(),
+        installDays: z.number().nullable().optional(),
+        shootDays: z.number().nullable().optional(),
+        teardownDays: z.number().nullable().optional(),
         operatorDuringEvent: z.boolean().optional(),
     }).optional(),
     safety: z.object({
@@ -681,6 +681,125 @@ export const AgentOutputSchema = z.union([
     ResearchFindingsSchema,
 ]);
 
+export const QuoteAgentResultSchema = z.object({
+    mode: z.enum(["draft", "needs_clarification"]),
+    clarifyingQuestions: z.array(z.object({
+        id: z.string(),
+        question: z.string().min(3),
+        whyNeeded: z.string().min(3),
+        bestGuessIfSkipped: z.string().optional().default(""),
+    })).default([]),
+    quote: z.object({
+        language: z.literal("he"),
+        quoteTitle: z.string().min(3),
+        quoteNumber: z.string().optional().default(""),
+        dateIssued: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        client: z.object({
+            name: z.string().min(2),
+            contactPerson: z.string().optional().default(""),
+        }),
+        project: z.object({
+            name: z.string().min(2),
+            locations: z.array(z.string()).default([]),
+            dateRange: z.string().optional().default(""),
+        }),
+        executiveSummary: z.string().min(10),
+        scopeIncludedBullets: z.array(z.string().min(3)).min(1),
+        scopeExcludedBullets: z.array(z.string().min(3)).default([]),
+
+        lineItems: z.array(z.object({
+            itemId: z.string().min(1),
+            title: z.string().min(2),
+            shortDescription: z.string().optional().default(""),
+            quantity: z.number().positive().default(1),
+            unit: z.string().min(1).default("יחידה"),
+            priceBeforeVat: z.number().nonnegative(),
+            vatMode: z.enum(["PLUS_VAT", "INCLUDES_VAT"]).default("PLUS_VAT"),
+            notes: z.string().optional().default(""),
+        })).min(1),
+
+        totals: z.object({
+            currency: z.string().default("ILS"),
+            subtotalBeforeVat: z.number().nonnegative(),
+            vatRate: z.number().min(0).max(1).default(0.17),
+            vatAmount: z.number().nonnegative(),
+            totalWithVat: z.number().nonnegative(),
+            roundingNotes: z.string().optional().default(""),
+        }),
+
+        paymentTerms: z.object({
+            templateId: z.enum(["NET30_40_60_NET60", "MATERIALS_ADVANCE_30_PERCENT", "CUSTOM"]),
+            textBullets: z.array(z.string().min(3)).min(1),
+        }),
+
+        validity: z.object({
+            days: z.number().int().positive().default(14),
+            text: z.string().min(5),
+        }),
+
+        leadTime: z.object({
+            businessDays: z.number().int().positive().default(14),
+            text: z.string().min(5),
+        }),
+
+        safetyAndLiability: z.array(z.string()).default([]),
+        changePolicy: z.array(z.string()).default([]),
+
+        approvalBlock: z.object({
+            text: z.string().min(10),
+            fields: z.array(z.string().min(2)).min(2),
+        }),
+
+        footer: z.object({
+            studioName: z.string().min(2),
+            tagline: z.string().optional().default(""),
+            email: z.string().optional().default(""),
+            phone: z.string().optional().default(""),
+            bankDetails: z.string().optional().default(""),
+        }),
+
+        assumptionsMissingInfo: z.array(z.string()).default([]),
+    }).optional(),
+
+    clientFacingDocumentMarkdown: z.string().optional(),
+}).superRefine((val, ctx) => {
+    if (val.mode === "needs_clarification") {
+        if (!val.clarifyingQuestions?.length) {
+            ctx.addIssue({ code: "custom", message: "needs_clarification requires clarifyingQuestions[]" });
+        }
+        if (val.clientFacingDocumentMarkdown) {
+            ctx.addIssue({ code: "custom", message: "Do not output markdown when mode=needs_clarification" });
+        }
+        return;
+    }
+
+    // draft mode validations
+    if (!val.quote) {
+        ctx.addIssue({ code: "custom", message: "draft requires quote" });
+        return;
+    }
+    if (!val.clientFacingDocumentMarkdown?.length) {
+        ctx.addIssue({ code: "custom", message: "draft requires clientFacingDocumentMarkdown" });
+    }
+
+    const q = val.quote!;
+    const sum = q.lineItems.reduce((acc, li) => acc + (li.priceBeforeVat * (li.quantity ?? 1)), 0);
+    const eps = 0.5; // allow tiny rounding
+    if (Math.abs(sum - q.totals.subtotalBeforeVat) > eps) {
+        ctx.addIssue({ code: "custom", message: `Totals mismatch: lineItems sum=${sum} subtotalBeforeVat=${q.totals.subtotalBeforeVat}` });
+    }
+
+    const expectedVat = q.totals.subtotalBeforeVat * q.totals.vatRate;
+    if (Math.abs(expectedVat - q.totals.vatAmount) > 2) {
+        ctx.addIssue({ code: "custom", message: "VAT amount not consistent with subtotal * vatRate" });
+    }
+
+    const expectedTotal = q.totals.subtotalBeforeVat + q.totals.vatAmount;
+    if (Math.abs(expectedTotal - q.totals.totalWithVat) > 2) {
+        ctx.addIssue({ code: "custom", message: "totalWithVat not consistent with subtotal + vatAmount" });
+    }
+});
+
 export type ItemSpecV2 = z.infer<typeof ItemSpecV2Schema>;
 export type ItemUpdateOutput = z.infer<typeof ItemUpdateOutputSchema>;
 export type SolutionItemPlanV1 = z.infer<typeof SolutionItemPlanV1Schema>;
@@ -689,3 +808,4 @@ export type ConceptPacket = z.infer<typeof ConceptPacketSchema>;
 export type ClarificationPacket = z.infer<typeof ClarificationPacketSchema>;
 export type QuoteDraft = z.infer<typeof QuoteDraftSchema>;
 export type ResearchFindings = z.infer<typeof ResearchFindingsSchema>;
+export type QuoteAgentResult = z.infer<typeof QuoteAgentResultSchema>;

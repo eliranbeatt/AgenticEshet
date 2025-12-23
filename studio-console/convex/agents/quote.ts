@@ -1,23 +1,10 @@
 import { v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery, query } from "../_generated/server";
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
-import { ItemSpecV2Schema, QuoteDraftSchema, type ItemSpecV2 } from "../lib/zodSchemas";
+import { ItemSpecV2Schema, QuoteAgentResultSchema, type ItemSpecV2, type QuoteAgentResult } from "../lib/zodSchemas";
 import { type Doc } from "../_generated/dataModel";
-
-type QuoteBreakdownItem = {
-    label: string;
-    amount: number;
-    currency: string;
-    notes: string | null;
-};
-
-type QuoteDataPayload = {
-    internalBreakdown: QuoteBreakdownItem[];
-    totalAmount: number;
-    currency: string;
-    clientDocumentText: string;
-};
+import { calculateSectionSnapshot, getProjectPricingDefaults } from "../lib/costing";
 
 // 1. DATA ACCESS
 export const getContext: ReturnType<typeof internalQuery> = internalQuery({
@@ -45,23 +32,111 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
             itemSpecs.push({ item, spec: parsed.success ? parsed.data : null });
         }
 
+        // Accounting Snapshot
+        const sections = await ctx.db
+            .query("sections")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        const allMaterials = await ctx.db
+            .query("materialLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        const allWork = await ctx.db
+            .query("workLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        const materialsBySection = new Map<string, Doc<"materialLines">[]>();
+        const workBySection = new Map<string, Doc<"workLines">[]>();
+
+        for (const m of allMaterials) {
+            if (!materialsBySection.has(m.sectionId)) materialsBySection.set(m.sectionId, []);
+            materialsBySection.get(m.sectionId)!.push(m);
+        }
+        for (const w of allWork) {
+            if (!workBySection.has(w.sectionId)) workBySection.set(w.sectionId, []);
+            workBySection.get(w.sectionId)!.push(w);
+        }
+
+        const projectDefaults = getProjectPricingDefaults(project);
+        let totalMaterialsCost = 0;
+        let totalLaborCost = 0;
+        let totalSubtotalBeforeVat = 0;
+
+        const sectionsData = sections.map((s) => {
+            const mats = materialsBySection.get(s._id) || [];
+            const wrk = workBySection.get(s._id) || [];
+            const snapshot = calculateSectionSnapshot(s, mats, wrk, projectDefaults);
+
+            totalMaterialsCost += snapshot.plannedMaterialsCostE;
+            totalLaborCost += snapshot.plannedWorkCostS;
+            totalSubtotalBeforeVat += snapshot.plannedClientPrice;
+
+            return {
+                sectionId: s._id,
+                title: s.name,
+                rollups: snapshot,
+                materialLines: mats,
+                workLines: wrk,
+            };
+        });
+
+        const vatRate = project.vatRate ?? 0.17;
+        const vatAmount = totalSubtotalBeforeVat * vatRate;
+
+        const accountingSnapshot = {
+            currency: project.currency ?? "ILS",
+            vatRate,
+            totals: {
+                materialsCost: totalMaterialsCost,
+                laborCost: totalLaborCost,
+                subcontractorsCost: 0,
+                shippingCost: 0,
+                overheadCost: totalSubtotalBeforeVat * projectDefaults.overhead,
+                profit: totalSubtotalBeforeVat * projectDefaults.profit,
+                risk: totalSubtotalBeforeVat * projectDefaults.risk,
+                grandTotalCost: totalMaterialsCost + totalLaborCost,
+            },
+            sell: {
+                subtotalBeforeVat: totalSubtotalBeforeVat,
+                vatAmount: vatAmount,
+                totalWithVat: totalSubtotalBeforeVat + vatAmount,
+            },
+            sections: sectionsData,
+        };
+
         const skill = await ctx.db
             .query("skills")
             .withIndex("by_name", (q) => q.eq("name", "quote"))
             .first();
 
-        const knowledgeDocs = await ctx.runQuery(internal.knowledge.getContextDocs, {
-            projectId: args.projectId,
-            limit: 3,
-            tagFilter: ["pricing", "budget", "rates"],
-        });
+        const settings = await ctx.runQuery(internal.settings.getAll);
+
+        const studioDefaults = {
+            studioDisplayNameHeb: "סטודיו אם-לי נוי",
+            phone: "054-XXXXXXX",
+            email: "studio@noy.co.il",
+            address: "Haharash 4, Tel Aviv",
+            logoAssetId: settings.brandingLogoStorageId,
+            bankDetails: "Bank Hapoalim (12), Branch 600, Account 123456",
+            defaultPaymentTemplateId: "NET30_40_60_NET60",
+            defaultValidityDays: 14,
+            defaultLeadTimeBusinessDays: 14,
+            standardTermsSnippets: [
+                "ההצעה אינה כוללת אישור קונסטרוקטור.",
+                "שינויים לאחר אישור סופי יחויבו בנפרד.",
+            ],
+        };
 
         return {
             project,
             items,
             itemSpecs,
-            knowledgeDocs,
-            systemPrompt: skill?.content || "You are a Cost Estimator.",
+            accountingSnapshot,
+            studioDefaults,
+            systemPrompt: skill?.content || "You are a Quote Agent.",
         };
     },
 });
@@ -69,87 +144,47 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
 export const saveQuote = internalMutation({
     args: {
         projectId: v.id("projects"),
-        quoteData: v.any(), // QuoteDraftSchema
+        result: v.any(), // QuoteAgentResult
     },
     handler: async (ctx, args) => {
-        const project = await ctx.db.get(args.projectId);
-        const quoteData = args.quoteData as {
-            currency: string;
-            document: {
-                title: string;
-                intro: string;
-                scopeBullets: string[];
-                lineItems: Array<{
-                    displayName: string;
-                    description?: string;
-                    quantity: number;
-                    unit: string;
-                    price: number;
-                }>;
-                totals: { subtotal: number; vat: number; total: number };
-                paymentTerms: string[];
-                scheduleAssumptions: string[];
-                included: string[];
-                excluded: string[];
-                termsAndConditions: string[];
-                validityDays: number;
-            };
-        };
-        const internalBreakdown: QuoteBreakdownItem[] = quoteData.document.lineItems.map((item) => ({
-            label: item.displayName,
-            amount: item.price,
-            currency: quoteData.currency,
-            notes: item.description ?? null,
-        }));
-        const clientDocumentText = buildClientDocumentText(quoteData.document);
-        const normalized: QuoteDataPayload = {
-            internalBreakdown,
-            totalAmount: quoteData.document.totals.total,
-            currency: quoteData.currency,
-            clientDocumentText,
-        };
-        // Determine version
-        const existing = await ctx.db
+        const result = args.result as QuoteAgentResult;
+        if (result.mode !== "draft" || !result.quote) return;
+
+        const now = Date.now();
+        const existingVersions = await ctx.db
             .query("quotes")
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
             .collect();
+        const nextVersion = existingVersions.length + 1;
 
-        const version = existing.length + 1;
+        const quoteData = result.quote;
 
-        await ctx.db.insert("quotes", {
+        const quoteId = await ctx.db.insert("quotes", {
             projectId: args.projectId,
-            version,
-            internalBreakdownJson: JSON.stringify(normalized.internalBreakdown),
-            clientDocumentText: normalized.clientDocumentText,
-            currency: normalized.currency,
-            totalAmount: normalized.totalAmount,
-            createdAt: Date.now(),
+            version: nextVersion,
+            internalBreakdownJson: JSON.stringify(quoteData),
+            clientDocumentText: result.clientFacingDocumentMarkdown || "",
+            currency: quoteData.totals.currency,
+            totalAmount: quoteData.totals.totalWithVat,
+            createdAt: now,
             createdBy: "agent",
         });
 
-        const quoteText = [
-            `Currency: ${normalized.currency}`,
-            `Total: ${normalized.totalAmount}`,
-            "Breakdown:",
-            ...normalized.internalBreakdown.map((item) => `- ${item.label}: ${item.amount} ${item.currency}`),
-            "",
-            "Client Document:",
-            normalized.clientDocumentText,
-        ].join("\n");
+        return quoteId;
+    },
+});
 
-        // Ingest quote into knowledge base using public API
-        await ctx.runAction(api.knowledge.ingestArtifact, {
-            projectId: args.projectId,
-            sourceType: "quote",
-            sourceRefId: `quote-v${version}`,
-            title: `Quote v${version}`,
-            text: quoteText,
-            summary: quoteData.clientDocumentText.slice(0, 500),
-            tags: ["quote", "pricing"],
-            topics: [],
-            clientName: project?.clientName,
-            domain: "pricing",
-        });
+export const updateQuote = mutation({
+    args: {
+        quoteId: v.id("quotes"),
+        updates: v.object({
+            internalBreakdownJson: v.optional(v.string()),
+            clientDocumentText: v.optional(v.string()),
+            totalAmount: v.optional(v.number()),
+        }),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.quoteId, args.updates);
     },
 });
 
@@ -159,11 +194,12 @@ export const listQuotes = query({
         return await ctx.db
             .query("quotes")
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-            .order("desc") // newest first
+            .order("desc")
             .collect();
-    }
+    },
 });
 
+// 2. AGENT ACTION
 export const runInBackground: ReturnType<typeof internalAction> = internalAction({
     args: {
         projectId: v.id("projects"),
@@ -174,155 +210,123 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
     handler: async (ctx, args) => {
         const agentRunId = args.agentRunId;
 
-        // Fetch model configuration
-        const settings = await ctx.runQuery(internal.settings.getAll);
-        const model = settings.modelConfig?.quote || "gpt-5.2";
-
         if (agentRunId) {
             await ctx.runMutation(internal.agentRuns.setStatus, {
                 runId: agentRunId,
                 status: "running",
                 stage: "loading_context",
             });
-            await ctx.runMutation(internal.agentRuns.appendEvent, {
-                runId: agentRunId,
-                level: "info",
-                message: "Loading project context and tasks for quoting.",
-                stage: "loading_context",
-            });
         }
 
         try {
-            const { project, items, itemSpecs, systemPrompt } = await ctx.runQuery(internal.agents.quote.getContext, {
+            const context = await ctx.runQuery(internal.agents.quote.getContext, {
                 projectId: args.projectId,
             });
 
-            if (agentRunId) {
-                await ctx.runMutation(internal.agentRuns.appendEvent, {
-                    runId: agentRunId,
-                    level: "info",
-                    message: "Searching knowledge base for pricing references.",
-                    stage: "knowledge_search",
-                });
-            }
-
-            const knowledgeDocs = await ctx.runAction(api.knowledge.dynamicSearch, {
-                projectId: args.projectId,
-                query: [args.instructions || "", project.clientName, project.details.notes || ""].join("\n"),
-                scope: "both",
-                sourceTypes: ["quote", "task", "doc_upload", "plan"],
-                limit: 8,
-                agentRole: "quote_agent",
-                includeSummaries: true,
-            });
-
-            const itemSummary = itemSpecs
-                .filter((entry) => entry.spec?.quote?.includeInQuote !== false)
-                .map((entry) => {
-                    if (!entry.spec) {
-                        return `- ${entry.item.title} (${entry.item.typeKey})`;
-                    }
-                    const description = entry.spec.identity.description ?? "";
-                    return `- ${entry.spec.identity.title} (${entry.spec.identity.typeKey})${description ? `: ${description}` : ""}`;
-                });
-            const scopeSummary = itemSummary.length > 0 ? itemSummary.join("\n") : "- No approved items found.";
-
-            const knowledgeSummary = knowledgeDocs.length
-                ? knowledgeDocs
-                    .map((entry: { doc: { sourceType: string; title: string; summary?: string; keyPoints?: string[] }; text?: string }) => {
-                        const keyPoints = Array.isArray(entry.doc.keyPoints) && entry.doc.keyPoints.length > 0
-                            ? ` Key points: ${entry.doc.keyPoints.slice(0, 6).join("; ")}`
-                            : "";
-                        const base = (entry.doc.summary ?? entry.text?.slice(0, 200) ?? "").trim();
-                        return `- [${entry.doc.sourceType}] ${entry.doc.title}: ${base}${keyPoints}`;
-                    })
-                    .join("\n")
-                : "No pricing references available.";
-
-            const userPrompt = JSON.stringify({
-                mode: "EXTRACT",
-                phase: "quote",
-                actor: { userName: "user", studioName: "studio" },
+            const quoteContext = {
                 project: {
-                    id: project._id,
-                    name: project.name,
-                    clientName: project.clientName,
-                    defaultLanguage: project.defaultLanguage ?? "he",
-                    budgetTier: project.budgetTier ?? "unknown",
-                    projectTypes: project.projectTypes ?? [],
-                    details: project.details,
-                    overview: project.overview,
-                    features: project.features ?? {},
-                },
-                selection: {
-                    selectedItemIds: [],
-                    selectedConceptIds: [],
-                    selectedTaskIds: [],
-                },
-                items,
-                tasks: [],
-                accounting: {
-                    materialLines: [],
-                    workLines: [],
-                    accountingLines: [],
-                },
-                quotes: [],
-                concepts: [],
-                knowledge: {
-                    attachedDocs: knowledgeDocs,
-                    pastProjects: [],
-                    retrievedSnippets: [],
-                },
-                settings: {
-                    currencyDefault: project.currency ?? "ILS",
-                    tax: { vatRate: project.vatRate ?? 0, pricesIncludeVat: project.pricesIncludeVat ?? false },
-                    pricingModel: {
-                        overheadOnExpensesPct: 0.15,
-                        overheadOnOwnerTimePct: 0.3,
-                        profitPct: 0.1,
+                    projectId: context.project._id,
+                    projectName: context.project.name,
+                    clientName: context.project.clientName || "",
+                    contactPerson: context.project.clientContact || "",
+                    dateIssued: new Date().toISOString().split("T")[0],
+                    installLocation: context.project.details.location || "",
+                    city: context.project.details.location || "",
+                    venueType: context.project.projectTypes?.[0] || "studio",
+                    projectProperties: {
+                        requiresStudioBuild: context.project.overview?.properties?.requiresStudioProduction || false,
+                        requiresPurchases: (context.project.overview?.properties?.requiresPurchases?.length ?? 0) > 0,
+                        requiresInstall: context.project.overview?.properties?.requiresInstallation || false,
+                        requiresRentals: context.project.overview?.properties?.requiresRentals || false,
+                        requiresMoving: context.project.overview?.properties?.requiresMoving || false,
+                        requiresDismantle: context.project.overview?.properties?.requiresDismantle || false,
+                        requiresPrinting: context.project.overview?.properties?.requiresPrinting || false,
+                        requiresEngineeringApproval: context.project.overview?.properties?.requiresEngineeringApproval || false,
+                        publicAudienceRisk: false,
                     },
                 },
-                ui: {
-                    capabilities: {
-                        supportsChangeSets: true,
-                        supportsLocks: true,
-                        supportsDeepResearchTool: true,
+                selectedItems: context.itemSpecs.map(({ item, spec }) => ({
+                    itemId: item._id,
+                    title: item.title,
+                    description: item.description || spec?.identity.description || "",
+                    notes: spec?.quality?.notes || "",
+                    tags: spec?.identity.tags || [],
+                    quantity: spec?.quote?.includeInQuote ? (spec?.identity.accountingGroup === "management" ? 1 : 1) : 1, // simplified
+                    unit: "יחידה",
+                    deliverables: [],
+                    constraints: spec?.state?.openQuestions || [],
+                    assumptions: spec?.state?.assumptions || [],
+                    references: spec?.attachments?.links?.map(l => l.url) || [],
+                    pricing: {
+                        sellPriceOverride: undefined,
                     },
+                })),
+                accountingSnapshot: {
+                    ...context.accountingSnapshot,
+                    totals: {
+                        ...context.accountingSnapshot.totals,
+                        subcontractorsCost: context.accountingSnapshot.sections.reduce((acc, s) => acc + s.rollups.plannedWorkCostS, 0), // Mocked for now
+                        shippingCost: 0,
+                    }
                 },
-                scopeSummary,
-                knowledgeSummary,
-                instructions: args.instructions || "Generate initial quote based on known scope.",
-            });
+                studioDefaults: context.studioDefaults,
+                userInstructions: args.instructions || "",
+            };
 
             if (agentRunId) {
                 await ctx.runMutation(internal.agentRuns.appendEvent, {
                     runId: agentRunId,
                     level: "info",
-                    message: "Calling model to generate quote breakdown.",
+                    message: "Calling model to generate quote draft.",
                     stage: "llm_call",
                 });
             }
 
-            const result = await callChatWithSchema(QuoteDraftSchema, {
-                model,
-                systemPrompt,
-                userPrompt,
+            const result = await callChatWithSchema(QuoteAgentResultSchema, {
+                systemPrompt: context.systemPrompt,
+                userPrompt: JSON.stringify(quoteContext, null, 2),
                 thinkingMode: args.thinkingMode,
             });
 
-            if (agentRunId) {
-                await ctx.runMutation(internal.agentRuns.appendEvent, {
-                    runId: agentRunId,
-                    level: "info",
-                    message: "Saving generated quote.",
-                    stage: "persisting",
-                });
-            }
+            if (result.mode === "draft") {
+                if (agentRunId) {
+                    await ctx.runMutation(internal.agentRuns.appendEvent, {
+                        runId: agentRunId,
+                        level: "info",
+                        message: "Quote draft generated. Saving to project.",
+                        stage: "persisting",
+                    });
+                }
 
-            await ctx.runMutation(internal.agents.quote.saveQuote, {
-                projectId: args.projectId,
-                quoteData: result,
-            });
+                const quoteId = await ctx.runMutation(internal.agents.quote.saveQuote, {
+                    projectId: args.projectId,
+                    result,
+                });
+
+                if (quoteId) {
+                    // Ingest into knowledge base
+                    await ctx.runAction(api.knowledge.ingestArtifact, {
+                        projectId: args.projectId,
+                        sourceType: "quote",
+                        sourceRefId: quoteId,
+                        title: result.quote!.quoteTitle,
+                        text: result.clientFacingDocumentMarkdown || "",
+                        summary: result.quote!.executiveSummary,
+                        tags: ["quote", "client_facing"],
+                        topics: ["pricing"],
+                        clientName: result.quote!.client.name,
+                    });
+                }
+            } else {
+                if (agentRunId) {
+                    await ctx.runMutation(internal.agentRuns.appendEvent, {
+                        runId: agentRunId,
+                        level: "warning",
+                        message: `Agent needs clarification: ${result.clarifyingQuestions?.map(q => q.question).join(", ")}`,
+                        stage: "needs_clarification",
+                    });
+                }
+            }
 
             if (agentRunId) {
                 await ctx.runMutation(internal.agentRuns.setStatus, {
@@ -354,11 +358,10 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
     },
 });
 
-// 2. AGENT ACTION
 export const run: ReturnType<typeof action> = action({
     args: {
         projectId: v.id("projects"),
-        instructions: v.optional(v.string()), // e.g. "Add travel expenses"
+        instructions: v.optional(v.string()),
         thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
@@ -381,53 +384,3 @@ export const run: ReturnType<typeof action> = action({
         return { queued: true, runId: agentRunId };
     },
 });
-
-function buildClientDocumentText(document: {
-    title: string;
-    intro: string;
-    scopeBullets: string[];
-    lineItems: Array<{ displayName: string; description?: string; quantity: number; unit: string; price: number }>;
-    totals: { subtotal: number; vat: number; total: number };
-    paymentTerms: string[];
-    scheduleAssumptions: string[];
-    included: string[];
-    excluded: string[];
-    termsAndConditions: string[];
-    validityDays: number;
-}) {
-    const lines = [
-        document.title,
-        "",
-        document.intro,
-        "",
-        "Scope:",
-        ...(document.scopeBullets.length ? document.scopeBullets.map((line) => `- ${line}`) : ["- (none)"]),
-        "",
-        "Line items:",
-        ...document.lineItems.map(
-            (item) =>
-                `- ${item.displayName}: ${item.quantity} ${item.unit} @ ${item.price}` +
-                (item.description ? ` (${item.description})` : ""),
-        ),
-        "",
-        `Totals: subtotal ${document.totals.subtotal}, vat ${document.totals.vat}, total ${document.totals.total}`,
-        "",
-        "Payment terms:",
-        ...(document.paymentTerms.length ? document.paymentTerms.map((line) => `- ${line}`) : ["- (none)"]),
-        "",
-        "Schedule assumptions:",
-        ...(document.scheduleAssumptions.length ? document.scheduleAssumptions.map((line) => `- ${line}`) : ["- (none)"]),
-        "",
-        "Included:",
-        ...(document.included.length ? document.included.map((line) => `- ${line}`) : ["- (none)"]),
-        "",
-        "Excluded:",
-        ...(document.excluded.length ? document.excluded.map((line) => `- ${line}`) : ["- (none)"]),
-        "",
-        "Terms and conditions:",
-        ...(document.termsAndConditions.length ? document.termsAndConditions.map((line) => `- ${line}`) : ["- (none)"]),
-        "",
-        `Validity: ${document.validityDays} days`,
-    ];
-    return lines.join("\n");
-}

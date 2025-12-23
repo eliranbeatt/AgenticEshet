@@ -95,6 +95,8 @@ export default defineSchema({
 
         // Accounting / Costing Fields
         currency: v.optional(v.string()), // e.g. "ILS", "USD"
+        vatRate: v.optional(v.number()),        // e.g. 0.17
+        pricesIncludeVat: v.optional(v.boolean()),
         overheadPercent: v.optional(v.number()), // 0.15
         riskPercent: v.optional(v.number()),     // 0.10
         profitPercent: v.optional(v.number()),   // 0.30

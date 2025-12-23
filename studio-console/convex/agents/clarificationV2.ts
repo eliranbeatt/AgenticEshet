@@ -478,6 +478,20 @@ function normalizeItemUpdateOutput(
         };
     });
 
+    const subtasksRaw = Array.isArray(breakdown.subtasks) ? breakdown.subtasks : [];
+    const subtasks = subtasksRaw.map((entry, index) => {
+        const s = typeof entry === "object" && entry ? (entry as Record<string, unknown>) : {};
+        return {
+            id: typeof s.id === "string" ? s.id : `sub_${index + 1}`,
+            title: typeof s.title === "string" ? s.title : "Subtask",
+            description: typeof s.description === "string" ? s.description : undefined,
+            status: typeof s.status === "string" ? s.status : "todo",
+            estMinutes: typeof s.estMinutes === "number" ? s.estMinutes : (s.estMinutes === null ? null : undefined),
+            children: Array.isArray(s.children) ? s.children : undefined,
+            taskProjection: typeof s.taskProjection === "object" && s.taskProjection ? (s.taskProjection as any) : undefined,
+        };
+    });
+
     const nextSpec = {
         ...defaults.baseSpec,
         ...(proposed as ItemSpecV2),
@@ -486,6 +500,7 @@ function normalizeItemUpdateOutput(
             ...(breakdown as ItemSpecV2["breakdown"]),
             materials,
             labor,
+            subtasks,
         },
     };
 

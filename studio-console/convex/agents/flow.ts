@@ -338,6 +338,11 @@ CRITICAL INSTRUCTIONS:
 5. Infer reasonable details (like estimated minutes, material quantities) if they are implied by the scope, but mark them as assumptions if uncertain.
 6. "version" must be "ItemSpecV2".
 
+IMPORTANT SCHEMA DETAILS:
+- "materials" array items MUST have a "label" (string).
+- "labor" array items MUST have a "workType" (string) and "rateType" (one of "hour", "day", "flat").
+- "openQuestions" MUST be an array of strings, NOT objects.
+
 The goal is to convert the unstructured text into a rich, actionable structured plan.`;
 
         const result = await callChatWithSchema(

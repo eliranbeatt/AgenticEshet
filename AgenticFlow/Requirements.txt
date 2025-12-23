@@ -1,0 +1,47 @@
+# Agentic Flow Requirements
+
+## 1. Overview
+A unified workspace for Ideation, Planning, and Solutioning that replaces the traditional tabbed workflow with a 4-pane "Agentic Interface". The core philosophy is to separate "Clarification/Reasoning" from "Data Generation/Commitment".
+
+## 2. Layout Structure (4 Panes)
+The screen is divided into 3 vertical columns (side-by-side) and 1 bottom pane.
+
+### A. Left Bar (Thin) - "Items & Concepts"
+- **Content:** List of Project Items and Concepts.
+- **Display:** Name, Short Description, Type, Status.
+- **Interaction:**
+  - Multi-select capability (Select one, multiple, or "All Project").
+  - Selection determines the "Context" for the chat and the Right Window.
+
+### B. Main Chat Window (Middle) - "Clarification & Suggestions"
+- **Actor:** Agent 1 (The Clarifier).
+- **Behavior:**
+  - Asks exactly 3 clarification questions per turn.
+  - Provides exactly 3 suggestions/materials/solutions per turn.
+  - Waits for user response before proceeding.
+- **Input:** Standard chat bar.
+
+### C. Right Window (Right) - "Current State / Knowledge Base"
+- **Actor:** Agent 2 (The Summarizer).
+- **Content:** A live, editable text document representing everything the AI knows about the selected context (Project or specific Items).
+- **Behavior:**
+  - Updates automatically after every chat turn.
+  - Structured format (Markdown).
+  - **Editable:** User can manually edit/delete text here. The Agent must respect these manual edits in the next turn.
+
+### D. Bottom Pane (Full Width) - "Structured Item Editor"
+- **Actor:** Agent 3 (The Generator).
+- **Visibility:** Visible when specific items are selected.
+- **Content:** The actual database fields for the item (as currently seen in the Solutioning tab).
+  - Fields: Description, Type, Status, Steps, Materials, Tools.
+- **Action:** "Turn into Item/Concept" button.
+  - When clicked, Agent 3 takes the text from the Right Window and parses it to fill/update these structured fields.
+
+## 3. Agent Roles & Workflow
+1.  **The Clarifier:** Drives the conversation. Ensures missing data is gathered via questions.
+2.  **The Summarizer:** Maintains the "Mental Model" in the Right Window. It does NOT update the database items directly, only the text summary.
+3.  **The Generator:** The "Commit" agent. Triggered manually. Converts the unstructured "Mental Model" (Right Window) into structured Database records (Bottom Pane).
+
+## 4. Modes
+1.  **Clarification Mode:** Chatting, reasoning, updating the text summary.
+2.  **Generation Mode:** Committing the summary to actual Item data.

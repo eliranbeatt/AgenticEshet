@@ -1,0 +1,68 @@
+# Agentic Flow Design (Fixed)
+
+## 1. UI Architecture
+- **Shared Layout Component:** `AgenticSplitLayout`
+  - **Props:**
+    - `sidebarContent`: ReactNode (The Left Pane list)
+    - `chatContext`: Object (Selected IDs, Current Summary)
+    - `onTurnIntoItem`: Function (Trigger for Generator)
+    - `formContent`: ReactNode (The Bottom Pane editor)
+  - **Implementation:** Uses `react-resizable-panels` for the 3-column split + bottom collapsible pane.
+
+## 2. State Management (Zustand + Convex)
+- **Store:** `useAgenticContext`
+  - `selectedIds`: string[]
+  - `liveSummary`: string (Content of Right Pane)
+  - `isGenerating`: boolean
+  - `chatHistory`: Array<{role, content}>
+
+## 3. Agent Prompts & Logic
+
+### A. Clarifier Agent (`convex/agents/clarifier.ts`)
+- **Input:** `phase` (Ideation/Planning/Solutioning), `selectedItems`, `currentSummary`, `chatHistory`.
+- **System Prompt Adjustment:**
+  - "You are an expert in [PHASE]. Analyze the `currentSummary` and `selectedItems`."
+  - "Ask 3 questions to uncover missing details relevant to [PHASE]."
+  - "Provide 3 creative suggestions for [PHASE]."
+  - "Output JSON: `{ questions: [], suggestions: [] }`."
+
+### B. Summarizer Agent (`convex/agents/summarizer.ts`)
+- **Input:** `phase`, `previousSummary`, `chatHistory`, `userLastMessage`.
+- **System Prompt Adjustment:**
+  - "You are the keeper of the [PHASE] document."
+  - "Update the `previousSummary` with new insights from the chat."
+  - "Maintain a structured Markdown format suitable for [PHASE]."
+  - "Do NOT remove details unless explicitly told to."
+
+### C. Generator Agent (`convex/agents/generator.ts`)
+- **Input:** `phase`, `liveSummary`, `targetSchema`.
+- **System Prompt Adjustment:**
+  - "Extract structured data from the `liveSummary`."
+  - "Map it to the [PHASE] database schema (e.g., ConceptCard, Plan, or ProjectItem)."
+  - "Return JSON matching the target schema."
+
+## 4. Data Flow per Tab
+
+### Ideation
+1.  **Select:** "New Concept" or existing Concept.
+2.  **Chat:** Discuss abstract ideas.
+3.  **Right Pane:** Updates a "Concept Document".
+4.  **Generate:** Fills `ideationConceptCards` table.
+
+### Planning
+1.  **Select:** "Overall Project" or specific Plan.
+2.  **Chat:** Discuss timeline, phases.
+3.  **Right Pane:** Updates "Strategic Plan".
+4.  **Generate:** Fills `plans` table (contentMarkdown).
+
+### Solutioning
+1.  **Select:** Specific Item (e.g., "Build Table").
+2.  **Chat:** Discuss construction steps, wood types.
+3.  **Right Pane:** Updates "Build Guide".
+4.  **Generate:** Fills `projectItems` table (steps, materials).
+
+## 5. Component Reuse
+- **`AgenticSidebar`:** Generic list with checkboxes.
+- **`ClarificationChat`:** Handles the 3 Qs / 3 Suggestions rendering.
+- **`LiveContextEditor`:** Monaco/Textarea for the Right Pane.
+- **`StructuredFormWrapper`:** Container for the bottom pane that handles the "Fill from AI" event.

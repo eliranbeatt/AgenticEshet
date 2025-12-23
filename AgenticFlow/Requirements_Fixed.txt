@@ -1,0 +1,58 @@
+# Agentic Flow Requirements (Fixed)
+
+## 1. Overview
+Refactor the existing **Ideation**, **Planning**, and **Solutioning** tabs to use a unified "Agentic Interface". This interface replaces the current disparate layouts with a standardized 4-pane workspace that separates "Reasoning/Clarification" from "Data Commitment".
+
+## 2. Unified Layout (4 Panes)
+All three tabs (Ideation, Planning, Solutioning) will share this common layout structure:
+
+### A. Left Pane (Sidebar) - "Scope & Context"
+- **Content:** List of Project Items, Concepts, or Plans (depending on the tab).
+- **Interaction:**
+  - **Multi-select:** Checkboxes to select one, multiple, or "All Project".
+  - **Selection Effect:** Defines the `context` for the Chat and the Right Window.
+  - **Visuals:** Name, Type, Status.
+
+### B. Middle Pane (Chat) - "The Clarifier"
+- **Actor:** Clarification Agent.
+- **Behavior:**
+  - Analyzes the selected context and user input.
+  - **Output:** Always provides exactly **3 Clarification Questions** and **3 Suggestions/Ideas**.
+  - **Interaction:** Standard chat interface. Clicking a suggestion auto-fills the input.
+
+### C. Right Pane (Live Document) - "The Knowledge Base"
+- **Actor:** Summarizer Agent.
+- **Content:** A live, editable Markdown document representing the "Mental Model" of the selected scope.
+- **Behavior:**
+  - Updates automatically after every chat turn to reflect new understanding.
+  - **Editable:** User can manually edit text. The Agent must respect these edits in subsequent turns.
+  - **Persistence:** Drafts are saved per item/selection so switching items restores the correct text.
+
+### D. Bottom Pane (Structured Editor) - "The Generator"
+- **Actor:** Generator Agent.
+- **Content:** The actual database form fields (e.g., Description, Steps, Materials, Costs).
+- **Interaction:**
+  - **"Turn into Item/Plan" Button:** Triggers the Generator Agent to parse the Right Pane's text and fill these fields.
+  - **Manual Override:** User can manually tweak fields before saving to the DB.
+
+## 3. Tab-Specific Adaptations
+
+### Ideation Tab
+- **Left Pane:** "Concepts" (from `ideationConceptCards`).
+- **Right Pane:** "Concept Manifesto" (Vibe, Goals, Constraints).
+- **Bottom Pane:** Concept Card Editor (Title, One-liner, Description).
+
+### Planning Tab
+- **Left Pane:** "Plans" (High-level phases/milestones).
+- **Right Pane:** "Master Plan Document" (Strategy, Timeline, Resources).
+- **Bottom Pane:** Plan Editor (Markdown content, Active status).
+
+### Solutioning Tab
+- **Left Pane:** "Project Items" (Tasks, Purchases, Deliverables).
+- **Right Pane:** "Implementation Spec" (Detailed how-to, specific materials).
+- **Bottom Pane:** Item Editor (Steps, Materials, Tools, Cost Estimates).
+
+## 4. Agent Roles
+1.  **Clarifier:** Drives depth. "What about X? Have you considered Y?"
+2.  **Summarizer:** Maintains state. "Here is what we agree on so far."
+3.  **Generator:** Commits to DB. "Converting text to structured data."

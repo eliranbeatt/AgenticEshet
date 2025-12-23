@@ -1,0 +1,535 @@
+Below is a **full development spec** for implementing your 3-tab Agentic Flow (Ideation / Planning / Solutioning), using the existing Magnetic Studio Console architecture (Next.js App Router + Convex + existing agent framework). It’s written so a dev can implement end-to-end without guessing. References to the current system architecture are based on the repo system spec you attached. 
+
+---
+
+# Agentic Flow V2 — 3 Tabs (Ideation / Planning / Solutioning) — Development Spec
+
+## 0) Goal
+
+Deliver a **fast, controllable** workflow where the user can:
+
+1. **Discuss + clarify + explore** (questions/suggestions) without the system overwriting structured fields.
+2. Maintain an **editable “current understanding”** (right panel) that becomes part of context.
+3. On explicit action, convert the current understanding into **structured item updates** (bottom form + downstream accounting correctness).
+
+Critical rule: **No “auto-generate full item” every turn.** Structured field updates happen mainly when the user clicks **Turn into item**.
+
+---
+
+## 1) Scope
+
+### Tabs in scope (only these 3)
+
+* **Ideation**
+* **Planning**
+* **Solutioning**
+
+### Non-goals
+
+* No new “Agentic Flow” tab.
+* No removal of existing backend capabilities; this is primarily a **UI + agent orchestration** change.
+
+### Compatibility / “don’t break what’s working”
+
+* Preserve existing patterns:
+
+  * project layouts and live agent run logging (`AgentActivityPanel`, `agentRuns`) 
+  * existing agent action patterns (`convex/agents/*`) and conversation logging (`conversations`) 
+  * existing Solutioning structured editor behavior and accounting propagation.
+
+---
+
+## 2) UX: 4-region layout inside each tab
+
+Each tab page is split into a 4-region “workbench” layout:
+
+### Region A — Left panel (thin): Items / Concepts list
+
+**Purpose:** selection + scoping + quick creation.
+
+**Must support:**
+
+* List rows show: **Name, short description, type, status**
+* Search/filter (at minimum: text search; optional: type/status)
+* Selection modes:
+
+  * **Single select**
+  * **Multi select**
+  * **All Project** pseudo-selection (one row)
+* Add item:
+
+  * **+ Add item** creates a draft item with minimal data
+  * Immediately selects it (single select)
+* Quick edits:
+
+  * rename item (inline or edit modal)
+  * change status/type (optional quick dropdown)
+* Delete:
+
+  * must be guarded (double confirm)
+
+**Selection scoping rule:**
+
+* Selection affects all other regions:
+
+  * Chat scope (center)
+  * Right “current understanding” scope
+  * Bottom structured editor scope
+
+---
+
+### Region B — Center panel: Main chat
+
+**Purpose:** “Clarify & Suggest” loop and “Generate” mode conversation, without overwriting fields.
+
+**Must include:**
+
+* Conversation thread (messages, timestamps)
+* Composer (input + send)
+* Mode toggle (two modes; see section 3)
+* Per-turn “AI output blocks”:
+
+  * **3 clarification questions**
+  * **3 suggestions**
+* Quick actions:
+
+  * **Turn into item** (runs updater agent; see section 5)
+  * **Regenerate questions/suggestions** (same user message, new run)
+  * **Pin suggestion** (optional: move suggestion to right panel as a note)
+
+---
+
+### Region C — Right panel: Editable “Current Understanding”
+
+**Purpose:** live, structured, user-editable knowledge state (“what the system knows so far”).
+
+**Must be:**
+
+* A text editor (markdown or rich text is fine; markdown recommended)
+* Auto-saved (debounced)
+* User edits become **authoritative** context for agents
+
+**Content structure requirement:**
+
+* Must always include:
+
+  * **Project summary block**
+  * **Per-item block(s)** with stable item identifiers
+* Display behavior:
+
+  * If single item selected → show that item block + project block
+  * If multiple selected → show project block + blocks for each selected item
+  * If All Project selected → show project block + optionally a compact list of items
+
+**Conflict rule:**
+
+* If user edits conflict with previous model output, the user text wins.
+* Agents must treat the right panel as “source of truth” for ambiguous details.
+
+---
+
+### Region D — Bottom region (full width): Structured item editor
+
+**Purpose:** the canonical structured representation (what ultimately feeds downstream processes like accounting).
+
+**Behavior:**
+
+* Show the selected item in the same structured form you already have “in solutioning.”
+* If multiple items selected:
+
+  * show tabbed item editors OR collapsible stacked editors (pick one; tabs recommended).
+* No silent overwrites:
+
+  * When updater runs, show a **preview diff** or at minimum “fields changed” confirmation banner.
+
+---
+
+## 3) Two AI modes per tab
+
+Each tab supports exactly two interaction modes:
+
+### Mode 1: Clarify & Suggest (default)
+
+* On each user turn, the system produces:
+
+  * **3 targeted clarification questions**
+  * **3 actionable suggestions**
+* The goal is to converge toward “complete enough” information for structured conversion.
+* It must not fill structured fields automatically.
+
+### Mode 2: Generate / Expand (manual)
+
+* Used when the user wants the AI to propose:
+
+  * new items/concepts
+  * expanded approaches
+  * alternative solutions
+  * more detailed plans
+* Output may include “candidate item outlines” but must not directly overwrite the bottom editor until the user clicks “Turn into item”.
+
+**Mode is UI-visible and persisted per tab per project** (so returning users keep the last mode).
+
+---
+
+## 4) Data model changes (Convex)
+
+The current repo spec lists many tables but does not define a first-class “project items/concepts” entity as the UI now requires. Implement a dedicated items table aligned with existing Convex patterns and indexing. 
+
+### New table: `projectItems`
+
+**Fields (minimum):**
+
+* `projectId`
+* `title` (string)
+* `shortDescription` (string)
+* `type` (enum/string)
+* `status` (enum/string; e.g. draft / approved / blocked / done)
+* `sortOrder` (number)
+* `createdAt`, `updatedAt`
+
+**Structured data fields (for bottom editor):**
+
+* `itemData` (object / JSON): the canonical structured fields used by solutioning/accounting integration
+* `materials` / `labor` / `purchases` references if you already store them separately; otherwise keep inside `itemData`
+
+**Agent workspaces:**
+
+* `currentUnderstandingText` (string) — item-level block (optional if you keep only one shared right-panel doc)
+* `currentUnderstandingManualEdits` (string) — or track manual edits separately with version stamps
+
+**Indexes:**
+
+* by `projectId`
+* by `projectId + sortOrder`
+* optional by `projectId + status`, `projectId + type`
+
+### New table: `flowWorkspaces` (recommended)
+
+Stores the right panel text and state per tab + scope.
+
+* `projectId`
+* `tab` enum: ideation/planning/solutioning
+* `scopeType`: allProject / singleItem / multiItem
+* `scopeItemIds`: array
+* `text` (string) — the right panel text (authoritative)
+* `manualEditedAt`
+* `updatedBy` (user/system)
+* version fields (`revision`, `lastAgentRunId`)
+
+This avoids duplicating right-panel storage inside each item, and makes multi-item/all-project easy.
+
+### Conversations
+
+You already have `conversations` and agent patterns. Extend conversation metadata to include:
+
+* `tab`
+* `mode`
+* `scopeType`
+* `scopeItemIds`
+
+(Do not create a new chat system; reuse the existing conversation storage patterns.) 
+
+---
+
+## 5) Agent architecture (3 roles)
+
+You want 3 agent roles. Implement them as either:
+
+* 3 separate Convex actions, or
+* 1 orchestrator action that calls 3 internal actions in sequence and returns combined output.
+
+Given the existing agent stack uses structured outputs validated with Zod schemas and logs to `agentRuns`, follow the same pattern. 
+
+### Agent A: Clarification & Suggestions Agent
+
+**Trigger:** every user message (unless user disables)
+**Input context:**
+
+* project metadata
+* selection scope (all/single/multi)
+* relevant itemData (if item selected)
+* right panel text (authoritative)
+* recent conversation turns
+* relevant RAG/knowledge snippets if available (optional per turn; can be “on demand”)
+
+**Output contract (strict):**
+
+* `clarificationQuestions`: exactly 3 strings
+* `suggestions`: exactly 3 objects:
+
+  * `title`
+  * `details`
+  * `whyItHelps` (short)
+  * `appliesTo` (project | itemId | list of itemIds)
+* `missingFields`: list of structured fields still unknown (aligned to `itemData` schema)
+* `confidenceNotes`: short warnings if assumptions are being made
+
+**Hard guardrail:**
+
+* Must not output a full itemData object.
+* Must not instruct the system to silently update structured fields.
+
+---
+
+### Agent B: Current Understanding Writer
+
+**Trigger:** after each user message + after Agent A output, and also when user edits right panel (optional: run “reconcile”)
+**Goal:** update the right panel text in structured format.
+
+**Input context:**
+
+* everything Agent A had
+* plus Agent A outputs
+* plus the current right panel text (including manual edits)
+
+**Output contract:**
+
+* `projectBlock`: markdown/text block
+* `itemBlocks`: map of `itemId -> markdown/text block`
+* `renderHint`: whether to show compact/expanded
+* `diffSummary`: short list of “what changed” for UI banner
+
+**Hard guardrail:**
+
+* Must preserve user-edited facts.
+* If user text says X and model previously said Y, it must adopt X and mark the previous assumption as discarded.
+
+---
+
+### Agent C: Turn Into Item (Updater)
+
+**Trigger:** only when user clicks **Turn into item**
+**Input context:**
+
+* right panel text (authoritative)
+* selected scope + item(s)
+* existing itemData schema and current values
+* tab context (ideation/planning/solutioning)
+
+**Output contract (strict patches, not full overwrites):**
+
+* `updates`: array of `{ itemId, patch, warnings }`
+
+  * `patch` is a field-level patch (only fields with confident mapping)
+  * `warnings` includes any uncertain mappings needing confirmation
+* `requiredUserConfirmations`: list of fields that should be confirmed before applying
+* `proposedNewItems`: optional (if in all-project scope and it’s truly necessary)
+
+**Apply behavior:**
+
+* UI shows a preview (diff or at minimum a changes list)
+* User clicks **Apply**
+* Convex mutation applies the patch
+* Success banner indicates what changed
+
+---
+
+## 6) Tab semantics (what differs between tabs)
+
+Same UI + same 3 agents, but with different focus rules (prompt-level differences only).
+
+### Ideation
+
+* Questions bias toward: vision, constraints, must-haves, creative directions
+* Suggestions bias toward: concept alternatives, features, references, high-level materials/approaches
+* Updater bias: create/shape itemData at “concept level” (not execution-ready)
+
+### Planning
+
+* Questions bias toward: milestones, sequencing, dependencies, time constraints, roles
+* Suggestions bias toward: plan structure, phases, task grouping
+* Updater bias: populate fields related to plan/timeline/task intent (but still not generating full tasks unless explicitly asked)
+
+### Solutioning
+
+* Questions bias toward: build method, material choices, quantities, vendors, safety, installation
+* Suggestions bias toward: concrete how-to, BOM candidates, risks, tests
+* Updater bias: populate execution-ready structured fields (materials/labor/etc.) in correct places so accounting can use them
+
+---
+
+## 7) UI behavior details (must-haves)
+
+### A) Item creation flow
+
+* Click **+ Add item**
+* Create `projectItems` row with:
+
+  * title = “Untitled item”
+  * status = draft
+  * type = default (or prompt user quickly)
+* Auto-select it
+* Chat optionally shows a “starter” prompt: 3 questions targeted at that new item
+
+### B) Selection behavior
+
+* Switching selection:
+
+  * updates chat scope label (e.g., “Scope: Item A + Item B”)
+  * updates right panel view to relevant blocks
+  * updates bottom editor to selected item(s)
+
+### C) Right panel edits
+
+* Debounced autosave
+* When user edits right panel, show “Manual edits saved”
+* Optional: “Reconcile” button to let Agent B rewrite structure without changing user facts
+
+### D) Turn Into Item button
+
+* Enabled when:
+
+  * at least one item exists in selection, OR All Project selection with ability to create items
+* Flow:
+
+  1. Run updater agent
+  2. Show preview of patches
+  3. Apply patches mutation
+  4. Update UI
+
+---
+
+## 8) Backend API (Convex) — required functions
+
+Follow existing Convex patterns (queries/mutations/actions). 
+
+### Queries
+
+* `projectItems.listByProject(projectId)`
+* `projectItems.get(itemId)`
+* `flowWorkspaces.get(projectId, tab, scopeKey)`
+* `conversations.getByScope(projectId, tab, scopeKey)` (or reuse existing with filters)
+
+### Mutations
+
+* `projectItems.create(projectId, initialFields)`
+* `projectItems.update(itemId, patch)`
+* `projectItems.delete(itemId)`
+* `projectItems.reorder(projectId, orderedIds)`
+* `flowWorkspaces.saveText(workspaceId, text, source=user/system)`
+* `flowWorkspaces.ensure(projectId, tab, scopeKey)` (create if missing)
+
+### Actions (agents)
+
+* `agents.flow.chatTurn({ projectId, tab, mode, scope, userMessage })`
+
+  * orchestrates Agent A + Agent B
+  * saves conversation
+  * updates flow workspace text (system update)
+  * returns chat response payload (questions/suggestions + updated right panel blocks)
+* `agents.flow.turnIntoItem({ projectId, tab, scope })`
+
+  * runs Agent C
+  * returns patch preview
+* `projectItems.applyPatchBatch([{itemId, patch}])`
+
+  * apply after user confirm
+
+### Telemetry
+
+* Each action logs to `agentRuns` and streams to `AgentActivityPanel` like existing agents do. 
+
+---
+
+## 9) Integration with existing Solutioning + Accounting
+
+Key requirement: “Updater agent puts data in correct places so it passes to accounting.”
+
+To ensure that:
+
+* Define a **single canonical mapping** between `itemData` fields and whichever downstream tables consume them (sections/materialLines/workLines/etc.).
+* If your existing system already uses accounting tables (`sections`, `materialLines`, `workLines`) for budgeting, then:
+
+  * either store item-level BOM in `itemData` and provide a “Sync to accounting” step, OR
+  * update accounting lines directly via mutations when applying patches.
+
+**Recommended (safer MVP):**
+
+* Update only `projectItems.itemData` first.
+* Provide explicit “Sync to accounting” action later (or keep it inside Solutioning if already implemented).
+  This reduces the risk of corrupting accounting while you validate the new flow.
+
+---
+
+## 10) Acceptance criteria (what “done” means)
+
+### Layout + selection
+
+* Each of the 3 tabs shows the 4-region layout.
+* Left list supports add, select single/multi/all-project, rename, status.
+* Selection changes update all regions consistently.
+
+### Agent behavior
+
+* Each chat turn returns exactly:
+
+  * 3 clarification questions
+  * 3 suggestions
+* Right panel updates after each turn and remains editable.
+* Manual edits are persisted and used as context in subsequent turns.
+
+### No unwanted overwrites
+
+* Structured bottom editor does not get rewritten on every message.
+* Only changes when user clicks **Turn into item** and then **Apply**.
+
+### Conversion works
+
+* Turn into item produces patch preview and applies correctly.
+* Fields land in the correct places in the structured editor.
+
+### Stability
+
+* Existing project pages and agent logging still work (no broken routes, no crashes, no missing data).
+
+---
+
+## 11) Implementation plan (recommended order)
+
+### Phase 1 — Data + APIs
+
+1. Add `projectItems` table + indexes
+2. Add `flowWorkspaces` table
+3. Implement list/create/update/delete/reorder
+4. Implement workspace get/save/ensure
+5. Add conversation metadata filters (tab/mode/scope)
+
+### Phase 2 — UI shell
+
+1. Update the 3 tab pages to the 4-region layout
+2. Implement left panel list + selection + add item
+3. Implement right panel editor with autosave
+4. Hook bottom editor to selected item(s) (reuse existing solutioning editor component)
+
+### Phase 3 — Agent orchestration
+
+1. Implement Agent A schema + prompt adjustments
+2. Implement Agent B schema + prompt adjustments
+3. Implement `chatTurn` action to run A+B and persist results
+4. Implement conversation rendering in center panel
+
+### Phase 4 — Turn Into Item
+
+1. Implement Agent C schema + prompt
+2. Build patch preview UI
+3. Apply patch mutation
+4. Post-apply refresh + banner
+
+### Phase 5 — Hardening
+
+1. Rate-limit / cancel in-flight runs per scope
+2. Add “Regenerate” and “Stop” UX
+3. Add basic validation errors surfaced to user
+4. Add regression checks for existing solutioning/accounting
+
+---
+
+## 12) UX improvements (recommended, optional but high value)
+
+* Add a “Scope pill” header above chat: `All Project` / `Item A` / `Item A + Item B`
+* Add “Completeness meter” per selected item based on `missingFields` returned by Agent A
+* Add “Assumptions” collapsible panel showing what the model is guessing (to encourage user edits)
+* Add a “Lock field” feature in bottom editor to prevent updater from changing certain fields
+
+---
+

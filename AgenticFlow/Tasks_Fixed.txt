@@ -1,0 +1,35 @@
+# Implementation Tasks (Fixed)
+
+## Phase 1: Shared Infrastructure
+- [ ] **Layout Component:** Create `components/layout/AgenticSplitLayout.tsx` (3 cols + 1 bottom).
+- [ ] **State Store:** Create `lib/store/useAgenticStore.ts` for managing selection and summary text.
+- [ ] **Right Pane:** Create `components/agentic/LiveContextEditor.tsx` (Debounced save to Convex/LocalState).
+- [ ] **Chat Pane:** Refactor `AgentChatThread` to support "Suggestions Chips" and "Questions List" rendering.
+
+## Phase 2: Agent Refinement
+- [ ] **Clarifier:** Update `convex/agents/clarifier.ts` to accept `phase` argument and adjust prompt context accordingly.
+- [ ] **Summarizer:** Update `convex/agents/summarizer.ts` to accept `phase` and tailor Markdown structure (e.g., "Concept" vs "Technical Spec").
+- [ ] **Generator:** Update `convex/agents/generator.ts` to support multiple output schemas (Concept, Plan, Item).
+
+## Phase 3: Ideation Tab Refactor (`app/projects/[id]/ideation/`)
+- [ ] Replace existing 2-column layout with `AgenticSplitLayout`.
+- [ ] **Left:** Render `conceptCards` list with checkboxes.
+- [ ] **Right:** Bind to a new `draftSummary` field in `ideationConceptCards` (or a temp session store).
+- [ ] **Bottom:** Embed the existing Concept Card form, wire "Turn into Concept" to `generator` agent.
+
+## Phase 4: Planning Tab Refactor (`app/projects/[id]/planning/`)
+- [ ] Replace layout with `AgenticSplitLayout`.
+- [ ] **Left:** Render `plans` list.
+- [ ] **Right:** Bind to `plans.contentMarkdown`.
+- [ ] **Bottom:** Embed the Markdown Editor/Plan Metadata form.
+
+## Phase 5: Solutioning Tab Refactor (`app/projects/[id]/solutioning/`)
+- [ ] Replace layout with `AgenticSplitLayout`.
+- [ ] **Left:** Reuse `ItemsTreeSidebar` but add checkbox mode.
+- [ ] **Right:** Bind to a new `aiSummary` field on `projectItems` (to persist the "Mental Model").
+- [ ] **Bottom:** Reuse `ItemEditorPanel`, wire "Update Item" to `generator` agent.
+
+## Phase 6: Polish & Data Binding
+- [ ] Ensure "Select All" in Left Pane correctly aggregates context for the agents.
+- [ ] Implement "Diff View" in Right Pane (optional but recommended).
+- [ ] Add "Apply Suggestion" click handlers in Chat.

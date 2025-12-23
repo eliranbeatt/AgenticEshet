@@ -1,0 +1,54 @@
+# Agentic Flow Design & Architecture
+
+## 1. UI Architecture (Frontend)
+- **Framework:** Next.js App Router (`studio-console/app`).
+- **Layout Component:** `AgenticWorkspaceLayout`
+  - Uses `react-resizable-panels` (or similar) for the 3-column split.
+  - **Pane 1 (Left):** `ItemSidebar`
+    - Props: `items`, `onSelectionChange`.
+    - State: `selectedItemIds` (Zustand store).
+  - **Pane 2 (Middle):** `ClarificationChat`
+    - Components: `MessageList`, `SuggestionChips`, `ChatInput`.
+    - Connects to `convex/agents/clarifier.ts`.
+  - **Pane 3 (Right):** `LiveContextEditor`
+    - Component: A Markdown editor (e.g., `MonacoEditor` or `Textarea` with highlighting).
+    - Props: `content` (controlled by Agent 2 output + User edits).
+  - **Pane 4 (Bottom):** `StructuredItemForm`
+    - Reuses the form logic from the existing Solutioning tab.
+    - Read-only mode until "Update" is triggered? Or always editable.
+
+## 2. State Management
+- **Global Store (`useAgenticStore`):**
+  - `selectedItemIds`: string[]
+  - `contextMode`: 'PROJECT' | 'SELECTION'
+  - `liveSummary`: string (The content of the Right Window)
+  - `isGenerating`: boolean
+
+## 3. Backend & Data Model (Convex)
+
+### A. Schema Extensions
+- No major schema changes expected for `items` table.
+- Potential new table `agent_sessions` to persist the chat history and the "live summary" draft if we want it to survive page reloads.
+
+### B. Agent Functions (`convex/agents/`)
+1.  **`clarifier.ts` (Action):**
+    - **Input:** `chatHistory`, `selectedItemIds`, `currentSummary`.
+    - **Prompt:** "You are a Clarification Agent. Analyze the context. Ask 3 questions to fill gaps. Offer 3 suggestions. Output JSON: { questions: [], suggestions: [] }."
+    - **Output:** Structured JSON to render UI elements.
+
+2.  **`summarizer.ts` (Action):**
+    - **Input:** `chatHistory`, `previousSummary`, `userLastMessage`.
+    - **Prompt:** "Update the Project/Item summary based on the new information. Keep it structured. Respect user manual edits."
+    - **Output:** Markdown string.
+
+3.  **`generator.ts` (Action):**
+    - **Input:** `liveSummary`, `targetItemId`.
+    - **Prompt:** "Extract structured data (Description, Steps, Materials) from this summary text. Output JSON matching the Item schema."
+    - **Output:** JSON object to be passed to `items.update` mutation.
+
+## 4. Data Flow
+1.  **User Selects Item:** -> `liveSummary` loaded from Item's last known summary or generated fresh.
+2.  **User Chats:** -> `clarifier` runs -> returns Questions.
+3.  **Parallel:** -> `summarizer` runs -> updates `liveSummary` (Right Window).
+4.  **User Edits Right Window:** -> Updates `liveSummary` state.
+5.  **User Clicks "Turn into Item":** -> `generator` runs -> parses `liveSummary` -> calls `mutation: updateItem`.

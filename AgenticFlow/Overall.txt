@@ -1,0 +1,26 @@
+# Overall Strategy & UX Improvements
+
+## Strategy
+The core innovation here is **"Human-in-the-loop State Management"**. Instead of the AI silently updating the database, it updates a visible, editable "Mental Model" (Right Window). The user verifies this model *before* it is committed to the database (Bottom Pane). This reduces hallucinations and gives the user control over the project's direction.
+
+## UX/AI Suggestions
+
+### 1. Visual Diffing
+When the **Summarizer** updates the Right Window, do not just replace the text. Use a "Diff View" (green highlights for additions, red strikethrough for deletions) so the user sees exactly what the AI learned from the last turn.
+
+### 2. Clickable Suggestions
+The **Clarifier** outputs 3 suggestions. Render these as clickable "Chips" or "Cards" in the chat. Clicking one should:
+- Auto-fill the chat input with "Tell me more about suggestion 1".
+- Or immediately add that suggestion to the Right Window summary.
+
+### 3. "Apply to All" vs. "Apply to Selected"
+Since the Left Bar allows multi-select, the Chat UI should clearly indicate the scope:
+- "You are discussing **3 Items**."
+- "You are discussing the **Entire Project**."
+This prevents accidental mass-updates.
+
+### 4. Streaming Responses
+The Right Window text should stream in (typewriter effect) rather than appearing all at once. This makes the "Thinking" process visible and feels more interactive.
+
+### 5. History Persistence
+Ensure the "Right Window" text is saved to a draft state in the DB. If the user refreshes the page, they shouldn't lose the "Uncommitted" work in that window.

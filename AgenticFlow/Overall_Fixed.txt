@@ -1,0 +1,31 @@
+# Overall Strategy (Fixed)
+
+## The "Agentic Overlay" Strategy
+Instead of building a new "Agentic Flow" feature, we are applying an **"Agentic Overlay"** to the existing workflow. The core logic remains: Ideation -> Planning -> Solutioning. However, the *interaction model* changes from "User types, AI replies" to "User collaborates, AI maintains state".
+
+## Key UX Principles
+
+### 1. The "Mental Model" Window (Right Pane)
+This is the most critical addition. Currently, the AI's understanding is hidden in the chat history. By making it explicit in the Right Pane:
+- The user sees *exactly* what the AI thinks the plan is.
+- The user can correct the AI *before* generating database records.
+- It acts as a "Staging Area" for data.
+
+### 2. Phase-Aware Agents
+The agents are not generic. They know which tab they are in:
+- **Ideation:** The agents are creative, abstract, and focus on "Vibe".
+- **Planning:** The agents are strategic, temporal, and focus on "Sequence".
+- **Solutioning:** The agents are tactical, precise, and focus on "Execution".
+
+### 3. Explicit "Commit" Step
+We stop the AI from auto-generating items on every turn. This reduces noise and database clutter. The "Turn into Item" (Bottom Pane) button gives the user agency to say "Yes, this summary is good. Make it real."
+
+## Migration Strategy
+1.  **Non-Destructive:** We will keep the existing data models (`projectItems`, `plans`, `conceptCards`).
+2.  **Additive Fields:** We may need to add `aiSummary` or `draftContext` fields to these tables to store the Right Pane's content persistently.
+3.  **Incremental Rollout:** We can refactor one tab at a time (start with Ideation as it's simplest).
+
+## Success Metrics
+- **Reduced Hallucinations:** User corrects the Right Pane before the DB update.
+- **Faster Iteration:** "Click to apply suggestion" speeds up the chat loop.
+- **Better Context:** The AI always has the up-to-date "Right Pane" content as context, so it doesn't forget previous decisions.

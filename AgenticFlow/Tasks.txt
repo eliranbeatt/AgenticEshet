@@ -1,0 +1,41 @@
+# Implementation Tasks
+
+## Phase 1: UI Skeleton & Layout
+- [ ] Create `app/projects/[projectId]/agentic/page.tsx`.
+- [ ] Implement 3-column resizable layout using `shadcn/ui` Resizable or CSS Grid.
+- [ ] Implement Bottom Pane (collapsible/fixed).
+
+## Phase 2: Components
+- [ ] **Left Sidebar:**
+  - [ ] Fetch items using `convex/items.ts`.
+  - [ ] Implement Multi-select logic (Checkbox list).
+  - [ ] Visuals: Name, Type badge, Status icon.
+- [ ] **Right Window (Context):**
+  - [ ] Create `LiveContextEditor` component.
+  - [ ] Implement debounced save to local state.
+- [ ] **Bottom Pane (Form):**
+  - [ ] Extract "Solutioning" form fields into a reusable `ItemDataForm` component.
+  - [ ] Ensure it can accept data props to pre-fill fields.
+
+## Phase 3: Agent Logic (Convex)
+- [ ] **Clarifier Agent:**
+  - [ ] Create `convex/agents/clarifier.ts`.
+  - [ ] Define System Prompt for "3 Questions / 3 Suggestions".
+  - [ ] Define Zod return schema.
+- [ ] **Summarizer Agent:**
+  - [ ] Create `convex/agents/summarizer.ts`.
+  - [ ] Define System Prompt for "State Maintenance".
+- [ ] **Generator Agent:**
+  - [ ] Create `convex/agents/generator.ts`.
+  - [ ] Define System Prompt for "Text to Schema" conversion.
+
+## Phase 4: Integration
+- [ ] Connect Chat UI to `clarifier` action.
+- [ ] Chain `summarizer` action to run after `clarifier` (or in parallel).
+- [ ] Wire up "Turn into Item" button to `generator` action.
+- [ ] Implement `mutation: updateItem` to save the generated data.
+
+## Phase 5: Polish
+- [ ] Add "Loading" skeletons for the 3 windows.
+- [ ] Implement "Diff View" for the Right Window (show what the agent added).
+- [ ] Error handling for Agent timeouts.

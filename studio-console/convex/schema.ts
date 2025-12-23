@@ -682,7 +682,6 @@ export default defineSchema({
             v.literal(TASK_PRIORITIES[0]),
             v.literal(TASK_PRIORITIES[1]),
             v.literal(TASK_PRIORITIES[2])
-        ),  v.literal("Low")
         ),
         parentTaskId: v.optional(v.id("tasks")),
         sortKey: v.optional(v.string()),

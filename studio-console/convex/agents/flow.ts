@@ -6,62 +6,15 @@ import { api, internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
 import type { Doc } from "../_generated/dataModel";
 import { ItemSpecV2Schema } from "../lib/zodSchemas";
+import { buildFlowAgentASystemPrompt, buildFlowAgentBSystemPrompt } from "../prompts/flowPromptPack";
 
 const tabValidator = v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning"));
 const modeValidator = v.union(v.literal("clarify"), v.literal("generate"));
 const scopeTypeValidator = v.union(v.literal("allProject"), v.literal("singleItem"), v.literal("multiItem"));
 
-const AgentAParsedSchema = z.object({
-    clarificationQuestions: z.array(z.string()),
-    suggestions: z
-        .array(
-            z.object({
-                title: z.string(),
-                details: z.string(),
-                whyItHelps: z.string(),
-            })
-        ),
-});
-
 const AgentBWorkspaceSchema = z.object({
     updatedWorkspaceMarkdown: z.string(),
 });
-
-function labelForTab(tab: "ideation" | "planning" | "solutioning") {
-    if (tab === "ideation") return "Ideation";
-    if (tab === "planning") return "Planning";
-    return "Solutioning";
-}
-
-function buildAgentASystemPrompt(args: {
-    tab: "ideation" | "planning" | "solutioning";
-    mode: "clarify" | "generate";
-}) {
-    const focus = labelForTab(args.tab);
-
-    if (args.mode === "generate") {
-        return [
-            `You are assisting in ${focus}.`,
-            "Generate/Expand mode.",
-            "Your goal is to propose new items, expanded approaches, or detailed plans based on the user's request.",
-            "Do NOT ask clarification questions unless absolutely necessary (return empty list if none).",
-            "Return 3 to 5 actionable suggestions that are relevant to the user's request (features, efficiency improvements, etc.).",
-            "Use this markdown format exactly:",
-            "## Clarification questions\n(Optional, leave empty if none)\n\n## Suggestions\n1. **Title**: ...\n   - Details: ...\n   - Why it helps: ...\n2. ...",
-            "Do not claim to have updated any structured fields.",
-        ].join("\n");
-    }
-
-    return [
-        `You are assisting in ${focus}.`,
-        "Clarify & Suggest mode.",
-        "Return exactly 3 targeted clarification questions and exactly 3 actionable suggestions.",
-        "Suggestions should be relevant to the questions asked (features, efficiency improvements, etc.), not just implementation details.",
-        "Use this markdown format exactly:",
-        "## Clarification questions\n1. ...\n2. ...\n3. ...\n\n## Suggestions\n1. **Title**: ...\n   - Details: ...\n   - Why it helps: ...\n2. ...\n3. ...",
-        "Do not output a full item spec. Do not say you updated fields.",
-    ].join("\n");
-}
 
 export const send = action({
     args: {
@@ -149,6 +102,8 @@ export const send = action({
                     ? `Single Item: ${selectedItems[0]?.title ?? String(args.scopeItemIds?.[0] ?? "")}`
                     : `Multi Item: ${selectedItems.map((i) => i.title).join(", ")}`;
 
+        const language = project.defaultLanguage === "en" ? "en" : "he";
+
         const transcript = [
             ...messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`),
             `USER: ${args.userContent}`,
@@ -168,17 +123,20 @@ export const send = action({
         ].join("\n");
 
         let finalAssistantMarkdown = "";
-        let parsedA: z.infer<typeof AgentAParsedSchema> | null = null;
 
         try {
             let buffer = "";
             let lastFlushedAt = 0;
             await streamChatText({
-                systemPrompt: buildAgentASystemPrompt({ tab: args.tab, mode: args.mode }),
+                systemPrompt: buildFlowAgentASystemPrompt({
+                    tab: args.tab,
+                    mode: args.mode,
+                    language,
+                }),
                 userPrompt: agentAUserPrompt,
                 model: args.model,
                 thinkingMode: args.thinkingMode,
-                language: project.defaultLanguage === "en" ? "en" : "he",
+                language,
                 onDelta: async (delta) => {
                     buffer += delta;
                     const now = Date.now();
@@ -206,24 +164,6 @@ export const send = action({
                 message: "Agent A completed chat response",
             });
 
-            try {
-                parsedA = await callChatWithSchema(AgentAParsedSchema, {
-                    model: args.model,
-                    systemPrompt:
-                        "Extract EXACTLY 3 clarificationQuestions and EXACTLY 3 suggestions from the assistant markdown. Return JSON only.",
-                    userPrompt: finalAssistantMarkdown,
-                    maxRetries: 2,
-                    language: "en",
-                });
-            } catch (error) {
-                await ctx.runMutation(internal.agentRuns.appendEvent, {
-                    runId,
-                    level: "warn",
-                    stage: "agent_a",
-                    message: `Agent A parse failed: ${error instanceof Error ? error.message : String(error)}`,
-                });
-            }
-
             await ctx.runMutation(internal.agentRuns.setStatus, {
                 runId,
                 status: "running",
@@ -232,13 +172,7 @@ export const send = action({
 
             const agentB = await callChatWithSchema(AgentBWorkspaceSchema, {
                 model: args.model,
-                systemPrompt: [
-                    "You update the 'Current Understanding' workspace markdown.",
-                    "Take the user's latest message and the assistant response, and update the workspace text accordingly.",
-                    "Preserve existing structure if present.",
-                    "Do not invent facts; if unsure, leave TODO bullets or open questions.",
-                    "Return JSON only.",
-                ].join("\n"),
+                systemPrompt: buildFlowAgentBSystemPrompt({ tab: args.tab, language }),
                 userPrompt: JSON.stringify(
                     {
                         tab: args.tab,
@@ -248,13 +182,12 @@ export const send = action({
                         workspaceMarkdown: workspace?.text ?? "",
                         userMessage: args.userContent,
                         assistantMessage: finalAssistantMarkdown,
-                        parsedAssistant: parsedA,
                     },
                     null,
                     2
                 ),
                 maxRetries: 2,
-                language: project.defaultLanguage === "en" ? "en" : "he",
+                language,
             });
 
             await ctx.runMutation(api.flowWorkspaces.saveText, {

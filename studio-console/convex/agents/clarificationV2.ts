@@ -481,6 +481,16 @@ function normalizeItemUpdateOutput(
     const subtasksRaw = Array.isArray(breakdown.subtasks) ? breakdown.subtasks : [];
     const subtasks = subtasksRaw.map((entry, index) => {
         const s = typeof entry === "object" && entry ? (entry as Record<string, unknown>) : {};
+
+        const taskProjectionRaw =
+            typeof s.taskProjection === "object" && s.taskProjection ? (s.taskProjection as Record<string, unknown>) : null;
+        const taskProjection = taskProjectionRaw
+            ? {
+                  createTask: taskProjectionRaw.createTask === true,
+                  titleOverride: typeof taskProjectionRaw.titleOverride === "string" ? taskProjectionRaw.titleOverride : undefined,
+              }
+            : undefined;
+
         return {
             id: typeof s.id === "string" ? s.id : `sub_${index + 1}`,
             title: typeof s.title === "string" ? s.title : "Subtask",
@@ -488,7 +498,7 @@ function normalizeItemUpdateOutput(
             status: typeof s.status === "string" ? s.status : "todo",
             estMinutes: typeof s.estMinutes === "number" ? s.estMinutes : (s.estMinutes === null ? null : undefined),
             children: Array.isArray(s.children) ? s.children : undefined,
-            taskProjection: typeof s.taskProjection === "object" && s.taskProjection ? (s.taskProjection as any) : undefined,
+            taskProjection,
         };
     });
 

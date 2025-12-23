@@ -4,12 +4,9 @@ import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
 import { ConceptPacketSchema } from "../lib/zodSchemas";
+import { chatRules, extractGuardrails, ideationPrompt, sharedContextContract } from "../prompts/itemsPromptPack";
 
-const FALLBACK_SYSTEM_PROMPT = [
-    "You are an ideation assistant for experiential design / studio build projects.",
-    "You propose concepts that are realistic to execute and aligned with constraints.",
-    "Always default to the project's default language unless the user explicitly requests otherwise.",
-].join("\n");
+const FALLBACK_SYSTEM_PROMPT = [sharedContextContract, extractGuardrails, chatRules, ideationPrompt].join("\n\n");
 
 type ParsedConcept = {
     title: string;

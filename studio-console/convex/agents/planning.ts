@@ -3,6 +3,13 @@ import { action, internalAction, internalQuery } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ChangeSetSchema } from "../lib/zodSchemas";
+import {
+  changeSetSchemaText,
+  chatRules,
+  extractGuardrails,
+  planningPrompt,
+  sharedContextContract,
+} from "../prompts/itemsPromptPack";
 
 // 1. DATA ACCESS
 export const getContext: ReturnType<typeof internalQuery> = internalQuery({
@@ -66,7 +73,9 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
 
     return {
       project,
-      systemPrompt: skill?.content || "You are an expert planner.",
+      systemPrompt:
+        skill?.content ||
+        [sharedContextContract, extractGuardrails, chatRules, changeSetSchemaText, planningPrompt].join("\n\n"),
       existingPlans,
       latestClarification,
       knowledgeDocs,

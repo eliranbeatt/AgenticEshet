@@ -284,8 +284,8 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                 threadId={threadId}
                                 placeholder={
                                     mode === "clarify"
-                                        ? "Describe what you want; I’ll ask 3 questions + 3 suggestions"
-                                        : "Ask to generate/expand approaches"
+                                            ? "Describe what you want; I’ll ask key questions and propose a draft direction"
+                                            : "Ask to generate/expand ideas and execution approaches"
                                 }
                                 onSend={async (content) => {
                                     await sendFlowTurn({
@@ -316,7 +316,6 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                     });
                                     return `![${file.name}](${url})`;
                                 }}
-                                heightClassName="h-full"
                                 heightClassName="h-full"
                             />
                         )}

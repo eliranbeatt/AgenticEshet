@@ -339,8 +339,14 @@ CRITICAL INSTRUCTIONS:
 6. "version" must be "ItemSpecV2".
 
 IMPORTANT SCHEMA DETAILS:
-- "materials" array items MUST have a "label" (string).
-- "labor" array items MUST have a "workType" (string) and "rateType" (one of "hour", "day", "flat").
+- "materials" array items MUST have:
+  - "id" (string, generate a unique one e.g. "mat_1")
+  - "label" (string)
+- "labor" array items MUST have:
+  - "id" (string, generate a unique one e.g. "lab_1")
+  - "workType" (string, e.g. "Studio", "Field")
+  - "role" (string, e.g. "Carpenter")
+  - "rateType" (one of "hour", "day", "flat")
 - "openQuestions" MUST be an array of strings, NOT objects.
 
 The goal is to convert the unstructured text into a rich, actionable structured plan.`;

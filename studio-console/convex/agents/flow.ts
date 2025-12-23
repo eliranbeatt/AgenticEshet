@@ -339,6 +339,9 @@ CRITICAL INSTRUCTIONS:
 6. "version" must be "ItemSpecV2".
 
 IMPORTANT SCHEMA DETAILS:
+- "subtasks" array items MUST have:
+  - "id" (string, generate a unique one e.g. "task_1")
+  - "title" (string) - REQUIRED. Do NOT use "label".
 - "materials" array items MUST have:
   - "id" (string, generate a unique one e.g. "mat_1")
   - "label" (string) - REQUIRED. If unknown, use a generic label like "Material".
@@ -354,6 +357,9 @@ EXAMPLE JSON STRUCTURE:
   "version": "ItemSpecV2",
   "identity": { "title": "Example Item", "typeKey": "custom" },
   "breakdown": {
+    "subtasks": [
+      { "id": "task_1", "title": "Design Phase", "estMinutes": 120 }
+    ],
     "materials": [
       { "id": "mat_1", "label": "Plywood Sheets", "qty": 5, "unit": "pcs" }
     ],

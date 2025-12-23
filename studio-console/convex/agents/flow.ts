@@ -326,16 +326,19 @@ export const generateItemUpdate = action({
             scenario: Doc<"projectScenarios">;
         };
 
-        const systemPrompt = `You are an expert project manager.
+        const systemPrompt = `You are an expert project manager and estimator.
 Analyze the provided "Current Understanding" text and extract the full specification for the main item described.
 Return it as a structured ItemSpecV2 object.
-You MUST include the following fields:
-- "version": "ItemSpecV2"
-- "identity": { "title": "...", "typeKey": "..." }
 
-Ensure the title and typeKey are populated in the identity object.
-If specific details are missing, leave them optional or use reasonable defaults based on the context.
-Do not invent information not present or implied by the text.`;
+CRITICAL INSTRUCTIONS:
+1. You MUST populate the "identity" object with "title" and "typeKey".
+2. You MUST populate the "breakdown" object. Extract every implied task into "subtasks", every material into "materials", and every role/labor into "labor".
+3. You MUST populate the "state" object with any "openQuestions", "assumptions", and "decisions" found in the text.
+4. Do not leave arrays empty if there is ANY information in the text that can be mapped to them.
+5. Infer reasonable details (like estimated minutes, material quantities) if they are implied by the scope, but mark them as assumptions if uncertain.
+6. "version" must be "ItemSpecV2".
+
+The goal is to convert the unstructured text into a rich, actionable structured plan.`;
 
         const result = await callChatWithSchema(
             ItemSpecV2Schema,

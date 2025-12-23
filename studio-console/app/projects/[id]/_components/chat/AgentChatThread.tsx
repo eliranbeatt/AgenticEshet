@@ -6,6 +6,8 @@ import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChatComposer } from "./ChatComposer";
+import { useThinkingMode } from "../../../../ThinkingModeContext";
+import { useModel } from "../../../../ModelContext";
 
 function MessageBubble({ message }: { message: Doc<"chatMessages"> }) {
     const isUser = message.role === "user";
@@ -56,6 +58,8 @@ export function AgentChatThread({
 }) {
     const messages = useQuery(api.chat.listMessages, { threadId });
     const sendAndStreamText = useAction(api.chat.sendAndStreamText);
+    const { thinkingMode } = useThinkingMode();
+    const { selectedModel } = useModel();
 
     const isLoading = messages === undefined;
 
@@ -82,7 +86,13 @@ export function AgentChatThread({
                     if (!systemPrompt) {
                         throw new Error("systemPrompt is required when onSend is not provided");
                     }
-                    await sendAndStreamText({ threadId, userContent: content, systemPrompt });
+                    await sendAndStreamText({
+                        threadId,
+                        userContent: content,
+                        systemPrompt,
+                        model: selectedModel,
+                        thinkingMode,
+                    });
                 }}
             />
         </div>

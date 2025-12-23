@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
-import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 import { Plus, Wand2, Pencil, Trash2, Save, X } from "lucide-react";
 import { type ProjectAccountingData } from "./AccountingTypes";
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { type Doc } from "../../../../../convex/_generated/dataModel";
+import { type Doc } from "@/convex/_generated/dataModel";
 
 export type SectionStats = {
     plannedMaterialsCostE: number;

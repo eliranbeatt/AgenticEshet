@@ -3,7 +3,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import ConvexClientProvider from "./ConvexClientProvider";
 import { ThinkingModeProvider } from "./ThinkingModeContext";
+import { ModelProvider } from "./ModelContext";
 import ThinkingModeToggle from "./ThinkingModeToggle";
+import ModelSelector from "./ModelSelector";
 import SidebarAgentActivity from "./SidebarAgentActivity";
 import "./globals.css";
 
@@ -34,7 +36,8 @@ export default function RootLayout({
             <body className={`antialiased`}>
                 <ConvexClientProvider>
                     <ThinkingModeProvider>
-                        <div className="flex min-h-screen w-full bg-background text-foreground">
+                        <ModelProvider>
+                            <div className="flex min-h-screen w-full bg-background text-foreground">
                             <aside className="w-64 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col">
                                 <div className="p-6 text-xl font-bold tracking-tight">
                                     Magnetic Studio
@@ -73,6 +76,7 @@ export default function RootLayout({
                                 </nav>
                                 <SidebarAgentActivity />
                                 <div className="border-t border-sidebar-border p-4 space-y-3">
+                                    <ModelSelector />
                                     <ThinkingModeToggle />
                                     <div className="text-xs text-muted-foreground">
                                         Agentic Eshet v0.1
@@ -83,6 +87,7 @@ export default function RootLayout({
                                 {children}
                             </main>
                         </div>
+                        </ModelProvider>
                     </ThinkingModeProvider>
                 </ConvexClientProvider>
             </body>

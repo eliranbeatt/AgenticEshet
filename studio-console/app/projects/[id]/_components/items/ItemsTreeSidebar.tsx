@@ -20,7 +20,7 @@ export function ItemsTreeSidebar() {
         includeTab: tabScope,
         includeDrafts: showDraftItems,
     });
-    const templates = useQuery(api.items.listTemplates, {});
+    const templates = useQuery(api.items.listTemplates, {}) as Array<Doc<"itemTemplates">> | undefined;
 
     const createManual = useMutation(api.items.createManual);
     const createFromTemplate = useMutation(api.items.createFromTemplate);

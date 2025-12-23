@@ -55,9 +55,9 @@ export function QuoteWizard({
             }
         }
 
-        const itemsById = new Map((itemsWithSpecs ?? []).map((entry: any) => [entry.item._id, entry]));
+        const itemsById = new Map((itemsWithSpecs ?? []).map((entry) => [entry.item._id, entry]));
         const itemLines = (itemsWithSpecs ?? [])
-            .map((entry: any) => {
+            .map((entry) => {
                 const itemId = String(entry.item._id);
                 const includeInQuote = entry.spec.quote?.includeInQuote ?? true;
                 if (!includeInQuote) return null;

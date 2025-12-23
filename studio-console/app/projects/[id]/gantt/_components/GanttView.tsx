@@ -58,7 +58,7 @@ export default function GanttView() {
                 progress: t.status === "done" ? 100 : t.status === "in_progress" ? 50 : 0,
                 isDisabled: false,
                 styles: { progressColor: "#ffbb54", progressSelectedColor: "#ff9e0d" },
-                dependencies: (t.dependencies ?? []).map(d => d as string),
+                dependencies: ((t.dependencies as Array<Id<"tasks">> | undefined) ?? []).map((d) => String(d)),
             };
         });
     }, [itemsData?.items, tasks]);

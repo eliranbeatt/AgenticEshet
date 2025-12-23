@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 // import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import ConvexClientProvider from "./ConvexClientProvider";
-import { ThinkingModeProvider } from "./ThinkingModeContext";
-import { ModelProvider } from "./ModelContext";
-import ThinkingModeToggle from "./ThinkingModeToggle";
-import ModelSelector from "./ModelSelector";
-import SidebarAgentActivity from "./SidebarAgentActivity";
+import { ThinkingModeProvider } from "./_context/ThinkingModeContext";
+import { ModelProvider } from "./_context/ModelContext";
+import ThinkingModeToggle from "./_components/ThinkingModeToggle";
+import ModelSelector from "./_components/ModelSelector";
+import SidebarAgentActivity from "./_components/SidebarAgentActivity";
 import "./globals.css";
 
 /*

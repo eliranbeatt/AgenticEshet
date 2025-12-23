@@ -122,7 +122,7 @@ export async function POST(req: Request) {
             quoteVersion: data.quote.version,
             currency: data.quote.currency,
             totalAmount: data.quote.totalAmount,
-            breakdown: data.breakdown.map((b) => ({
+          breakdown: (data.breakdown as Array<{ label: string; amount: number; notes?: string | null }>).map((b) => ({
                 label: b.label,
                 amount: b.amount,
                 notes: b.notes ?? null,

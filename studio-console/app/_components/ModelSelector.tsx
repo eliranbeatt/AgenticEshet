@@ -1,6 +1,6 @@
 "use client";
 
-import { useModel } from "./ModelContext";
+import { useModel } from "../_context/ModelContext";
 
 export default function ModelSelector() {
     const { selectedModel, setSelectedModel } = useModel();

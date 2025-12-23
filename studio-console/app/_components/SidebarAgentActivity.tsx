@@ -2,7 +2,7 @@
 
 import type { Id } from "@/convex/_generated/dataModel";
 import { useParams, usePathname } from "next/navigation";
-import { AgentActivityPanel } from "./projects/[id]/_components/AgentActivityPanel";
+import { AgentActivityPanel } from "../projects/[id]/_components/AgentActivityPanel";
 
 export default function SidebarAgentActivity() {
     const pathname = usePathname();

@@ -4,6 +4,15 @@ import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { ItemSpecV2Schema, ItemUpdateOutputSchema, type ItemSpecV2 } from "./lib/zodSchemas";
 import { syncItemProjections } from "./lib/itemProjections";
+import {
+    parseItemSpec,
+    buildSearchText,
+    buildBaseItemSpec,
+    normalizeRateType,
+    buildMaterialSpec,
+    buildLaborSpec,
+    buildSpecFromAccounting
+} from "./lib/itemHelpers";
 
 const tabScopeValidator = v.union(
     v.literal("ideation"),
@@ -15,94 +24,19 @@ const tabScopeValidator = v.union(
     v.literal("quote")
 );
 
-function parseItemSpec(data: unknown) {
-    const parsed = ItemSpecV2Schema.safeParse(data);
-    if (!parsed.success) {
-        console.error("Invalid ItemSpecV2", parsed.error.flatten());
-        throw new Error("Invalid ItemSpecV2");
-    }
-    return parsed.data;
-}
 
-function buildSearchText(args: { name?: string; description?: string; title?: string; typeKey?: string }) {
-    const name = args.name ?? args.title ?? "";
-    const description = args.description ?? "";
-    const typeKey = args.typeKey ? `\n${args.typeKey}` : "";
-    return `${name}\n${description}${typeKey}`.trim();
-}
 
-function buildBaseItemSpec(title: string, typeKey: string, description?: string) {
-    return parseItemSpec({
-        version: "ItemSpecV2",
-        identity: {
-            title,
-            typeKey,
-            description,
-        },
-    });
-}
 
-function normalizeRateType(rateType: string): "hour" | "day" | "flat" {
-    if (rateType === "hour" || rateType === "day" || rateType === "flat") {
-        return rateType;
-    }
-    return "hour";
-}
 
-function buildMaterialSpec(line: Doc<"materialLines">) {
-    return {
-        id: line.itemMaterialId ?? line._id,
-        category: line.category,
-        label: line.label,
-        description: line.description,
-        qty: line.plannedQuantity,
-        unit: line.unit,
-        unitCostEstimate: line.plannedUnitCost,
-        vendorName: line.vendorName,
-        procurement: line.procurement,
-        status: line.status,
-        note: line.note,
-    };
-}
 
-function buildLaborSpec(line: Doc<"workLines">) {
-    return {
-        id: line.itemLaborId ?? line._id,
-        workType: line.workType,
-        role: line.role,
-        rateType: normalizeRateType(line.rateType),
-        quantity: line.plannedQuantity,
-        unitCost: line.plannedUnitCost,
-        description: line.description,
-    };
-}
 
-function buildSpecFromAccounting(args: {
-    item: Doc<"projectItems">;
-    section: Doc<"sections">;
-    materials: Doc<"materialLines">[];
-    workLines: Doc<"workLines">[];
-    baseSpec?: ItemSpecV2;
-}) {
-    const base = args.baseSpec ?? buildBaseItemSpec(args.item.title, args.item.typeKey);
-    return ItemSpecV2Schema.parse({
-        ...base,
-        identity: {
-            ...base.identity,
-            title: args.section.name,
-            typeKey: base.identity.typeKey,
-            description: args.section.description ?? base.identity.description,
-            accountingGroup: args.section.group,
-        },
-        breakdown: {
-            ...base.breakdown,
-            materials: args.materials.map(buildMaterialSpec),
-            labor: args.workLines.map(buildLaborSpec),
-        },
-        state: base.state ?? { openQuestions: [], assumptions: [], decisions: [] },
-        quote: base.quote ?? { includeInQuote: true },
-    });
-}
+
+
+
+
+
+
+
 
 // --------------------------------------------------------------------------
 // Queries
@@ -267,6 +201,16 @@ export const listTree = query({
 
         items.sort((a, b) => (a.sortKey ?? "").localeCompare(b.sortKey ?? ""));
         return items;
+    },
+});
+
+export const listByIds = query({
+    args: {
+        itemIds: v.array(v.id("projectItems")),
+    },
+    handler: async (ctx, args) => {
+        const items = await Promise.all(args.itemIds.map((id) => ctx.db.get(id)));
+        return items.filter((i): i is Doc<"projectItems"> => Boolean(i));
     },
 });
 
@@ -940,5 +884,78 @@ export const agentProposeItemUpdate = action({
         });
 
         return { revisionId: result.revisionId };
+    },
+});
+
+export const applySpec = mutation({
+    args: {
+        projectId: v.id("projects"),
+        itemId: v.optional(v.id("projectItems")),
+        spec: v.any(), // We'll parse with ItemSpecV2Schema inside
+    },
+    handler: async (ctx, args) => {
+        const spec = ItemSpecV2Schema.parse(args.spec);
+        const now = Date.now();
+
+        let itemId = args.itemId;
+
+        if (!itemId) {
+            // Create new item
+            itemId = await ctx.db.insert("projectItems", {
+                projectId: args.projectId,
+                title: spec.identity.title,
+                typeKey: spec.identity.typeKey,
+                status: "draft",
+                createdAt: now,
+                updatedAt: now,
+                latestRevisionNumber: 0,
+                createdBy: "user", // Triggered by user via UI
+            });
+        } else {
+            // Update existing item basic fields
+            await ctx.db.patch(itemId, {
+                title: spec.identity.title,
+                typeKey: spec.identity.typeKey,
+                updatedAt: now,
+            });
+        }
+
+        // Create a revision
+        const item = await ctx.db.get(itemId);
+        if (!item) throw new Error("Item not found");
+
+        const revisionNumber = (item.latestRevisionNumber || 0) + 1;
+
+        const revisionId = await ctx.db.insert("itemRevisions", {
+            projectId: args.projectId,
+            itemId: itemId,
+            tabScope: "planning", // Default to planning for now
+            state: "approved", // Auto-approve for "Turn into item" flow
+            revisionNumber,
+            baseApprovedRevisionId: item.approvedRevisionId,
+            data: spec,
+            summaryMarkdown: "Applied from Agentic Flow",
+            createdBy: { kind: "user" },
+            createdAt: now,
+        });
+
+        await ctx.db.patch(itemId, {
+            approvedRevisionId: revisionId,
+            latestRevisionNumber: revisionNumber,
+            status: "approved",
+        });
+        
+        // Sync projections
+        const revision = await ctx.db.get(revisionId);
+        if (revision) {
+             await syncItemProjections(ctx, {
+                item: { ...item, title: spec.identity.title, typeKey: spec.identity.typeKey },
+                revision,
+                spec,
+                force: true,
+            });
+        }
+
+        return { itemId, revisionId };
     },
 });

@@ -3,9 +3,11 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import type { Doc, Id } from "../../../../../convex/_generated/dataModel";
 
 type EntityType = "materialLine" | "projectItem" | "task" | "quote";
+
+type AssetWithUrl = Doc<"projectAssets"> & { url?: string | null };
 
 export function ImagePicker({
     projectId,
@@ -16,8 +18,12 @@ export function ImagePicker({
     entityType: EntityType;
     entityId: string;
 }) {
-    const linked = useQuery(api.assets.listEntityAssets, { projectId, entityType, entityId });
-    const allImages = useQuery(api.assets.listProjectAssets, { projectId, kind: "image" });
+    const linked = useQuery(api.assets.listEntityAssets, { projectId, entityType, entityId }) as
+        | AssetWithUrl[]
+        | undefined;
+    const allImages = useQuery(api.assets.listProjectAssets, { projectId, kind: "image" }) as
+        | AssetWithUrl[]
+        | undefined;
 
     const generateUploadUrl = useMutation(api.assets.generateUploadUrl);
     const createAssetFromUpload = useMutation(api.assets.createAssetFromUpload);

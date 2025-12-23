@@ -23,7 +23,7 @@ export function QuotePreview({ quoteId }: { quoteId: Id<"quotes"> }) {
     const quote = data?.quote as Doc<"quotes"> | undefined;
     const breakdown = useMemo<QuoteBreakdownItem[]>(() => {
         if (!data?.breakdown) return [];
-        return data.breakdown.map((item: any) => ({
+        return data.breakdown.map((item) => ({
             label: item.label,
             amount: item.amount,
             currency: item.currency,

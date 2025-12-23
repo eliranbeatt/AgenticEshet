@@ -26,6 +26,7 @@ export function TaskModal({
     const updateTask = useMutation(api.tasks.updateTask);
     const sendAiPatch = useAction(api.agents.taskEditor.send);
     const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
+    const quests = useQuery(api.quests.list, { projectId });
 
     const [threadId, setThreadId] = useState<Id<"chatThreads"> | null>(null);
 
@@ -34,6 +35,7 @@ export function TaskModal({
     const [status, setStatus] = useState<Doc<"tasks">["status"]>(task.status);
     const [category, setCategory] = useState<Doc<"tasks">["category"]>(task.category);
     const [priority, setPriority] = useState<Doc<"tasks">["priority"]>(task.priority);
+    const [questId, setQuestId] = useState<Id<"quests"> | "">(task.questId ?? "");
     const [estimatedMinutes, setEstimatedMinutes] = useState<string>(
         task.estimatedMinutes === null || task.estimatedMinutes === undefined ? "" : String(task.estimatedMinutes)
     );
@@ -104,6 +106,7 @@ export function TaskModal({
             status !== task.status ||
             category !== task.category ||
             priority !== task.priority ||
+            questId !== (task.questId ?? "") ||
             linkedItemId !== (task.itemId ?? "") ||
             linkedSubtaskId !== (task.itemSubtaskId ?? "") ||
             (task.estimatedMinutes ?? null) !== (Number.isFinite(est) ? est : null) ||
@@ -119,6 +122,7 @@ export function TaskModal({
         linkedItemId,
         linkedSubtaskId,
         priority,
+        questId,
         status,
         stepsText,
         subtasks,
@@ -142,6 +146,7 @@ export function TaskModal({
             status,
             category,
             priority,
+            questId: questId || undefined,
             itemId: linkedItemId || undefined,
             itemSubtaskId: linkedSubtaskId || undefined,
             estimatedMinutes: estimated,
@@ -247,6 +252,24 @@ export function TaskModal({
                                     {priorityOptions.map((p) => (
                                         <option key={p} value={p}>
                                             {p}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                                    Quest
+                                </label>
+                                <select
+                                    className="w-full border rounded px-3 py-2 text-sm bg-white"
+                                    value={questId}
+                                    onChange={(e) => setQuestId(e.target.value as Id<"quests"> | "")}
+                                >
+                                    <option value="">Unassigned</option>
+                                    {quests?.map((q) => (
+                                        <option key={q._id} value={q._id}>
+                                            {q.title}
                                         </option>
                                     ))}
                                 </select>

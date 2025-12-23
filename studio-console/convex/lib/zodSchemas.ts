@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TASK_CATEGORIES, TASK_PRIORITIES } from "../constants";
 
 export const TaskBreakdownSchema = z.object({
     logic: z.string().optional().describe("Reasoning for why these tasks are needed"),
@@ -6,14 +7,15 @@ export const TaskBreakdownSchema = z.object({
         id: z.string().describe("Unique identifier for this task (e.g., 'T1', 'T2'). Used for dependencies."),
         title: z.string(),
         description: z.string(),
-        category: z.enum(["Logistics", "Creative", "Finance", "Admin", "Studio"]),
-        priority: z.enum(["High", "Medium", "Low"]),
+        category: z.enum(TASK_CATEGORIES),
+        priority: z.enum(TASK_PRIORITIES),
         itemTitle: z.string().nullable().describe("Project item title to link this task to (null if none)"),
         accountingSectionName: z.string().nullable().describe("Accounting section label to link this task to (null if none)"),
         accountingItemLabel: z.string().nullable().describe("Accounting item label/role within that section (null if none)"),
         accountingItemType: z.enum(["material", "work"]).nullable().describe("Accounting item type (null if none)"),
         estimatedHours: z.number().describe("Estimated time to complete this task in hours. REQUIRED."),
         dependencies: z.array(z.string()).describe("List of task IDs that this task depends on (e.g., ['T1']). Use [] if it can start immediately."),
+        questName: z.string().optional().describe("Name of the quest (group of tasks) this task belongs to. E.g. 'Venue Setup', 'Catering'."),
     })),
 });
 

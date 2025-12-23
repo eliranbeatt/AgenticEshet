@@ -14,7 +14,9 @@ export function ChangeSetReviewBanner({
     projectId: Id<"projects">;
     phase: Phase;
 }) {
-    const pending = useQuery(api.changeSets.listByProject, { projectId, phase, status: "pending" });
+    const pending = useQuery(api.changeSets.listByProject, { projectId, phase, status: "pending" }) as
+        | Array<Doc<"itemChangeSets">>
+        | undefined;
     const [activeId, setActiveId] = useState<Id<"itemChangeSets"> | null>(null);
     const [isOpen, setIsOpen] = useState(false);
 

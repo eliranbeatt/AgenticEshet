@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
-import { Id } from "../../../../../convex/_generated/dataModel";
+import type { Doc, Id } from "../../../../../convex/_generated/dataModel";
 
 type DrawerProps = {
     itemId: Id<"projectItems"> | null;
@@ -15,7 +15,17 @@ export function ItemDetailDrawer({ itemId, open, onClose }: DrawerProps) {
     const details = useQuery(
         api.items.getItemDetails,
         itemId ? { itemId } : "skip",
-    );
+    ) as
+        | {
+              item: Doc<"projectItems">;
+              tasks: Doc<"tasks">[];
+              materialLines: Doc<"materialLines">[];
+              workLines: Doc<"workLines">[];
+              accountingLines: Doc<"accountingLines">[];
+              revisions: Doc<"itemRevisions">[];
+          }
+        | null
+        | undefined;
 
     const content = useMemo(() => {
         if (!details) return null;

@@ -3,12 +3,12 @@
 import { useState } from "react";
 import { useAction, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { Id } from "../../../convex/_generated/dataModel";
+import type { Doc, Id } from "../../../convex/_generated/dataModel";
 
 type MigrationResult = Record<string, unknown>;
 
 export default function AdminItemsPage() {
-    const projects = useQuery(api.projects.listProjects, {});
+    const projects = useQuery(api.projects.listProjects, {}) as Doc<"projects">[] | undefined;
     const backfillFromAccounting = useAction(api.itemsMigrations.backfillFromAccounting);
     const linkTasksToItems = useAction(api.itemsMigrations.linkTasksToItems);
     const proposeFromConceptCards = useAction(api.itemsMigrations.proposeFromConceptCards);

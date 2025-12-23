@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
 
 export default defineSchema({
     // 1. PROJECTS: Core entity
@@ -659,29 +660,29 @@ export default defineSchema({
         purchasedAt: v.optional(v.number()),
         createdAt: v.number(),
     }).index("by_project", ["projectId"]),
-
     // 2. CANONICAL TASKS: Internal Source of Truth
     tasks: defineTable({
         projectId: v.id("projects"),
         title: v.string(),
         description: v.optional(v.string()),
         status: v.union(
-            v.literal("todo"),
-            v.literal("in_progress"),
-            v.literal("done"),
-            v.literal("blocked")
+            v.literal(TASK_STATUSES[0]),
+            v.literal(TASK_STATUSES[1]),
+            v.literal(TASK_STATUSES[2]),
+            v.literal(TASK_STATUSES[3])
         ),
         category: v.union(
-            v.literal("Logistics"),
-            v.literal("Creative"),
-            v.literal("Finance"),
-            v.literal("Admin"),
-            v.literal("Studio")
+            v.literal(TASK_CATEGORIES[0]),
+            v.literal(TASK_CATEGORIES[1]),
+            v.literal(TASK_CATEGORIES[2]),
+            v.literal(TASK_CATEGORIES[3]),
+            v.literal(TASK_CATEGORIES[4])
         ),
         priority: v.union(
-            v.literal("High"),
-            v.literal("Medium"),
-            v.literal("Low")
+            v.literal(TASK_PRIORITIES[0]),
+            v.literal(TASK_PRIORITIES[1]),
+            v.literal(TASK_PRIORITIES[2])
+        ),  v.literal("Low")
         ),
         parentTaskId: v.optional(v.id("tasks")),
         sortKey: v.optional(v.string()),
@@ -883,6 +884,30 @@ export default defineSchema({
         messagesJson: v.string(),  // [{role, content, timestamp}]
         createdAt: v.number(),
     }).index("by_project_phase", ["projectId", "phase"]),
+
+    // 8b. FLOW WORKSPACES: editable "current understanding" per tab + scope
+    flowWorkspaces: defineTable({
+        projectId: v.id("projects"),
+        tab: v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning")),
+        scopeType: v.union(
+            v.literal("allProject"),
+            v.literal("singleItem"),
+            v.literal("multiItem")
+        ),
+        // Stable, indexable key for the scope. (Example: allProject | singleItem:<id> | multiItem:<id1>,<id2>)
+        scopeKey: v.string(),
+        scopeItemIds: v.optional(v.array(v.id("projectItems"))),
+        text: v.string(),
+        manualEditedAt: v.optional(v.number()),
+        updatedBy: v.optional(v.union(v.literal("user"), v.literal("system"))),
+        revision: v.number(),
+        lastAgentRunId: v.optional(v.id("agentRuns")),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+        .index("by_project", ["projectId"])
+        .index("by_project_tab", ["projectId", "tab"])
+        .index("by_project_tab_scopeKey", ["projectId", "tab", "scopeKey"]),
 
     // 9. QUESTS: task group / milestone
     quests: defineTable({

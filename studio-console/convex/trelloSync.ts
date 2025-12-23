@@ -3,8 +3,9 @@ import { action, mutation, query, internalMutation, internalQuery } from "./_gen
 import { api, internal } from "./_generated/api";
 import { calculateHash } from "./lib/hash";
 import type { Doc } from "./_generated/dataModel";
+import { TASK_STATUSES, TRELLO_API_BASE } from "./constants";
 
-const STATUS_KEYS = ["todo", "in_progress", "blocked", "done"] as const;
+const STATUS_KEYS = TASK_STATUSES;
 type StatusKey = (typeof STATUS_KEYS)[number];
 
 type TrelloConfig = {
@@ -25,9 +26,8 @@ type TrelloRequestOptions = {
     label: string;
     retryLog: string[];
 };
-
 async function trelloRequest<T>(options: TrelloRequestOptions): Promise<T | undefined> {
-    const url = new URL(`https://api.trello.com${options.path}`);
+    const url = new URL(`${TRELLO_API_BASE}${options.path}`);
     const searchParams = new URLSearchParams({
         key: options.auth.apiKey,
         token: options.auth.token,

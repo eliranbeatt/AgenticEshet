@@ -136,7 +136,7 @@ export default function JobDetailsPage() {
                                     {file.originalFilename}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                    {(file.sizeBytes / 1024).toFixed(1)} KB
+                                    {(((file.sizeBytes ?? 0) / 1024)).toFixed(1)} KB
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 capitalize">
                                     {file.stage}

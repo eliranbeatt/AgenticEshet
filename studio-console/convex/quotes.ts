@@ -198,7 +198,7 @@ export const generateFromAccounting = mutation({
     },
 });
 
-type WizardBreakdownItem = {
+export type WizardBreakdownItem = {
     label: string;
     amount: number;
     currency: string;

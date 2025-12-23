@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
+import { TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
 
 export const listByProject = query({
     args: { projectId: v.id("projects") },
@@ -40,22 +41,22 @@ export const createTask = mutation({
         title: v.string(),
         description: v.optional(v.string()),
         status: v.union(
-            v.literal("todo"),
-            v.literal("in_progress"),
-            v.literal("done"),
-            v.literal("blocked")
+            v.literal(TASK_STATUSES[0]),
+            v.literal(TASK_STATUSES[1]),
+            v.literal(TASK_STATUSES[2]),
+            v.literal(TASK_STATUSES[3])
         ),
         category: v.union(
-            v.literal("Logistics"),
-            v.literal("Creative"),
-            v.literal("Finance"),
-            v.literal("Admin"),
-            v.literal("Studio")
+            v.literal(TASK_CATEGORIES[0]),
+            v.literal(TASK_CATEGORIES[1]),
+            v.literal(TASK_CATEGORIES[2]),
+            v.literal(TASK_CATEGORIES[3]),
+            v.literal(TASK_CATEGORIES[4])
         ),
         priority: v.union(
-            v.literal("High"),
-            v.literal("Medium"),
-            v.literal("Low")
+            v.literal(TASK_PRIORITIES[0]),
+            v.literal(TASK_PRIORITIES[1]),
+            v.literal(TASK_PRIORITIES[2])
         ),
         questId: v.optional(v.id("quests")),
         accountingSectionId: v.optional(v.id("sections")),

@@ -38,7 +38,7 @@ export function PriceHistoryTable() {
                         {history.map((obs) => (
                             <tr key={obs._id} className="hover:bg-gray-50">
                                 <td className="px-3 py-2 font-medium text-gray-900">{obs.rawItemName}</td>
-                                <td className="px-3 py-2 text-gray-700">{obs.vendorName}</td>
+                                <td className="px-3 py-2 text-gray-700">{obs.vendorId ? String(obs.vendorId) : "-"}</td>
                                 <td className="px-3 py-2 text-gray-700">
                                     {obs.unitPrice.toFixed(2)} {obs.currency}
                                 </td>

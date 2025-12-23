@@ -652,6 +652,7 @@ function OpsPulseCard({
     );
 }
 
+
 function MetricCard({ label, value, accent }: { label: string; value: number; accent: string }) {
     return (
         <div className="bg-white p-4 rounded shadow-sm border">

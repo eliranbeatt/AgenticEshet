@@ -241,7 +241,10 @@ export function ItemEditorPanel() {
                         onChange={(e) =>
                             updateSpec({
                                 ...specDraft,
-                                quality: { ...quality, tier: e.target.value as ItemSpecV2["quality"]["tier"] },
+                                quality: {
+                                    ...quality,
+                                    tier: e.target.value as NonNullable<ItemSpecV2["quality"]>["tier"],
+                                },
                             })
                         }
                     >
@@ -367,7 +370,10 @@ export function ItemEditorPanel() {
                         onChange={(e) =>
                             updateSpec({
                                 ...specDraft,
-                                procurement: { ...procurement, channel: e.target.value as ItemSpecV2["procurement"]["channel"] },
+                                procurement: {
+                                    ...procurement,
+                                    channel: e.target.value as NonNullable<ItemSpecV2["procurement"]>["channel"],
+                                },
                             })
                         }
                     >

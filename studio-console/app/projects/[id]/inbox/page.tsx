@@ -72,14 +72,14 @@ function InboxItemDetail({ item }: { item: Doc<"inboxItems"> }) {
     const acceptSuggestions = useMutation(api.inbox.acceptSuggestions);
     const [accepting, setAccepting] = useState(false);
 
-    const handleAccept = async (tasks: number[]) => {
+    const handleAccept = async (tasks: number[], decisions: number[] = [], questions: number[] = []) => {
         setAccepting(true);
         try {
             await acceptSuggestions({
                 inboxItemId: item._id,
                 acceptedTasks: tasks,
-                acceptedDecisions: [],
-                acceptedQuestions: [],
+                acceptedDecisions: decisions,
+                acceptedQuestions: questions,
             });
         } catch (e) {
             console.error("Failed to accept", e);
@@ -105,11 +105,11 @@ function InboxItemDetail({ item }: { item: Doc<"inboxItems"> }) {
                     <div className="mt-4">
                         <h4 className="text-sm font-medium mb-2">Attachments</h4>
                         <div className="flex gap-2 flex-wrap">
-                            {item.attachments.map((att, i: number) => (
+                            {item.attachments.map((att: { name: string; sizeBytes?: number }, i: number) => (
                                 <div key={i} className="border rounded px-3 py-2 text-sm bg-white flex items-center gap-2">
                                     <span className="text-gray-500">📎</span>
                                     {att.name}
-                                    <span className="text-xs text-gray-400">({(att.sizeBytes / 1024).toFixed(0)} KB)</span>
+                                    <span className="text-xs text-gray-400">({(((att.sizeBytes ?? 0) / 1024)).toFixed(0)} KB)</span>
                                 </div>
                             ))}
                         </div>
@@ -128,7 +128,11 @@ function InboxItemDetail({ item }: { item: Doc<"inboxItems"> }) {
                     <div className="mb-6">
                         <h4 className="text-sm font-medium text-gray-700 mb-2 uppercase tracking-wide">Suggested Tasks</h4>
                         <div className="space-y-3">
-                            {item.suggestions.tasksDraft.map((task, i: number) => (
+                            {item.suggestions.tasksDraft.map(
+                                (
+                                    task: { title: string; details: string; tags: string[]; priority?: string },
+                                    i: number,
+                                ) => (
                                 <div key={i} className="border border-blue-100 bg-blue-50 rounded-lg p-4">
                                     <div className="flex justify-between items-start">
                                         <div>
@@ -146,6 +150,82 @@ function InboxItemDetail({ item }: { item: Doc<"inboxItems"> }) {
                                                 onClick={() => handleAccept([i])}
                                                 disabled={accepting}
                                                 className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50"
+                                            >
+                                                Accept
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {item.suggestions?.decisionsDraft?.length > 0 && (
+                    <div className="mb-6">
+                        <h4 className="text-sm font-medium text-gray-700 mb-2 uppercase tracking-wide">Suggested Decisions</h4>
+                        <div className="space-y-3">
+                            {item.suggestions.decisionsDraft.map(
+                                (
+                                    decision: { title: string; details?: string; options?: string[] },
+                                    i: number,
+                                ) => (
+                                <div key={i} className="border border-purple-100 bg-purple-50 rounded-lg p-4">
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <div className="font-medium text-purple-900">{decision.title}</div>
+                                            {decision.details && <div className="text-sm text-purple-700 mt-1">{decision.details}</div>}
+                                            {decision.options && decision.options.length > 0 && (
+                                                <ul className="mt-2 list-disc list-inside text-xs text-purple-800">
+                                                    {decision.options.map((opt, idx) => (
+                                                        <li key={idx}>{opt}</li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+                                        {item.status !== "triaged" && (
+                                            <button 
+                                                onClick={() => handleAccept([], [i], [])}
+                                                disabled={accepting}
+                                                className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded hover:bg-purple-700 disabled:opacity-50"
+                                                title="Creates a task to make this decision"
+                                            >
+                                                Accept
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {item.suggestions?.questionsDraft?.length > 0 && (
+                    <div className="mb-6">
+                        <h4 className="text-sm font-medium text-gray-700 mb-2 uppercase tracking-wide">Suggested Questions</h4>
+                        <div className="space-y-3">
+                            {item.suggestions.questionsDraft.map(
+                                (
+                                    question: { question: string; reason?: string; priority?: string },
+                                    i: number,
+                                ) => (
+                                <div key={i} className="border border-orange-100 bg-orange-50 rounded-lg p-4">
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <div className="font-medium text-orange-900">{question.question}</div>
+                                            {question.reason && <div className="text-sm text-orange-700 mt-1">{question.reason}</div>}
+                                            {question.priority && (
+                                                <div className="mt-2">
+                                                    <span className="text-xs bg-white text-orange-600 px-2 py-0.5 rounded border border-orange-200">{question.priority}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                        {item.status !== "triaged" && (
+                                            <button 
+                                                onClick={() => handleAccept([], [], [i])}
+                                                disabled={accepting}
+                                                className="text-xs bg-orange-600 text-white px-3 py-1.5 rounded hover:bg-orange-700 disabled:opacity-50"
+                                                title="Creates a task to answer this question"
                                             >
                                                 Accept
                                             </button>

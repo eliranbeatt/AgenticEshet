@@ -230,8 +230,48 @@ export const acceptSuggestions = mutation({
             }
         }
 
-        // Note: Decisions and Questions tables are not yet defined in schema.
-        // For now, we only create tasks.
+        // Create Tasks for Decisions
+        for (const index of args.acceptedDecisions) {
+            const draft = item.suggestions.decisionsDraft[index];
+            if (draft) {
+                const description = `${draft.details || ""}\n\nOptions:\n${(draft.options || []).map(o => `- ${o}`).join("\n")}`;
+                const taskId = await ctx.db.insert("tasks", {
+                    projectId: item.projectId,
+                    title: `[Decision] ${draft.title}`,
+                    description: description.trim(),
+                    status: "todo",
+                    category: "Admin",
+                    priority: "High", // Decisions are usually important
+                    source: "agent",
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                });
+                createdTaskIds.push(taskId);
+            }
+        }
+
+        // Create Tasks for Questions
+        for (const index of args.acceptedQuestions) {
+            const draft = item.suggestions.questionsDraft[index];
+            if (draft) {
+                const priority = draft.priority === "High" || draft.priority === "Medium" || draft.priority === "Low"
+                    ? draft.priority
+                    : "Medium";
+                const description = draft.reason ? `Reason: ${draft.reason}` : "";
+                const taskId = await ctx.db.insert("tasks", {
+                    projectId: item.projectId,
+                    title: `[Question] ${draft.question}`,
+                    description: description,
+                    status: "todo",
+                    category: "Admin",
+                    priority,
+                    source: "agent",
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                });
+                createdTaskIds.push(taskId);
+            }
+        }
         
         await ctx.db.patch(args.inboxItemId, {
             status: "triaged",

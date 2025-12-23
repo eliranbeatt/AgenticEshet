@@ -1,6 +1,6 @@
 "use client";
 
-import { useThinkingMode } from "./ThinkingModeContext";
+import { useThinkingMode } from "../_context/ThinkingModeContext";
 
 export default function ThinkingModeToggle() {
     const { thinkingMode, setThinkingMode } = useThinkingMode();

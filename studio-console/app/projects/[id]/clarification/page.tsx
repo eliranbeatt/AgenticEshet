@@ -5,7 +5,7 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Id } from "../../../../convex/_generated/dataModel";
 import { useParams } from "next/navigation";
-import { useThinkingMode } from "../../../ThinkingModeContext";
+import { useThinkingMode } from "../../../_context/ThinkingModeContext";
 import { AgentChatThread } from "../_components/chat/AgentChatThread";
 import { ItemsTreeSidebar } from "../_components/items/ItemsTreeSidebar";
 import { ItemEditorPanel } from "../_components/items/ItemEditorPanel";

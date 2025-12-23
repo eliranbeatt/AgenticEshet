@@ -6,8 +6,8 @@ import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChatComposer } from "./ChatComposer";
-import { useThinkingMode } from "../../../../ThinkingModeContext";
-import { useModel } from "../../../../ModelContext";
+import { useThinkingMode } from "../../../../_context/ThinkingModeContext";
+import { useModel } from "../../../../_context/ModelContext";
 
 function MessageBubble({ message }: { message: Doc<"chatMessages"> }) {
     const isUser = message.role === "user";
@@ -56,7 +56,7 @@ export function AgentChatThread({
     onSend?: (content: string) => Promise<void>;
     heightClassName?: string;
 }) {
-    const messages = useQuery(api.chat.listMessages, { threadId });
+    const messages = useQuery(api.chat.listMessages, { threadId }) as Array<Doc<"chatMessages">> | undefined;
     const sendAndStreamText = useAction(api.chat.sendAndStreamText);
     const { thinkingMode } = useThinkingMode();
     const { selectedModel } = useModel();

@@ -3,6 +3,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 
 type ImageProvider = "openai" | "gemini";
 
@@ -202,11 +203,13 @@ export default function AdminSettingsPage() {
                                 </button>
                             </div>
                             {settings?.brandingLogoUrl && (
-                                <div className="mt-3 border rounded p-3 bg-gray-50">
-                                    <img
+                                <div className="mt-3 border rounded p-3 bg-gray-50 relative h-24 w-64">
+                                    <Image
                                         src={settings.brandingLogoUrl}
                                         alt="Brand logo"
-                                        className="max-h-16 object-contain"
+                                        fill
+                                        className="object-contain object-left"
+                                        sizes="256px"
                                     />
                                 </div>
                             )}

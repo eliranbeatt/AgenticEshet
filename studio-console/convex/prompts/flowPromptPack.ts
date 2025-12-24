@@ -48,10 +48,7 @@ export function buildFlowAgentASystemPrompt(args: {
             return [
                 basePrompt,
                 "Your job in Clarify mode is to understand the customer's needs and unlock high-quality concepts.",
-                "Ask the minimum number of high-impact questions (usually 5-8). Group them by: goals/story, audience/brand, constraints, physical/venue, budget/timeline.",
-                "After the questions, propose 3-6 concept directions that are realistic to execute.",
-                "Each concept direction MUST include: one-liner, visual/material direction, build/installation feasibility, and what it likely becomes (item candidates).",
-                "Always show: Known facts vs Assumptions vs Open questions.",
+                "Ask the minimum number of high-impact questions (usually 3-5). in topics like: goals/story, audience/brand, constraints, physical/venue, budget/timeline.",
                 "Do NOT output JSON. Do NOT say you updated any fields. Use concise markdown headings.",
                 "Prefer practical studio language: materials, finishes, modularity, packing, on-site assembly.",
             ].join("\n");
@@ -60,7 +57,7 @@ export function buildFlowAgentASystemPrompt(args: {
         return [
             basePrompt,
             "Your job in Generate mode is to generate strong, feasible ideas AND break them down into an execution-ready outline.",
-            "Produce 5-10 concept directions, spanning safe→bold and budget→premium, but always feasible.",
+            "Produce 3 concept directions, spanning safe→bold and budget→premium, but always feasible.",
             "For each concept: title, one-liner, story/why it fits, materials/finishes, lighting/color cues, install logic, risk hotspots, and item candidates.",
             "Also include a short 'Process map' section: what happens next (brief → concept → items → plan → build → install → shoot → dismantle), with 5-9 steps.",
             "Do NOT output JSON. Do NOT say you updated any fields. Use concise markdown headings.",
@@ -72,13 +69,7 @@ export function buildFlowAgentASystemPrompt(args: {
             return [
                 basePrompt,
                 "Your job in Clarify mode is to lock the plan structure: domains, items, tasks, and critical constraints.",
-                "Ask 5-10 targeted questions that unblock planning (dates/windows, venue rules, approvals, dimensions/qty, budget tier, sourcing, rentals, install crew/access).",
-                "Then propose a first draft plan in markdown:",
-                "- Domains (Procurement, Studio Build, Prints, Rentals, Logistics/Moving, Installation, Shoot-day support, Dismantle/Returns, Admin/Finance)",
-                "- Draft Item tree (top-level + key children only)",
-                "- Task skeleton per item (Verb + object), not overly granular",
-                "- Critical path risks and what to decide first",
-                "Always show: Known facts vs Assumptions vs Open questions.",
+                "Ask 3 targeted questions that unblock planning (dates/windows, venue rules, approvals, dimensions/qty, budget tier, sourcing, rentals, install crew/access).",
                 "Do NOT output JSON. Do NOT say you updated any fields.",
             ].join("\n");
         }
@@ -102,10 +93,9 @@ export function buildFlowAgentASystemPrompt(args: {
         return [
             basePrompt,
             "Your job in Clarify mode is to collect the missing technical details needed to define EXACTLY how to build/install.",
-            "Ask 6-12 questions max. Group by: dimensions & load, finish quality, mounting/rigging, materials preferences, safety/venue rules, transport/packing, schedule/lead times.",
-            "Then propose 2-3 build approaches (A/B/C) with pros/cons and a recommendation.",
+            "Ask 3-5 questions max. In topics like: dimensions & load, finish quality, mounting/rigging, materials preferences, safety/venue rules, transport/packing, schedule/lead times.",
+            "Then propose 2 build approaches (A/B/C) with pros/cons and a recommendation.",
             "Include: key materials, tools/equipment, labor roles, install sequence, and main risks + mitigations.",
-            "Always show: Known facts vs Assumptions vs Open questions.",
             "Do NOT output JSON. Do NOT say you updated any fields.",
         ].join("\n");
     }

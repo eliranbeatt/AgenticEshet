@@ -48,9 +48,10 @@ export function buildFlowAgentASystemPrompt(args: {
             return [
                 basePrompt,
                 "Your job in Clarify mode is to understand the customer's needs and unlock high-quality concepts.",
-                "Ask the minimum number of high-impact questions (usually 5-8). Group them by: goals/story, audience/brand, constraints, physical/venue, budget/timeline.",
-                "After the questions, propose 3-6 concept directions that are realistic to execute.",
-                "Each concept direction MUST include: one-liner, visual/material direction, build/installation feasibility, and what it likely becomes (item candidates).",
+                "Ask exactly 3-5 high-impact questions. Group them by: goals/story, audience/brand, constraints, physical/venue, budget/timeline.",
+                "After the questions, propose 3-5 one-liner concept ideas.",
+                "Each concept idea must be a single sentence (one-liner) that captures the essence.",
+                "Do NOT provide full concept details, narratives, or feasibility analysis yet.",
                 "Always show: Known facts vs Assumptions vs Open questions.",
                 "Do NOT output JSON. Do NOT say you updated any fields. Use concise markdown headings.",
                 "Prefer practical studio language: materials, finishes, modularity, packing, on-site assembly.",
@@ -60,7 +61,8 @@ export function buildFlowAgentASystemPrompt(args: {
         return [
             basePrompt,
             "Your job in Generate mode is to generate strong, feasible ideas AND break them down into an execution-ready outline.",
-            "Produce 5-10 concept directions, spanning safe→bold and budget→premium, but always feasible.",
+            "If the user selected a specific concept or idea, focus DEEPLY on developing that specific concept.",
+            "Produce 5-10 concept directions (or variations of the selected concept), spanning safe→bold and budget→premium, but always feasible.",
             "For each concept: title, one-liner, story/why it fits, materials/finishes, lighting/color cues, install logic, risk hotspots, and item candidates.",
             "Also include a short 'Process map' section: what happens next (brief → concept → items → plan → build → install → shoot → dismantle), with 5-9 steps.",
             "Do NOT output JSON. Do NOT say you updated any fields. Use concise markdown headings.",
@@ -72,7 +74,7 @@ export function buildFlowAgentASystemPrompt(args: {
             return [
                 basePrompt,
                 "Your job in Clarify mode is to lock the plan structure: domains, items, tasks, and critical constraints.",
-                "Ask 5-10 targeted questions that unblock planning (dates/windows, venue rules, approvals, dimensions/qty, budget tier, sourcing, rentals, install crew/access).",
+                "Ask exactly 3 targeted questions that unblock planning (dates/windows, venue rules, approvals, dimensions/qty, budget tier, sourcing, rentals, install crew/access).",
                 "Then propose a first draft plan in markdown:",
                 "- Domains (Procurement, Studio Build, Prints, Rentals, Logistics/Moving, Installation, Shoot-day support, Dismantle/Returns, Admin/Finance)",
                 "- Draft Item tree (top-level + key children only)",
@@ -86,6 +88,7 @@ export function buildFlowAgentASystemPrompt(args: {
         return [
             basePrompt,
             "Your job in Generate mode is to produce a strong operational plan that can be turned into items and tasks.",
+            "Do NOT ask questions. Focus on generating the plan based on known information.",
             "Output a detailed markdown plan with:",
             "1) Goals + scope (in/out)",
             "2) Domains list (Use strict domains: Procurement, Studio Build, Prints, Rentals, Logistics, Installation, Dismantle)",

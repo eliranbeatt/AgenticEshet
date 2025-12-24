@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { z } from "zod";
 
-import { action } from "../_generated/server";
+import { action, internalAction } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
 import type { Doc } from "../_generated/dataModel";
@@ -14,6 +14,99 @@ const scopeTypeValidator = v.union(v.literal("allProject"), v.literal("singleIte
 
 const AgentBWorkspaceSchema = z.object({
     updatedWorkspaceMarkdown: z.string(),
+});
+
+export const runAgentB = internalAction({
+    args: {
+        projectId: v.id("projects"),
+        threadId: v.id("chatThreads"),
+        scenarioId: v.id("projectScenarios"),
+        runId: v.id("agentRuns"),
+        tab: tabValidator,
+        scopeType: scopeTypeValidator,
+        scopeKey: v.string(),
+        selectedItems: v.array(v.object({ id: v.string(), title: v.string(), typeKey: v.string() })),
+        workspaceId: v.id("flowWorkspaces"),
+        workspaceText: v.string(),
+        userContent: v.string(),
+        assistantContent: v.string(),
+        model: v.optional(v.string()),
+        language: v.string(),
+    },
+    handler: async (ctx, args) => {
+        try {
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: args.runId,
+                status: "running",
+                stage: "agent_b",
+            });
+
+            const agentB = await callChatWithSchema(AgentBWorkspaceSchema, {
+                model: args.model,
+                systemPrompt: buildFlowAgentBSystemPrompt({ tab: args.tab, language: args.language as "en" | "he" }),
+                userPrompt: JSON.stringify(
+                    {
+                        tab: args.tab,
+                        scopeType: args.scopeType,
+                        scopeKey: args.scopeKey,
+                        selectedItems: args.selectedItems,
+                        workspaceMarkdown: args.workspaceText,
+                        userMessage: args.userContent,
+                        assistantMessage: args.assistantContent,
+                    },
+                    null,
+                    2
+                ),
+                maxRetries: 2,
+                language: args.language as "en" | "he",
+            });
+
+            await ctx.runMutation(api.flowWorkspaces.saveText, {
+                workspaceId: args.workspaceId,
+                text: agentB.updatedWorkspaceMarkdown,
+                source: "system",
+                lastAgentRunId: args.runId,
+            });
+
+            await ctx.runMutation(internal.chat.createMessage, {
+                projectId: args.projectId,
+                scenarioId: args.scenarioId,
+                threadId: args.threadId,
+                role: "system",
+                content: "Current understanding updated.",
+                status: "final",
+            });
+
+            await ctx.runMutation(internal.agentRuns.appendEvent, {
+                runId: args.runId,
+                level: "info",
+                stage: "agent_b",
+                message: "Workspace updated",
+            });
+
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: args.runId,
+                status: "succeeded",
+                stage: "done",
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await ctx.runMutation(internal.chat.createMessage, {
+                projectId: args.projectId,
+                scenarioId: args.scenarioId,
+                threadId: args.threadId,
+                role: "system",
+                content: `Error updating workspace: ${message}`,
+                status: "error",
+            });
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId: args.runId,
+                status: "failed",
+                stage: "error",
+                error: message,
+            });
+        }
+    }
 });
 
 export const send = action({
@@ -109,15 +202,34 @@ export const send = action({
             `USER: ${args.userContent}`,
         ].join("\n");
 
+        let allProjectTranscript = "";
+        if (args.scopeType !== "allProject") {
+             const allProjectMessages = await ctx.runQuery(internal.chat.getThreadMessagesByScenarioKey, {
+                 projectId: project._id,
+                 phase: args.tab,
+                 scenarioKey: "allProject:null"
+             });
+             if (allProjectMessages.length > 0) {
+                 allProjectTranscript = [
+                     "--- START OF ALL PROJECT CONTEXT ---",
+                     ...allProjectMessages.map((m) => `${m.role.toUpperCase()}: ${m.content}`),
+                     "--- END OF ALL PROJECT CONTEXT ---",
+                     ""
+                 ].join("\n");
+             }
+        }
+
         const agentAUserPrompt = [
             `PROJECT: ${project.name}`,
             `CLIENT: ${project.clientName}`,
+            `OVERVIEW: ${JSON.stringify(project.overview || {})}`,
             `TAB: ${args.tab}`,
             `SCOPE: ${scopeSummary}`,
             "",
             "Current Understanding (workspace markdown):",
             workspace?.text?.trim() ? workspace.text : "(empty)",
             "",
+            allProjectTranscript,
             "Conversation:",
             transcript,
         ].join("\n");
@@ -164,60 +276,23 @@ export const send = action({
                 message: "Agent A completed chat response",
             });
 
-            await ctx.runMutation(internal.agentRuns.setStatus, {
+            await ctx.scheduler.runAfter(0, internal.agents.flow.runAgentB, {
+                projectId: project._id,
+                threadId: args.threadId,
+                scenarioId: scenario._id,
                 runId,
-                status: "running",
-                stage: "agent_b",
-            });
-
-            const agentB = await callChatWithSchema(AgentBWorkspaceSchema, {
+                tab: args.tab,
+                scopeType: args.scopeType,
+                scopeKey,
+                selectedItems: selectedItems.map((i) => ({ id: String(i._id), title: i.title, typeKey: i.typeKey })),
+                workspaceId,
+                workspaceText: workspace?.text ?? "",
+                userContent: args.userContent,
+                assistantContent: finalAssistantMarkdown,
                 model: args.model,
-                systemPrompt: buildFlowAgentBSystemPrompt({ tab: args.tab, language }),
-                userPrompt: JSON.stringify(
-                    {
-                        tab: args.tab,
-                        scopeType: args.scopeType,
-                        scopeKey,
-                        selectedItems: selectedItems.map((i) => ({ id: String(i._id), title: i.title, typeKey: i.typeKey })),
-                        workspaceMarkdown: workspace?.text ?? "",
-                        userMessage: args.userContent,
-                        assistantMessage: finalAssistantMarkdown,
-                    },
-                    null,
-                    2
-                ),
-                maxRetries: 2,
                 language,
             });
 
-            await ctx.runMutation(api.flowWorkspaces.saveText, {
-                workspaceId,
-                text: agentB.updatedWorkspaceMarkdown,
-                source: "system",
-                lastAgentRunId: runId,
-            });
-
-            await ctx.runMutation(internal.chat.createMessage, {
-                projectId: project._id,
-                scenarioId: scenario._id,
-                threadId: args.threadId,
-                role: "system",
-                content: "Current understanding updated.",
-                status: "final",
-            });
-
-            await ctx.runMutation(internal.agentRuns.appendEvent, {
-                runId,
-                level: "info",
-                stage: "agent_b",
-                message: "Workspace updated",
-            });
-
-            await ctx.runMutation(internal.agentRuns.setStatus, {
-                runId,
-                status: "succeeded",
-                stage: "done",
-            });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             await ctx.runMutation(internal.chat.patchMessage, {

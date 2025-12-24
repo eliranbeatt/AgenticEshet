@@ -130,6 +130,12 @@ export default function GanttView() {
                 </button>
             </div>
             <div className="flex-1 overflow-auto p-4">
+                <style>{`
+                    /* Hide text inside the Gantt bars */
+                    .gantt .barLabel {
+                        display: none !important;
+                    }
+                `}</style>
                 <Gantt
                     tasks={ganttTasks}
                     viewMode={viewMode}

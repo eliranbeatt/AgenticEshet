@@ -3,6 +3,38 @@ import { action, internalMutation, internalQuery, mutation, query } from "./_gen
 import { internal } from "./_generated/api";
 import { streamChatText } from "./lib/openai";
 
+export const getThreadMessagesByScenarioKey = internalQuery({
+    args: {
+        projectId: v.id("projects"),
+        phase: v.string(),
+        scenarioKey: v.string(),
+    },
+    handler: async (ctx, args) => {
+        const scenario = await ctx.db
+            .query("projectScenarios")
+            .withIndex("by_project_phase_key", (q) =>
+                q.eq("projectId", args.projectId).eq("phase", args.phase).eq("scenarioKey", args.scenarioKey)
+            )
+            .first();
+
+        if (!scenario) return [];
+
+        const thread = await ctx.db
+            .query("chatThreads")
+            .withIndex("by_scenario", (q) => q.eq("scenarioId", scenario._id))
+            .first();
+
+        if (!thread) return [];
+
+        const messages = await ctx.db
+            .query("chatMessages")
+            .withIndex("by_thread", (q) => q.eq("threadId", thread._id))
+            .collect();
+
+        return messages;
+    },
+});
+
 export const ensureThread = mutation({
     args: {
         projectId: v.id("projects"),

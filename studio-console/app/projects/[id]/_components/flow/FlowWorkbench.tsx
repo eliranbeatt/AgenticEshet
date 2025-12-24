@@ -173,7 +173,15 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                 workspaceText: textDraft,
                 model: selectedModel,
             });
-            setPreviewSpec(result as ItemSpecV2);
+            
+            // Auto-apply the spec
+            await applySpec({
+                projectId,
+                itemId: selectedItemId ? (selectedItemId as Id<"projectItems">) : undefined,
+                spec: result as ItemSpecV2,
+            });
+            
+            // setPreviewSpec(result as ItemSpecV2); // Skipped preview
         } catch (e) {
             console.error("Failed to generate spec", e);
             alert("Failed to generate item spec. See console.");

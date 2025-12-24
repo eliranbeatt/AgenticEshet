@@ -27,6 +27,7 @@ export function FlowItemsPanel(props: Props) {
     const confirmDelete = useMutation(api.items.confirmDelete);
 
     const [search, setSearch] = useState("");
+    const [isCreating, setIsCreating] = useState(false);
 
     const allItems = useMemo(() => (sidebarData?.items ?? []) as Array<Doc<"projectItems">>, [sidebarData?.items]);
     const items = useMemo(() => {
@@ -47,6 +48,19 @@ export function FlowItemsPanel(props: Props) {
     }, [allItems, search]);
 
     const selectedSet = useMemo(() => new Set(props.selectedItemIds.map(String)), [props.selectedItemIds]);
+
+    const DEFAULT_ITEMS = [
+        { title: "הובלה", typeKey: "logistics", description: "Moving from studio to set" },
+        { title: "התקנה", typeKey: "installation", description: "Installation work" },
+        { title: "פירוק", typeKey: "teardown", description: "Teardown work" },
+    ];
+
+    const missingDefaultItems = useMemo(() => {
+        if (!allItems) return [];
+        return DEFAULT_ITEMS.filter(
+            (def) => !allItems.some((item) => item.title === def.title)
+        );
+    }, [allItems]);
 
     const handleRowClick = (itemId: Id<"projectItems">) => {
         props.onSetSelectedItemIds([itemId]);
@@ -186,6 +200,48 @@ export function FlowItemsPanel(props: Props) {
                                 </div>
                             );
                         })}
+                    </div>
+                )}
+
+                {/* Default Items Section */}
+                {missingDefaultItems.length > 0 && !search && (
+                    <div className="mt-4 pt-4 border-t border-gray-100">
+                        <div className="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+                            Suggested Items
+                        </div>
+                        {missingDefaultItems.map((def) => (
+                            <div
+                                key={def.title}
+                                className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-gray-50 opacity-60 hover:opacity-100 group transition-opacity"
+                                onClick={async () => {
+                                    if (isCreating) return;
+                                    setIsCreating(true);
+                                    try {
+                                        const result = await createManual({
+                                            projectId: props.projectId,
+                                            title: def.title,
+                                            typeKey: def.typeKey,
+                                        });
+                                        props.onSetSelectedItemIds([result.itemId]);
+                                    } finally {
+                                        setIsCreating(false);
+                                    }
+                                }}
+                            >
+                                <div className="w-4 text-center text-gray-300">•</div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium text-gray-500 group-hover:text-gray-900 truncate">
+                                        {def.title}
+                                    </div>
+                                    <div className="text-xs text-gray-400 group-hover:text-gray-600">
+                                        {def.description}
+                                    </div>
+                                </div>
+                                <button className="text-[10px] px-2 py-1 rounded border border-gray-200 text-gray-400 group-hover:border-blue-200 group-hover:text-blue-600 group-hover:bg-blue-50">
+                                    Add
+                                </button>
+                            </div>
+                        ))}
                     </div>
                 )}
             </div>

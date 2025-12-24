@@ -4,9 +4,9 @@ import { action, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
 import { ConceptPacketSchema } from "../lib/zodSchemas";
-import { chatRules, extractGuardrails, ideationPrompt, sharedContextContract } from "../prompts/itemsPromptPack";
+import { chatRules, extractGuardrails, ideationPrompt, itemTypeDefinitions, sharedContextContract } from "../prompts/itemsPromptPack";
 
-const FALLBACK_SYSTEM_PROMPT = [sharedContextContract, extractGuardrails, chatRules, ideationPrompt].join("\n\n");
+const FALLBACK_SYSTEM_PROMPT = [sharedContextContract, extractGuardrails, chatRules, itemTypeDefinitions, ideationPrompt].join("\n\n");
 
 type ParsedConcept = {
     title: string;

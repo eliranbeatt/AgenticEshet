@@ -7,6 +7,7 @@ import {
   changeSetSchemaText,
   chatRules,
   extractGuardrails,
+  itemTypeDefinitions,
   planningPrompt,
   sharedContextContract,
 } from "../prompts/itemsPromptPack";
@@ -75,7 +76,7 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
       project,
       systemPrompt:
         skill?.content ||
-        [sharedContextContract, extractGuardrails, chatRules, changeSetSchemaText, planningPrompt].join("\n\n"),
+        [sharedContextContract, extractGuardrails, chatRules, itemTypeDefinitions, changeSetSchemaText, planningPrompt].join("\n\n"),
       existingPlans,
       latestClarification,
       knowledgeDocs,

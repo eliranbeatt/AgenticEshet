@@ -4,6 +4,7 @@ import { internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ItemSpecV2Schema, type ItemSpecV2 } from "../lib/zodSchemas";
 import { syncItemProjections } from "../lib/itemProjections";
+import { itemTypeDefinitions } from "../prompts/itemsPromptPack";
 import type { Doc, Id } from "../_generated/dataModel";
 import { z } from "zod";
 
@@ -284,6 +285,8 @@ export const chat = action({
         Accounting group: ${identity.accountingGroup ?? "None"}
         
         Current Solution Plan: ${plan}
+
+        ${itemTypeDefinitions}
         
         Instructions:
         - Analyze the item and suggest the best production methods, materials, and tools.

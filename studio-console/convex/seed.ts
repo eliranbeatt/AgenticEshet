@@ -10,6 +10,7 @@ import {
     extractGuardrails,
     ideationPrompt,
     itemEditorPrompt,
+    itemTypeDefinitions,
     planningPrompt,
     quotePrompt,
     sharedContextContract,
@@ -20,7 +21,7 @@ import {
 // Public mutation for UI button access
 export const seedSkillsPublic = mutation({
     handler: async (ctx) => {
-        const sharedPrefix = [sharedContextContract, extractGuardrails, chatRules].join("\n\n");
+        const sharedPrefix = [sharedContextContract, extractGuardrails, chatRules, itemTypeDefinitions].join("\n\n");
         const changeSetPrefix = [sharedPrefix, changeSetSchemaText].join("\n\n");
 
         const skills = [

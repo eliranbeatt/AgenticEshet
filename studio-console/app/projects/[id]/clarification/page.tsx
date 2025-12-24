@@ -1,4 +1,11 @@
-﻿"use client";
+﻿/**
+ * DEPRECATED PAGE
+ * This page is no longer the primary way to plan projects.
+ * Please use the "Planning" tab (FlowWorkbench) instead.
+ * 
+ * Do not add new features here.
+ */
+"use client";
 
 import { useEffect, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
@@ -11,7 +18,7 @@ import { ItemsTreeSidebar } from "../_components/items/ItemsTreeSidebar";
 import { ItemEditorPanel } from "../_components/items/ItemEditorPanel";
 import { useItemsContext } from "../_components/items/ItemsContext";
 
-export default function PlanningChatPage() {
+export default function PlanningChatPageDeprecated() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
     const { thinkingMode } = useThinkingMode();

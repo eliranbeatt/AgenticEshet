@@ -98,6 +98,25 @@ export const changeSetSchemaText = `COMMON EXTRACT OUTPUT: ChangeSet (JSON only)
   "openQuestions": ["..."],
   "warnings": ["..."],
 
+export const itemTypeDefinitions = \`STANDARD ITEM TYPES REFERENCE:
+When working with the following items, adhere to these definitions:
+
+1. הובלה (Moving / Logistics):
+   - Refers strictly to moving items from the studio to the set/location.
+   - Does NOT include moving items from suppliers to the studio (that is part of purchasing/logistics of specific materials).
+   - Includes truck rental, drivers, and loading/unloading at the venue.
+
+2. התקנה (Installation):
+   - Refers to on-site installation work that requires pre-planning and skilled workers (e.g., art workers, carpenters).
+   - Distinct from simple delivery/placement.
+   - Includes assembly, mounting, hanging, and on-site adjustments.
+
+3. פירוק (Teardown):
+   - Refers to complex teardown requirements beyond basic end-of-day cleanup.
+   - Used for special cases requiring specific teardown planning, art workers, or waste disposal of large set pieces.
+   - Includes dismantling structures, packing for return/storage, and site restoration.
+\`;
+
   "items": {
     "create": [
       {

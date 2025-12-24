@@ -11,6 +11,12 @@ type SidebarItem = Doc<"projectItems"> & {
     draftRevisionNumber?: number | null;
 };
 
+const DEFAULT_ITEMS = [
+    { title: "הובלה", typeKey: "logistics", description: "Moving from studio to set" },
+    { title: "התקנה", typeKey: "installation", description: "Installation work" },
+    { title: "פירוק", typeKey: "teardown", description: "Teardown work" },
+];
+
 export function ItemsTreeSidebar() {
     const { projectId, selectedItemId, setSelectedItemId, tabScope, showDraftItems, setShowDraftItems } =
         useItemsContext();
@@ -78,6 +84,13 @@ export function ItemsTreeSidebar() {
         }
         return include;
     }, [items, itemsById, search]);
+
+    const missingDefaultItems = useMemo(() => {
+        if (!items) return [];
+        return DEFAULT_ITEMS.filter(
+            (def) => !items.some((item) => item.title === def.title)
+        );
+    }, [items]);
 
     const handleCreateManual = async () => {
         const title = prompt("Item title?") ?? "";
@@ -249,12 +262,53 @@ export function ItemsTreeSidebar() {
             <div className="flex-1 overflow-y-auto">
                 {sidebarData === undefined ? (
                     <div className="p-4 text-sm text-gray-500">Loading items...</div>
-                ) : items.length === 0 ? (
-                    <div className="p-4 text-sm text-gray-500">No items found.</div>
-                ) : visibleIds && visibleIds.size === 0 ? (
-                    <div className="p-4 text-sm text-gray-500">No items found.</div>
                 ) : (
-                    <div className="py-2">{renderTree(null, 0)}</div>
+                    <div className="py-2">
+                        {missingDefaultItems.length > 0 && !search && (
+                            <div className="mb-2 pb-2 border-b border-gray-100">
+                                {missingDefaultItems.map((def) => (
+                                    <div
+                                        key={def.title}
+                                        className="flex items-center gap-2 px-2 py-2 rounded cursor-pointer hover:bg-gray-50 opacity-60 hover:opacity-100 group"
+                                        onClick={async () => {
+                                            if (isCreating) return;
+                                            setIsCreating(true);
+                                            try {
+                                                const result = await createManual({
+                                                    projectId,
+                                                    title: def.title,
+                                                    typeKey: def.typeKey,
+                                                });
+                                                setSelectedItemId(result.itemId);
+                                            } finally {
+                                                setIsCreating(false);
+                                            }
+                                        }}
+                                    >
+                                        <div className="w-4 text-center text-gray-400">•</div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-sm font-semibold text-gray-500 group-hover:text-gray-900 truncate">
+                                                {def.title}
+                                            </div>
+                                            <div className="text-xs text-gray-400 group-hover:text-gray-600 mt-1">
+                                                {def.description}
+                                            </div>
+                                        </div>
+                                        <button className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-400 group-hover:border-blue-200 group-hover:text-blue-600 group-hover:bg-blue-50">
+                                            Add
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {items.length === 0 && missingDefaultItems.length === 0 ? (
+                            <div className="p-4 text-sm text-gray-500">No items found.</div>
+                        ) : visibleIds && visibleIds.size === 0 ? (
+                            <div className="p-4 text-sm text-gray-500">No items found.</div>
+                        ) : (
+                            renderTree(null, 0)
+                        )}
+                    </div>
                 )}
             </div>
         </div>

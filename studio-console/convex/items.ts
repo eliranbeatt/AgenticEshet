@@ -909,7 +909,7 @@ export const applySpec = mutation({
                 createdAt: now,
                 updatedAt: now,
                 latestRevisionNumber: 0,
-                createdBy: "user", // Triggered by user via UI
+                createdFrom: { source: "manual" },
             });
         } else {
             // Update existing item basic fields

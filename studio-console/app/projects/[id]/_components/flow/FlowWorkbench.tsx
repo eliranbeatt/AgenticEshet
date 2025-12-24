@@ -225,9 +225,9 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const bottomTabs = selectedAllProject ? [] : selectedItemIds;
 
     return (
-        <div className="grid gap-4 h-[calc(100vh-14rem)] grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="flex flex-col gap-8 pb-20">
             {/* Top row: left / center / right */}
-            <div className="grid gap-4 min-h-0 grid-cols-[260px_minmax(0,1fr)_420px]">
+            <div className="grid gap-4 h-[85vh] grid-cols-[260px_minmax(0,1fr)_420px]">
                 <FlowItemsPanel
                     projectId={projectId}
                     selectedAllProject={selectedAllProject}
@@ -343,7 +343,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
             </div>
 
             {/* Bottom row: structured editor */}
-            <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
+            <div className="bg-white border rounded-lg shadow-sm flex flex-col">
                 <div className="p-3 border-b flex items-center justify-between">
                     <div>
                         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Structured editor</div>
@@ -377,7 +377,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                     </div>
                 )}
 
-                <div className="flex-1 min-h-0 overflow-y-auto p-3">
+                <div className="p-3">
                     <ItemEditorPanel />
                 </div>
             </div>

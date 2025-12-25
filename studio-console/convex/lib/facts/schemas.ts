@@ -18,6 +18,7 @@ export const factValueSchema = v.union(
   v.number(),
   v.boolean(),
   v.object({ value: v.number(), unit: v.string() }), // dimension/currency
+  v.object({ min: v.number(), max: v.number() }), // numeric range
   v.object({ iso: v.string() }) // date
 );
 

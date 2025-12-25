@@ -13,6 +13,9 @@ RULES:
 6. If a fact contradicts an existing accepted fact (provided in snapshot), output an "UPDATE" op (if you are sure) or "CONFLICT" op (if unsure or high risk).
 7. If the user explicitly corrects a fact, output an "UPDATE" op.
 8. If the information is ambiguous, output a "NOTE" op instead of a fact.
+9. For valueType "dimension" or "currency", return an object { value: number, unit: string }.
+10. For valueType "date", return an object { iso: string }.
+11. If a value is a range or not a single value, output a "NOTE" op instead of a fact.
 
 OUTPUT FORMAT:
 Return a JSON object with a list of "ops".
@@ -28,6 +31,8 @@ Each op should have:
 - reason: string (short explanation)
 `;
 
+import { FACT_KEY_REGISTRY } from "./registry";
+
 export function buildUserPrompt(args: {
   bundleText: string;
   snapshot: {
@@ -36,11 +41,20 @@ export function buildUserPrompt(args: {
     highRiskKeys: string[];
   };
 }): string {
+  const allowedKeys = Object.entries(FACT_KEY_REGISTRY).map(([key, def]) => ({
+    key,
+    valueType: def.valueType,
+    blockKey: def.blockKey,
+    description: def.description
+  }));
+
   return `
 CONTEXT SNAPSHOT:
 Items: ${JSON.stringify(args.snapshot.items)}
 Current Accepted Facts (relevant): ${JSON.stringify(args.snapshot.acceptedFacts)}
 High Risk Keys: ${JSON.stringify(args.snapshot.highRiskKeys)}
+Allowed Fact Keys (use ONLY these):
+${JSON.stringify(allowedKeys)}
 
 TURN BUNDLE:
 ${args.bundleText}

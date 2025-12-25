@@ -282,6 +282,38 @@ export const send = action({
                 status: "final",
             });
 
+            try {
+                const itemRefs = await ctx.runQuery(internal.items.getItemRefs, { projectId: project._id });
+                const scope =
+                    args.scopeType === "allProject"
+                        ? { type: "project" as const }
+                        : {
+                            type: args.scopeType === "singleItem" ? ("item" as const) : ("multiItem" as const),
+                            itemIds: args.scopeItemIds,
+                        };
+
+                await ctx.runMutation(internal.turnBundles.createFromTurn, {
+                    projectId: project._id,
+                    stage: args.tab,
+                    scope,
+                    source: {
+                        type: "chat",
+                        sourceIds: [userMessageId, assistantMessageId],
+                    },
+                    itemRefs,
+                    freeChat: args.userContent,
+                    agentOutput: finalAssistantMarkdown,
+                });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                await ctx.runMutation(internal.agentRuns.appendEvent, {
+                    runId,
+                    level: "warn",
+                    stage: "agent_a",
+                    message: `Facts turn bundle failed: ${message}`,
+                });
+            }
+
             await ctx.runMutation(internal.agentRuns.appendEvent, {
                 runId,
                 level: "info",

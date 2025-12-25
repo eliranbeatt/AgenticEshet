@@ -3,6 +3,7 @@ import { verifyEvidence } from "./verify";
 import { FACT_KEY_REGISTRY, HIGH_RISK_KEYS } from "./registry";
 import { Doc, Id } from "../../_generated/dataModel";
 import { patchBlocks } from "../knowledgeBlocks/patch";
+import { applyFactsToItems } from "./apply";
 
 export async function reconcileOps(
   ctx: MutationCtx,
@@ -64,9 +65,14 @@ export async function reconcileOps(
         // ADD or UPDATE
         const isHighRisk = HIGH_RISK_KEYS.includes(op.key);
         const isAgentOutput = op.evidence.sourceSection === "AGENT_OUTPUT";
+        const isUserInput =
+            op.evidence.sourceSection === "USER_ANSWERS" || op.evidence.sourceSection === "FREE_CHAT";
         const highConfidence = op.confidence > 0.85;
 
-        if (!isHighRisk && !isAgentOutput && highConfidence && !needsReview) {
+        if (!isHighRisk && isUserInput) {
+            status = "accepted";
+            needsReview = false;
+        } else if (!isHighRisk && !isAgentOutput && highConfidence && !needsReview) {
             status = "accepted";
         } else {
             status = "proposed";
@@ -156,6 +162,7 @@ export async function reconcileOps(
 
   if (acceptedFactsForPatch.length > 0) {
     await patchBlocks(ctx, projectId, acceptedFactsForPatch);
+    await applyFactsToItems(ctx, projectId, acceptedFactsForPatch);
   }
 
   return stats;

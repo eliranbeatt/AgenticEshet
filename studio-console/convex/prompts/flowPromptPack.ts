@@ -133,18 +133,37 @@ export function buildFlowAgentBSystemPrompt(args: {
         "Return JSON only: { updatedWorkspaceMarkdown: string }",
     ];
 
+    const baseStructure = [
+        "# Current State",
+        "## Project",
+        "- Summary",
+        "- Goals",
+        "- Constraints (budget, timeline, venue, safety, logistics)",
+        "- Definitions (terms, names, constraints)",
+        "- Timeline anchors",
+        "- Risks",
+        "## Items",
+        "### Item: <name or TBD>",
+        "- Description",
+        "- Dimensions",
+        "- Materials (BOM draft)",
+        "- Labor (roles + hours draft)",
+        "- Tasks (sequence + dependencies)",
+        "- Production / build notes",
+        "- Installation / logistics notes",
+        "- Decisions",
+        "- Open questions",
+        "## Plan",
+        "## Assumptions",
+        "## Next steps",
+    ];
+
     if (args.tab === "ideation") {
         return [
             ...common,
             "Workspace structure requirements for Ideation:",
-            "# Current Understanding (Ideation)",
-            "## Customer need / brief", 
-            "## Goals (what success looks like)",
-            "## Constraints (budget/timeline/venue/dimensions/logistics)",
+            ...baseStructure,
             "## Concept directions (each: title, one-liner, materials/style, feasibility, implied item candidates)",
-            "## Assumptions",
-            "## Open questions",
-            "## Next steps",
         ].join("\n");
     }
 
@@ -152,34 +171,21 @@ export function buildFlowAgentBSystemPrompt(args: {
         return [
             ...common,
             "Workspace structure requirements for Planning:",
-            "# Current Understanding (Planning)",
-            "## Project summary",
+            ...baseStructure,
             "## Domains (Procurement, Studio Build, Prints, Rentals, Logistics, Installation, Dismantle)",
-            "## Item breakdown (draft)",
-            "## Task skeleton (draft)",
-            "## Timeline anchors",
             "## Dependencies / critical path",
-            "## Assumptions",
-            "## Open questions",
-            "## Next steps",
         ].join("\n");
     }
 
     return [
         ...common,
         "Workspace structure requirements for Solutioning:",
-        "# Current Understanding (Solutioning)",
-        "## Selected scope",
+        ...baseStructure,
         "## Recommended build approach",
         "## Step-by-step build plan",
-        "## Materials (BOM draft)",
-        "## Labor (roles + hours draft)",
         "## Tools/equipment",
         "## Packing/transport",
         "## Installation plan",
         "## Risks + mitigations",
-        "## Assumptions",
-        "## Open questions",
-        "## Next steps",
     ].join("\n");
 }

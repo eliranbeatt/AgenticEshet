@@ -98,10 +98,12 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const [workspaceId, setWorkspaceId] = useState<Id<"flowWorkspaces"> | null>(null);
     const [textDraft, setTextDraft] = useState("");
     const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+    const [hasRemoteUpdate, setHasRemoteUpdate] = useState(false);
     const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts">("state");
 
     const lastLoadedScopeKeyRef = useRef<string | null>(null);
     const lastRemoteTextRef = useRef<string>("");
+    const pendingRemoteTextRef = useRef<string | null>(null);
 
     useEffect(() => {
         void (async () => {
@@ -121,9 +123,32 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
         if (lastLoadedScopeKeyRef.current === scopeKey) return;
         lastLoadedScopeKeyRef.current = scopeKey;
         lastRemoteTextRef.current = workspace.text ?? "";
+        pendingRemoteTextRef.current = null;
+        setHasRemoteUpdate(false);
         setTextDraft(workspace.text ?? "");
         setSaveStatus("idle");
     }, [scopeKey, workspace]);
+
+    useEffect(() => {
+        if (!workspace) return;
+        if (lastLoadedScopeKeyRef.current !== scopeKey) return;
+        const remoteText = workspace.text ?? "";
+        if (remoteText === lastRemoteTextRef.current) return;
+
+        const localDirty = textDraft !== lastRemoteTextRef.current;
+        lastRemoteTextRef.current = remoteText;
+
+        if (localDirty) {
+            pendingRemoteTextRef.current = remoteText;
+            setHasRemoteUpdate(true);
+            return;
+        }
+
+        pendingRemoteTextRef.current = null;
+        setHasRemoteUpdate(false);
+        setTextDraft(remoteText);
+        setSaveStatus("idle");
+    }, [scopeKey, textDraft, workspace]);
 
     useEffect(() => {
         if (!workspaceId) return;
@@ -212,6 +237,16 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
         } finally {
             setIsApplyingSpec(false);
         }
+    };
+
+    const applyRemoteUpdate = () => {
+        const pending = pendingRemoteTextRef.current;
+        if (pending === null) return;
+        lastRemoteTextRef.current = pending;
+        pendingRemoteTextRef.current = null;
+        setHasRemoteUpdate(false);
+        setTextDraft(pending);
+        setSaveStatus("idle");
     };
 
 
@@ -393,7 +428,14 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                     </div>
                     <div className="flex-1 min-h-0 relative">
                         {rightPanelTab === "state" ? (
-                            <CurrentStatePanel projectId={projectId} />
+                            <CurrentStatePanel
+                                text={textDraft}
+                                onChange={setTextDraft}
+                                saveStatus={saveStatus}
+                                updatedAt={workspace?.updatedAt}
+                                hasRemoteUpdate={hasRemoteUpdate}
+                                onApplyRemote={applyRemoteUpdate}
+                            />
                         ) : (
                             <FactsPanel projectId={projectId} />
                         )}

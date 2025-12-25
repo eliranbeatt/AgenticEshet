@@ -1,72 +1,93 @@
 "use client";
 
-import { useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
+import { useState } from "react";
 
-export function CurrentStatePanel({ projectId }: { projectId: Id<"projects"> }) {
-  const blocks = useQuery(api.facts.listBlocks, { projectId });
+type SaveStatus = "idle" | "saving" | "saved";
 
-  if (!blocks) return <div className="text-xs text-gray-500">Loading state...</div>;
+type CurrentStatePanelProps = {
+    text: string;
+    onChange: (next: string) => void;
+    saveStatus: SaveStatus;
+    updatedAt?: number;
+    hasRemoteUpdate: boolean;
+    onApplyRemote: () => void;
+};
 
-  // Group blocks by scope (Project vs Items)
-  const projectBlocks = blocks.filter((b) => b.scopeType === "project");
-  const itemBlocks = blocks.filter((b) => b.scopeType === "item");
+function formatTimestamp(value?: number) {
+    if (!value) return "Not saved yet";
+    return new Date(value).toLocaleTimeString();
+}
 
-  // Sort blocks by key for stability
-  projectBlocks.sort((a, b) => a.blockKey.localeCompare(b.blockKey));
-  itemBlocks.sort((a, b) => {
-    if (a.itemId !== b.itemId) return (a.itemId || "").localeCompare(b.itemId || "");
-    return a.blockKey.localeCompare(b.blockKey);
-  });
+export function CurrentStatePanel({
+    text,
+    onChange,
+    saveStatus,
+    updatedAt,
+    hasRemoteUpdate,
+    onApplyRemote,
+}: CurrentStatePanelProps) {
+    const [viewMode, setViewMode] = useState<"edit" | "preview">("edit");
 
-  return (
-    <div className="flex flex-col h-full bg-white">
-      <div className="p-3 border-b bg-gray-50">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-700">Current State</h3>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        {projectBlocks.length > 0 && (
-          <div>
-            <h4 className="text-sm font-bold text-gray-900 mb-2 border-b pb-1">Project Level</h4>
-            <div className="space-y-4">
-              {projectBlocks.map((block) => (
-                <div key={block._id} className="prose prose-sm max-w-none">
-                  <ReactMarkdown>{block.renderedMarkdown}</ReactMarkdown>
-                  <div className="text-[10px] text-gray-400 mt-1 text-right">
-                    Rev {block.revision} • {new Date(block.updatedAt).toLocaleTimeString()}
-                  </div>
+    return (
+        <div className="flex flex-col h-full bg-white">
+            <div className="p-3 border-b bg-gray-50">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-700">Current State</h3>
+                    <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                        <span>
+                            {saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved" : "Idle"}
+                        </span>
+                        <span className="text-gray-400">Last: {formatTimestamp(updatedAt)}</span>
+                    </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {itemBlocks.length > 0 && (
-          <div>
-            <h4 className="text-sm font-bold text-gray-900 mb-2 border-b pb-1 mt-6">Items</h4>
-            <div className="space-y-4">
-              {itemBlocks.map((block) => (
-                <div key={block._id} className="prose prose-sm max-w-none">
-                  <div className="text-xs font-mono text-gray-500 mb-1">Item: {block.itemId}</div>
-                  <ReactMarkdown>{block.renderedMarkdown}</ReactMarkdown>
-                  <div className="text-[10px] text-gray-400 mt-1 text-right">
-                    Rev {block.revision} • {new Date(block.updatedAt).toLocaleTimeString()}
-                  </div>
+                <div className="mt-2 flex items-center gap-2">
+                    <div className="flex items-center bg-white rounded border p-1 gap-1">
+                        <button
+                            type="button"
+                            onClick={() => setViewMode("edit")}
+                            className={`px-2 py-1 text-[10px] rounded font-semibold uppercase tracking-wide ${
+                                viewMode === "edit" ? "bg-blue-600 text-white" : "text-gray-600 hover:text-gray-900"
+                            }`}
+                        >
+                            Edit
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setViewMode("preview")}
+                            className={`px-2 py-1 text-[10px] rounded font-semibold uppercase tracking-wide ${
+                                viewMode === "preview" ? "bg-blue-600 text-white" : "text-gray-600 hover:text-gray-900"
+                            }`}
+                        >
+                            Preview
+                        </button>
+                    </div>
+                    {hasRemoteUpdate && (
+                        <button
+                            type="button"
+                            onClick={onApplyRemote}
+                            className="px-2 py-1 text-[10px] rounded uppercase bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
+                        >
+                            Load latest update
+                        </button>
+                    )}
                 </div>
-              ))}
             </div>
-          </div>
-        )}
 
-        {blocks.length === 0 && (
-          <div className="text-xs text-gray-400 text-center py-8">
-            No knowledge blocks yet. Start chatting or answering questions to generate facts.
-          </div>
-        )}
-      </div>
-    </div>
-  );
+            <div className="flex-1 overflow-y-auto p-4">
+                {viewMode === "edit" ? (
+                    <textarea
+                        className="w-full h-full min-h-[320px] border rounded p-3 text-xs font-mono text-gray-800 resize-none"
+                        value={text}
+                        onChange={(event) => onChange(event.target.value)}
+                        placeholder="Capture the current state of knowledge here. Use headings and item blocks."
+                    />
+                ) : (
+                    <div className="prose prose-sm max-w-none">
+                        <ReactMarkdown>{text || "No current state yet."}</ReactMarkdown>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 }

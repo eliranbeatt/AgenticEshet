@@ -94,7 +94,19 @@ function renderMarkdown(blockKey: string, json: any): string {
     for (const [key, val] of Object.entries(json)) {
         const v = (val as any).value;
         if (v !== null && v !== undefined) {
-            md += `- **${key}**: ${v}\n`;
+            let displayValue = v;
+            if (typeof v === "object") {
+                if ("value" in v && "unit" in v) {
+                    displayValue = `${v.value} ${v.unit}`;
+                } else if ("min" in v && "max" in v) {
+                    displayValue = `${v.min}-${v.max}`;
+                } else if ("iso" in v) {
+                    displayValue = v.iso;
+                } else {
+                    displayValue = JSON.stringify(v);
+                }
+            }
+            md += `- **${key}**: ${displayValue}\n`;
         }
     }
     return md;

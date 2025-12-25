@@ -7,6 +7,8 @@ import { z } from "zod";
 import { HIGH_RISK_KEYS } from "./lib/facts/registry";
 import { reconcileOps } from "./lib/facts/reconcile";
 import { Id } from "./_generated/dataModel";
+import { patchBlocks } from "./lib/knowledgeBlocks/patch";
+import { applyFactsToItems } from "./lib/facts/apply";
 
 const FactOpSchema = z.object({
   op: z.enum(["ADD", "UPDATE", "CONFLICT", "NOTE"]),
@@ -20,6 +22,7 @@ const FactOpSchema = z.object({
     z.number(),
     z.boolean(),
     z.object({ value: z.number(), unit: z.string() }),
+    z.object({ min: z.number(), max: z.number() }),
     z.object({ iso: z.string() }),
   ]),
   valueType: z.string(),
@@ -44,14 +47,27 @@ export const parseTurnBundle = internalAction({
   },
   handler: async (ctx, args) => {
     console.log("parseTurnBundle started for bundle", args.turnBundleId);
+    const bundle = await ctx.runQuery(internal.facts.getBundle, { turnBundleId: args.turnBundleId });
+    if (!bundle) throw new Error("Bundle not found");
+
+    const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
+      projectId: bundle.projectId,
+      agent: "facts.parse",
+      stage: "start",
+      initialMessage: `Parse facts for bundle ${args.turnBundleId}`,
+    });
+
+    await ctx.runMutation(internal.agentRuns.setStatus, {
+      runId: agentRunId,
+      status: "running",
+      stage: "parsing",
+    });
+
     const runId = await ctx.runMutation(internal.facts.createParseRun, {
       turnBundleId: args.turnBundleId,
     });
 
     try {
-      const bundle = await ctx.runQuery(internal.facts.getBundle, { turnBundleId: args.turnBundleId });
-      if (!bundle) throw new Error("Bundle not found");
-
       const snapshot = await ctx.runQuery(internal.facts.getSnapshot, { 
         projectId: bundle.projectId,
         stage: bundle.stage 
@@ -78,11 +94,30 @@ export const parseTurnBundle = internalAction({
       });
       console.log("parseTurnBundle completed successfully with ops:", result.ops.length);
 
+      await ctx.runMutation(internal.agentRuns.appendEvent, {
+        runId: agentRunId,
+        level: "info",
+        stage: "parsing",
+        message: `LLM extracted ${result.ops.length} ops`,
+      });
+
+      await ctx.runMutation(internal.agentRuns.setStatus, {
+        runId: agentRunId,
+        status: "succeeded",
+        stage: "done",
+      });
     } catch (error: any) {
       console.error("parseTurnBundle failed:", error);
       await ctx.runMutation(internal.facts.failParseRun, {
         runId,
         error: error.message,
+      });
+
+      await ctx.runMutation(internal.agentRuns.setStatus, {
+        runId: agentRunId,
+        status: "failed",
+        stage: "error",
+        error: error?.message ?? "Unknown error",
       });
     }
   },
@@ -210,6 +245,21 @@ export const acceptFact = mutation({
         needsReview: false,
         supersedesFactId: existingFact?._id 
     });
+
+    await patchBlocks(ctx, fact.projectId, [{
+        _id: fact._id,
+        key: fact.key,
+        value: fact.value,
+        scopeType: fact.scopeType as "project" | "item",
+        itemId: fact.itemId
+    }]);
+
+    await applyFactsToItems(ctx, fact.projectId, [{
+        key: fact.key,
+        value: fact.value,
+        scopeType: fact.scopeType as "project" | "item",
+        itemId: fact.itemId,
+    }]);
   },
 });
 
@@ -241,6 +291,43 @@ export const listBlocks = query({
       .withIndex("by_scope_block", (q) => q.eq("projectId", args.projectId))
       .collect();
     return blocks;
+  },
+});
+
+export const rebuildBlocks = mutation({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const acceptedFacts = await ctx.db
+      .query("facts")
+      .withIndex("by_project_status", (q) =>
+        q.eq("projectId", args.projectId).eq("status", "accepted")
+      )
+      .collect();
+
+    const existingBlocks = await ctx.db
+      .query("knowledgeBlocks")
+      .withIndex("by_scope_block", (q) => q.eq("projectId", args.projectId))
+      .collect();
+
+    for (const block of existingBlocks) {
+      await ctx.db.delete(block._id);
+    }
+
+    if (acceptedFacts.length > 0) {
+      await patchBlocks(
+        ctx,
+        args.projectId,
+        acceptedFacts.map((fact) => ({
+          _id: fact._id,
+          key: fact.key,
+          value: fact.value,
+          scopeType: fact.scopeType,
+          itemId: fact.itemId,
+        }))
+      );
+    }
+
+    return { blocksRebuilt: true, factsUsed: acceptedFacts.length };
   },
 });
 
@@ -285,6 +372,24 @@ export const resolveConflict = mutation({
         } else if (fact.status === "accepted" || fact.status === "conflict") {
             await ctx.db.patch(fact._id, { status: "superseded" });
         }
+    }
+
+    const chosenFact = facts.find((fact) => fact._id === args.chosenFactId);
+    if (chosenFact) {
+        await patchBlocks(ctx, chosenFact.projectId, [{
+            _id: chosenFact._id,
+            key: chosenFact.key,
+            value: chosenFact.value,
+            scopeType: chosenFact.scopeType as "project" | "item",
+            itemId: chosenFact.itemId
+        }]);
+
+        await applyFactsToItems(ctx, chosenFact.projectId, [{
+            key: chosenFact.key,
+            value: chosenFact.value,
+            scopeType: chosenFact.scopeType as "project" | "item",
+            itemId: chosenFact.itemId,
+        }]);
     }
   },
 });

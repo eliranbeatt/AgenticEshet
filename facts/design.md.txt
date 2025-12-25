@@ -1,0 +1,462 @@
+design.md
+# Design — TurnBundle → One Parser Run → Facts Ledger → Knowledge Blocks → Item Materialization → Canonical Linking
+
+This design extends your existing Next.js App Router + Convex architecture, including agentRuns, flowWorkspaces, structuredQuestionSessions, projectItems, canonicalItems, and existing orchestration patterns. :contentReference[oaicite:1]{index=1}
+
+---
+
+## 1) System architecture overview
+
+### 1.1 New pipeline (per turn)
+**Inputs**
+- Structured Q UI answers + free chat + generation output
+- Scope (project / item / multi-item)
+- Stage (ideation / planning / solutioning)
+
+**Processing**
+1) Build and persist TurnBundle (immutable)
+2) Create factParseRun (idempotent)
+3) Call GPT-5-mini once with (TurnBundle + compact snapshot)
+4) Verify evidence spans deterministically (no LLM)
+5) Reconcile FactOps → facts ledger
+6) Apply block patches → knowledgeBlocks
+7) Materialize items (projection cache or compute-on-read)
+8) UI updates: current state, extracted facts, conflicts
+
+### 1.2 How this fits existing agents (important)
+You already have:
+- Flow Agent A (chat)
+- Flow Agent B (workspace updater)
+- Structured questions agent
+- Planning/solutioning/task/accounting/quote agents
+(see your spec) :contentReference[oaicite:2]{index=2}
+
+**Key change**:
+- Your “workspace updater” must stop rewriting one big markdown workspace.
+- Replace it with **KnowledgeBlocks patch operations**.
+- If you want an LLM in the background to “reason”, it must output **patch ops** or **proposed facts/notes**, never rewrite whole state.
+
+---
+
+## 2) Data model (Convex)
+
+> Field names below are explicit to remove ambiguity for implementation.
+
+### 2.1 `turnBundles` (new)
+Stores immutable bundle text.
+
+Fields:
+- `_id`
+- `projectId`
+- `source`: `{ type: "structuredQuestions" | "chat" | "generation" | "mixed", sourceIds: string[] }`
+- `stage`: `"ideation" | "planning" | "solutioning"`
+- `scope`: `{ type: "project" | "item" | "multiItem", itemIds?: Id<"projectItems">[] }`
+- `bundleText`: string (immutable)
+- `bundleHash`: string (sha256)
+- `createdAt`: number
+Indexes:
+- `by_project_createdAt` (projectId, createdAt)
+- `by_hash` (bundleHash)
+
+### 2.2 `factParseRuns` (new)
+Tracks the single parser execution per bundle.
+
+Fields:
+- `_id`
+- `projectId`
+- `turnBundleId`
+- `status`: `"queued" | "running" | "succeeded" | "failed"`
+- `model`: `"gpt-5-mini"`
+- `startedAt`, `finishedAt`
+- `stats`: `{ opsIn: number, factsAdded: number, factsUpdated: number, conflicts: number, notes: number, needsReview: number, rejected: number }`
+- `error?`: `{ message: string, raw?: string }`
+Indexes:
+- `by_bundle` (turnBundleId)
+- `by_project_createdAt` (projectId, createdAt)
+
+### 2.3 `facts` (new)
+Atomic ledger, never overwritten destructively.
+
+Fields:
+- `_id`
+- `projectId`
+- `scopeType`: `"project" | "item"`
+- `itemId?`
+- `key`: string (whitelisted canonical path)
+- `valueType`: `"boolean" | "enum" | "number" | "dimension" | "currency" | "date" | "string" | "note"`
+- `value`: any (typed JSON)
+- `status`: `"proposed" | "accepted" | "rejected" | "conflict"`
+- `needsReview`: boolean
+- `confidence`: number (0..1)
+- `sourceKind`: `"user" | "agent" | "system" | "manual"`
+- `evidence`:
+  - `turnBundleId`
+  - `quote`
+  - `startChar`
+  - `endChar`
+  - `sourceSection`: `"USER_ANSWERS" | "FREE_CHAT" | "AGENT_OUTPUT"`
+- `parseRunId`
+- `createdAt`
+- `supersedesFactId?`
+Indexes:
+- `by_scope_key` (projectId, scopeType, itemId, key)
+- `by_project_status` (projectId, status)
+- `by_item` (projectId, itemId)
+
+### 2.4 `knowledgeBlocks` (new)
+Stable blocks, updated by patches.
+
+Fields:
+- `_id`
+- `projectId`
+- `scopeType`: `"project" | "item"`
+- `itemId?`
+- `blockKey`: string (enum)
+- `json`: object (structured)
+- `renderedMarkdown`: string
+- `revision`: number
+- `updatedAt`
+- `updatedBy`: `{ type: "system" | "user" | "agent", refId?: string }`
+Indexes:
+- `by_scope_block` (projectId, scopeType, itemId, blockKey)
+
+### 2.5 `projectItems` changes (existing table)
+Add:
+- `manualOverrides`: Record<string, any>  (only user controlled)
+- `projectionCache?`: Record<string, { value: any, activeFactId: Id<"facts"> }>
+- `projectionRevision`: number
+- `lastMaterializedAt`: number
+
+> DO NOT store “AI rewritten state” in items. Store only computed projections and manual overrides.
+
+### 2.6 Canonical linking (existing + optional new table)
+You already have canonical items and price observations. :contentReference[oaicite:3]{index=3}
+
+Add one of:
+A) store canonical links inside material/work lines (preferred if you already have line tables)
+B) new linking table `projectMaterialRefs`:
+- projectId, itemId, canonicalItemId, sourceLineId?, confidence, status
+
+---
+
+## 3) TurnBundle format (offset-stable)
+
+### 3.1 Why format matters
+Evidence offsets must remain valid forever.
+So the TurnBundle must be:
+- deterministic
+- immutable after creation
+- structured with stable headers
+
+### 3.2 Exact template
+[TURN_META]
+bundleId=<id>
+stage=<ideation|planning|solutioning>
+scope=<project|item|multiItem>
+itemRefs=[{id:"i1",name:"Backdrop"}, {id:"i2",name:"Floor"}]
+selectedItemIds=["i1","i2"]
+timestamp=<...>
+
+[STRUCTURED_QUESTIONS]
+Q1(id=<qId>): <text>
+...
+
+[USER_ANSWERS]
+A1(qId=<qId>): quick=<YES|NO|IDK|IRRELEVANT> text="<free text>"
+...
+
+[FREE_CHAT]
+<user free chat in this turn>
+
+[AGENT_OUTPUT]
+<assistant output produced in this turn, if any>
+
+yaml
+Copy code
+
+Rules:
+- Always include all headers (even if section empty → write “(none)”).
+- Store exactly as sent to parser.
+
+---
+
+## 4) The “one-call-per-turn” FactExtractor
+
+### 4.1 Input to the single call
+- `TurnBundle.bundleText`
+- `CurrentFactSnapshot` (compact, not full history):
+  - items list (id+name) relevant to scope
+  - accepted facts for keys relevant to stage
+  - high-risk keys list
+  - optional: known canonical items for matching terms
+
+### 4.2 Output contract: FactOps
+The model returns an array of FactOps.
+
+FactOp:
+- `op`: `"ADD" | "UPDATE" | "CONFLICT" | "NOTE"`
+- `scope`: `{ type: "project" | "item", itemId?: string }`
+- `key`: string (must be from whitelist)
+- `valueType`
+- `value`
+- `evidence`: `{ quote, startChar, endChar, sourceSection }`
+- `confidence`: number
+- `needsReview`: boolean
+- `reason`: short explanation (not used for truth, used for debugging)
+
+### 4.3 Hard guardrails for the parser prompt
+- Must not infer.
+- Must not “summarize” into new values.
+- If unclear → NOTE.
+- If sourceSection=AGENT_OUTPUT → needsReview=true AND mark as proposed.
+- If conflicts with snapshot accepted value → op=CONFLICT (do not overwrite).
+
+---
+
+## 5) Deterministic verification & reconciliation (backend)
+
+### 5.1 Evidence verification (mandatory)
+Given TurnBundle.text:
+- Check bounds:
+  - 0 <= start < end <= len(text)
+- Check substring equality:
+  - text[start:end] === quote
+- Enforce quote max length (e.g., 250 chars) to prevent “whole bundle” claims.
+
+If fails → drop or downgrade to NOTE (system-generated).
+
+### 5.2 Key whitelist enforcement
+Maintain:
+- `FACT_KEY_REGISTRY` with allowed keys and their value types
+- `HIGH_RISK_KEYS` list
+- `STAGE_KEY_ALLOWLIST` (ideation vs planning vs solutioning)
+
+If key not allowed → convert to NOTE.
+
+### 5.3 Reconcile into facts ledger
+Deterministic rules:
+1) Load current accepted fact for (scope,key) if exists.
+2) If no accepted fact:
+   - Insert new fact as accepted if auto-accept policy passes; else proposed.
+3) If accepted fact exists:
+   - If new value same → no-op (optional: store as redundant evidence or ignore)
+   - If new value differs:
+     - If high-risk or low confidence → new fact status=conflict
+     - Else:
+       - create new accepted fact + set supersedesFactId = old accepted
+       - OR mark as proposed depending on policy
+
+### 5.4 Auto-accept policy (recommended)
+Auto-accept if:
+- evidence verified
+- confidence >= 0.85
+- not high-risk key
+- sourceSection in USER_ANSWERS/FREE_CHAT
+- op is ADD/UPDATE (not CONFLICT)
+Otherwise → proposed.
+
+---
+
+## 6) KnowledgeBlocks: smart updater without rewriting
+
+### 6.1 Block keys (recommended minimal set)
+Project-level blocks:
+- `project.summary`
+- `project.constraints`
+- `project.logistics`
+- `project.timeline`
+- `project.budget` (high risk)
+- `project.decisions`
+- `project.openQuestions`
+
+Item-level blocks:
+- `item.summary`
+- `item.dimensions`
+- `item.materials`
+- `item.production`
+- `item.installation`
+- `item.logistics`
+- `item.constraints`
+- `item.decisions`
+- `item.openQuestions`
+
+### 6.2 Block JSON shapes (examples)
+`item.dimensions.json`:
+```json
+{
+  "width": {"value": 600, "unit": "cm", "factId": "..." },
+  "height": {"value": null, "unit": "cm", "factId": null},
+  "depth": {"value": null, "unit": "cm", "factId": null},
+  "notes": [{"text":"maybe 6m, not sure", "factId":"..."}]
+}
+project.constraints.json:
+
+json
+Copy code
+{
+  "constraints": [
+    {"text":"No drilling allowed", "factId":"...", "severity":"hard"},
+    {"text":"Install at night only", "factId":"...", "severity":"hard"}
+  ]
+}
+6.3 Patch engine (no LLM)
+Given a set of changed/added facts:
+
+Map fact key prefix → target blockKey.
+
+Apply minimal change:
+
+set property value + attach factId
+
+append bullet
+
+mark open question resolved if key now filled
+
+6.4 Rendering
+renderedMarkdown is derived from JSON (deterministic).
+No “rewriting paragraphs”.
+
+6.5 Optional background “Enricher agent”
+If you still want “reason and fill needed information”:
+
+It may propose:
+
+new openQuestions entries
+
+checklists
+
+suggested constraints
+
+It must output patch ops (add-only) or NOTES.
+
+It must never modify/remove existing entries and never rewrite blocks.
+
+7) Item materialization (facts → persistent item entity)
+7.1 Projection sources
+manualOverrides (user set)
+
+accepted facts (most recent)
+
+defaults / null
+
+7.2 Projection storage options
+A) Compute-on-read:
+
+On item query, load accepted facts and apply manual overrides.
+
+Pros: simplest, always consistent.
+
+Cons: heavier reads.
+
+B) Cached projection:
+
+Update item.projectionCache after reconciliation.
+
+Maintain projectionRevision to invalidate.
+
+Pros: faster UI, easier display.
+
+Cons: must keep cache correct.
+
+7.3 Evidence “why” UI
+Every projected field displays:
+
+active value
+
+“source” button → opens evidence quote highlight and turn link.
+
+7.4 Manual edit behavior
+Manual edits:
+
+write to manualOverrides only
+
+optionally create a fact with sourceKind="manual" (no offsets) for audit and to drive blocks.
+
+8) Canonical items integration design
+8.1 Where canonical linking lives
+Preferred:
+
+material/work line objects include canonicalItemId.
+
+If you don’t have consistent line objects yet:
+
+use projectMaterialRefs linking table.
+
+8.2 Suggestion logic (deterministic-first)
+Match line displayName to normalization map synonyms.
+
+If match confidence high → show “Suggested canonical link”.
+
+User confirms (writes canonicalItemId).
+
+Price memory panel uses canonicalItemId to fetch priceObservations and vendor stats.
+
+8.3 Keep truth separate
+Canonical linking is not a “fact about the world”; it’s a mapping decision.
+Store it as:
+
+a decision block entry + reference to canonicalItemId.
+
+9) Cross-scope consistency
+9.1 Unified truth store
+Truth = facts + knowledgeBlocks + items.
+Chats = views that generate new turns and update truth.
+
+9.2 Reliable item targeting from project chat
+Add @item mention picker:
+
+inserts token @item(<id>:<name>)
+
+message metadata stores resolved itemIds
+
+TurnBundle includes selectedItemIds so parser scopes facts correctly.
+
+Fallback:
+
+name matching (but if ambiguous → needsReview).
+
+10) Observability and failure handling
+10.1 parse run tracking
+Every bundle has at most one successful parse run unless forced.
+
+UI shows last run status and “retry parse” action.
+
+10.2 error recovery
+If parse fails:
+
+store failure details
+
+do not block the user
+
+allow retry with exponential backoff or manual button
+
+10.3 audit tooling
+Admin/dev pages:
+
+TurnBundle viewer (immutable)
+
+Parse output viewer (raw FactOps)
+
+Facts ledger viewer with filters
+
+11) Optional: single unified screen (stage toggle)
+Recommended UX:
+
+One page with:
+
+Stage toggle (Ideation / Planning / Solutioning)
+
+Scope toggle (Project / Item / Multi-item)
+
+Left: structured questions OR free chat
+
+Center: generation chat
+
+Right: current state blocks + facts review
+
+Only the “active panel” changes by stage; the truth store stays the same.
+
+yaml
+Copy code
+
+---

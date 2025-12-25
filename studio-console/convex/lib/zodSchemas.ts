@@ -811,3 +811,33 @@ export type ClarificationPacket = z.infer<typeof ClarificationPacketSchema>;
 export type QuoteDraft = z.infer<typeof QuoteDraftSchema>;
 export type ResearchFindings = z.infer<typeof ResearchFindingsSchema>;
 export type QuoteAgentResult = z.infer<typeof QuoteAgentResultSchema>;
+
+export const StructuredQuestionSchema = z.object({
+    id: z.string(),
+    stage: z.enum(["clarification", "planning", "solutioning"]),
+    questionType: z.enum(["boolean", "text"]),
+    title: z.string(),
+    prompt: z.string().optional(),
+    expectsFreeText: z.boolean(),
+    blocking: z.boolean(),
+    tags: z.array(z.string()).optional(),
+});
+
+export const StructuredQuestionsTurnSchema = z.object({
+    turnId: z.string(),
+    questions: z.array(StructuredQuestionSchema),
+    sessionState: z.object({
+        done: z.boolean(),
+        nextGoal: z.string().optional(),
+    }),
+});
+
+export const StructuredAnswerSchema = z.object({
+    questionId: z.string(),
+    quick: z.enum(["yes", "no", "idk", "irrelevant"]),
+    text: z.string().optional(),
+});
+
+export type StructuredQuestion = z.infer<typeof StructuredQuestionSchema>;
+export type StructuredQuestionsTurn = z.infer<typeof StructuredQuestionsTurnSchema>;
+export type StructuredAnswer = z.infer<typeof StructuredAnswerSchema>;

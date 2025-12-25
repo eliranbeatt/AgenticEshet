@@ -1300,4 +1300,28 @@ export default defineSchema({
         .index("by_status_startedAt", ["status", "startedAt"])
         .index("by_linked_materialLine_createdAt", ["linked.materialLineId", "startedAt"])
         .index("by_createdBy_startedAt", ["createdBy", "startedAt"]),
+
+    // Structured Questions
+    structuredQuestionSessions: defineTable({
+        projectId: v.id("projects"),
+        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+        status: v.union(v.literal("active"), v.literal("done"), v.literal("archived")),
+        currentTurnNumber: v.number(),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    }).index("by_project_stage", ["projectId", "stage", "status"]),
+
+    structuredQuestionTurns: defineTable({
+        projectId: v.id("projects"),
+        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+        sessionId: v.id("structuredQuestionSessions"),
+        turnNumber: v.number(),
+        questions: v.any(), // JSON: StructuredQuestion[]
+        answers: v.any(), // JSON: StructuredAnswer[]
+        agentRunId: v.optional(v.id("agentRuns")),
+        createdAt: v.number(),
+        answeredAt: v.optional(v.number()),
+    })
+    .index("by_session_turn", ["sessionId", "turnNumber"])
+    .index("by_project_stage_recent", ["projectId", "stage", "createdAt"]),
 });

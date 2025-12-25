@@ -13,21 +13,23 @@ import { buildFlowScopeKey } from "@/src/lib/flowScope";
 import { FlowItemsPanel } from "./FlowItemsPanel";
 import { useThinkingMode } from "@/app/_context/ThinkingModeContext";
 import { useModel } from "@/app/_context/ModelContext";
+import { StructuredQuestionsPanel } from "./StructuredQuestionsPanel";
 
 type Mode = "clarify" | "generate";
+type ViewMode = "structured" | "chat";
 
-function loadMode(projectId: string, tab: FlowTab): Mode {
+function loadMode(projectId: string, tab: FlowTab): ViewMode {
     try {
-        const stored = localStorage.getItem(`flow.mode.${projectId}.${tab}`);
-        return stored === "generate" ? "generate" : "clarify";
+        const stored = localStorage.getItem(`flow.viewMode.${projectId}.${tab}`);
+        return stored === "chat" ? "chat" : "structured";
     } catch {
-        return "clarify";
+        return "structured";
     }
 }
 
-function saveMode(projectId: string, tab: FlowTab, mode: Mode) {
+function saveMode(projectId: string, tab: FlowTab, mode: ViewMode) {
     try {
-        localStorage.setItem(`flow.mode.${projectId}.${tab}`, mode);
+        localStorage.setItem(`flow.viewMode.${projectId}.${tab}`, mode);
     } catch {
         // ignore
     }
@@ -156,7 +158,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     }, [selectedAllProject, selectedItemId, selectedItemIds, setSelectedItemId]);
 
     const [threadId, setThreadId] = useState<Id<"chatThreads"> | null>(null);
-    const [mode, setMode] = useState<Mode>("clarify");
+    const [viewMode, setViewMode] = useState<ViewMode>("structured");
 
     const generateItemUpdate = useAction(api.agents.flow.generateItemUpdate);
     const applySpec = useMutation(api.items.applySpec);
@@ -210,12 +212,12 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
 
 
     useEffect(() => {
-        setMode(loadMode(String(projectId), tab));
+        setViewMode(loadMode(String(projectId), tab));
     }, [projectId, tab]);
 
     useEffect(() => {
-        saveMode(String(projectId), tab, mode);
-    }, [mode, projectId, tab]);
+        saveMode(String(projectId), tab, viewMode);
+    }, [viewMode, projectId, tab]);
 
     useEffect(() => {
         void (async () => {
@@ -264,14 +266,25 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                             <div className="text-xs text-gray-500 mt-1 truncate">Scope: {scopeKey}</div>
                         </div>
                         <div className="flex items-center gap-2">
-                            <select
-                                className="border rounded px-2 py-1 text-xs"
-                                value={mode}
-                                onChange={(e) => setMode(e.target.value as Mode)}
-                            >
-                                <option value="clarify">Clarify & Suggest</option>
-                                <option value="generate">Generate / Expand</option>
-                            </select>
+                            <div className="flex items-center bg-gray-100 rounded p-1 gap-1">
+                                <button
+                                    onClick={() => setViewMode("structured")}
+                                    className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
+                                        viewMode === "structured" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
+                                    }`}
+                                >
+                                    Structured Questions
+                                </button>
+                                <button
+                                    onClick={() => setViewMode("chat")}
+                                    className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
+                                        viewMode === "chat" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
+                                    }`}
+                                >
+                                    Generation Chat
+                                </button>
+                            </div>
+                            
                             <button
                                 type="button"
                                 className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
@@ -284,20 +297,24 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                         </div>
                     </div>
 
-                    <div className="flex-1 min-h-0">
-                        {!threadId ? (
-                            <div className="p-4 text-sm text-gray-500">Initializing chat...</div>
+                    <div className="flex-1 min-h-0 relative">
+                        {viewMode === "structured" ? (
+                            <div className="absolute inset-0">
+                                <StructuredQuestionsPanel 
+                                    projectId={projectId} 
+                                    stage={tab === "ideation" ? "clarification" : tab} 
+                                />
+                            </div>
                         ) : (
-                            <AgentChatThread
-                                threadId={threadId}
-                                placeholder={
-                                    mode === "clarify"
-                                            ? "Describe what you want; I’ll ask key questions and propose a draft direction"
-                                            : "Ask to generate/expand ideas and execution approaches"
-                                }
-                                onSend={async (content) => {
-                                    await sendFlowTurn({
-                                        threadId,
+                            !threadId ? (
+                                <div className="p-4 text-sm text-gray-500">Initializing chat...</div>
+                            ) : (
+                                <AgentChatThread
+                                    threadId={threadId}
+                                    placeholder="Ask to generate/expand ideas and execution approaches"
+                                    onSend={async (content) => {
+                                        await sendFlowTurn({
+                                            threadId,
                                         userContent: content,
                                         tab,
                                         mode,
@@ -326,7 +343,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                 }}
                                 heightClassName="h-full"
                             />
-                        )}
+                        ))}
                     </div>
                 </div>
 

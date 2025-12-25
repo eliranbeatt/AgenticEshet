@@ -112,7 +112,7 @@ export const saveAnswers = mutation({
         if (session) {
             const items = await ctx.db
                 .query("projectItems")
-                .withIndex("by_project", (q) => q.eq("projectId", session.projectId))
+                .withIndex("by_project_status", (q) => q.eq("projectId", session.projectId))
                 .collect();
             
             const itemRefs = items.map(i => ({ id: i._id, name: i.name }));

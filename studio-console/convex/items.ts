@@ -29,7 +29,7 @@ export const getItemRefs = internalQuery({
     handler: async (ctx, args) => {
         const items = await ctx.db
             .query("projectItems")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId))
             .collect();
         return items.map(i => ({ id: i._id, name: i.name }));
     },

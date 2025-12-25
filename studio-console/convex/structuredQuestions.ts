@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { StructuredAnswerSchema } from "./lib/zodSchemas";
 import { internal } from "./_generated/api";
 
@@ -178,5 +178,50 @@ export const internal_updateSessionTurn = internalMutation({
             currentTurnNumber: args.turnNumber,
             updatedAt: Date.now(),
         });
+    },
+});
+
+export const getTranscript = internalQuery({
+    args: {
+        projectId: v.id("projects"),
+        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+    },
+    handler: async (ctx, args) => {
+        const session = await ctx.db
+            .query("structuredQuestionSessions")
+            .withIndex("by_project_stage", (q) =>
+                q.eq("projectId", args.projectId).eq("stage", args.stage)
+            )
+            .order("desc")
+            .first();
+
+        if (!session) return "";
+
+        const turns = await ctx.db
+            .query("structuredQuestionTurns")
+            .withIndex("by_session_turn", (q) => q.eq("sessionId", session._id))
+            .collect();
+        
+        turns.sort((a, b) => a.turnNumber - b.turnNumber);
+
+        const lines: string[] = [];
+        for (const turn of turns) {
+            lines.push(`--- Turn ${turn.turnNumber} ---`);
+            if (turn.questions && Array.isArray(turn.questions)) {
+                turn.questions.forEach((q: any, i: number) => {
+                    lines.push(`Q${i+1}: ${q.text}`);
+                });
+            }
+            if (turn.answers && Array.isArray(turn.answers)) {
+                turn.answers.forEach((a: any, i: number) => {
+                    lines.push(`A${i+1}: [${a.quick}] ${a.text || ""}`);
+                });
+            }
+            if (turn.userInstructions) {
+                lines.push(`User Note: ${turn.userInstructions}`);
+            }
+            lines.push("");
+        }
+        return lines.join("\n");
     },
 });

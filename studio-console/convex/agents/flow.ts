@@ -219,6 +219,16 @@ export const send = action({
              }
         }
 
+        const stageMap: Record<string, "clarification" | "planning" | "solutioning"> = {
+            "ideation": "clarification",
+            "planning": "planning",
+            "solutioning": "solutioning"
+        };
+        const structuredTranscript = await ctx.runQuery(internal.structuredQuestions.getTranscript, {
+            projectId: project._id,
+            stage: stageMap[args.tab] || "clarification"
+        });
+
         const agentAUserPrompt = [
             `PROJECT: ${project.name}`,
             `CLIENT: ${project.clientName}`,
@@ -228,6 +238,9 @@ export const send = action({
             "",
             "Current Understanding (workspace markdown):",
             workspace?.text?.trim() ? workspace.text : "(empty)",
+            "",
+            "Structured Questions History:",
+            structuredTranscript || "(none)",
             "",
             allProjectTranscript,
             "Conversation:",

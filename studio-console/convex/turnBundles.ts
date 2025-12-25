@@ -148,7 +148,7 @@ export const createFromTurn = internalMutation({
     });
 
     // 5. Trigger Parse (Phase 3)
-    // await ctx.scheduler.runAfter(0, internal.facts.parseTurnBundle, { turnBundleId: bundleId });
+    await ctx.scheduler.runAfter(0, internal.facts.parseTurnBundle, { turnBundleId: bundleId });
     
     return bundleId;
   },

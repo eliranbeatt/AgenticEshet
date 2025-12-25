@@ -1318,6 +1318,7 @@ export default defineSchema({
         turnNumber: v.number(),
         questions: v.any(), // JSON: StructuredQuestion[]
         answers: v.any(), // JSON: StructuredAnswer[]
+        userInstructions: v.optional(v.string()),
         agentRunId: v.optional(v.id("agentRuns")),
         createdAt: v.number(),
         answeredAt: v.optional(v.number()),

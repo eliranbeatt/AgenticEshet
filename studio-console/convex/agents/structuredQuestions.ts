@@ -156,8 +156,9 @@ function buildUserPrompt(turns: any[]) {
 Questions:
 ${t.questions.map((q: any) => `- ${q.title} (${q.questionType})`).join("\n")}
 Answers:
-${t.answers ? t.answers.map((a: any) => `- [${a.quick}] ${a.text || ""}`).join("\n") : "No answers yet"}`;
+${t.answers ? t.answers.map((a: any) => `- [${a.quick}] ${a.text || ""}`).join("\n") : "No answers yet"}
+User Instructions: ${t.userInstructions || "None"}`;
     }).join("\n\n");
 
-    return `Here is the history of the session so far:\n\n${history}\n\nBased on these answers, generate the next batch of questions.`;
+    return `Here is the history of the session so far:\n\n${history}\n\nBased on these answers and instructions, generate the next batch of questions.`;
 }

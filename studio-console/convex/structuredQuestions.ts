@@ -82,6 +82,7 @@ export const saveAnswers = mutation({
         sessionId: v.id("structuredQuestionSessions"),
         turnNumber: v.number(),
         answers: v.any(), // StructuredAnswer[]
+        userInstructions: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
         const turn = await ctx.db
@@ -97,6 +98,7 @@ export const saveAnswers = mutation({
 
         await ctx.db.patch(turn._id, {
             answers: args.answers,
+            userInstructions: args.userInstructions,
             answeredAt: Date.now(),
         });
 

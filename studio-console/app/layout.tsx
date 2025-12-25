@@ -37,7 +37,7 @@ export default function RootLayout({
                 <ConvexClientProvider>
                     <ThinkingModeProvider>
                         <ModelProvider>
-                            <div className="flex min-h-screen w-full bg-background text-foreground">
+                            <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
                             <aside className="w-64 bg-sidebar text-sidebar-foreground border-r border-sidebar-border flex flex-col">
                                 <div className="p-6 text-xl font-bold tracking-tight">
                                     Magnetic Studio

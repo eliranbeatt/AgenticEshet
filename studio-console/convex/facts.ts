@@ -43,6 +43,7 @@ export const parseTurnBundle = internalAction({
     turnBundleId: v.id("turnBundles"),
   },
   handler: async (ctx, args) => {
+    console.log("parseTurnBundle started for bundle", args.turnBundleId);
     const runId = await ctx.runMutation(internal.facts.createParseRun, {
       turnBundleId: args.turnBundleId,
     });
@@ -68,15 +69,17 @@ export const parseTurnBundle = internalAction({
       const result = await callChatWithSchema(FactOpsResponseSchema, {
         systemPrompt: SYSTEM_PROMPT,
         userPrompt,
-        model: "gpt-4o-mini", // Using 4o-mini as proxy for 5-mini
+        model: "gpt-4o-mini",
       });
 
       await ctx.runMutation(internal.facts.processParseResults, {
         runId,
         ops: result.ops,
       });
+      console.log("parseTurnBundle completed successfully with ops:", result.ops.length);
 
     } catch (error: any) {
+      console.error("parseTurnBundle failed:", error);
       await ctx.runMutation(internal.facts.failParseRun, {
         runId,
         error: error.message,

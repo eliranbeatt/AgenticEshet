@@ -86,6 +86,7 @@ export const saveAnswers = mutation({
         userInstructions: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
+        console.log("saveAnswers called for session", args.sessionId, "turn", args.turnNumber);
         const turn = await ctx.db
             .query("structuredQuestionTurns")
             .withIndex("by_session_turn", (q) =>
@@ -124,6 +125,8 @@ export const saveAnswers = mutation({
             };
             const bundleStage = stageMap[session.stage] || "ideation";
 
+            console.log("Scheduling createFromTurn for project", session.projectId);
+            // Force update
             await ctx.scheduler.runAfter(0, internal.turnBundles.createFromTurn, {
                 projectId: session.projectId,
                 stage: bundleStage,
@@ -133,7 +136,10 @@ export const saveAnswers = mutation({
                     sourceIds: [turn._id],
                 },
                 itemRefs,
-                structuredQuestions: (turn.questions as any[]).map((q: any) => ({ id: q.id, text: q.text })),
+                structuredQuestions: (turn.questions as any[]).map((q: any) => ({ 
+                    id: q.id, 
+                    text: q.text || q.title || q.prompt || "Question" 
+                })),
                 userAnswers: (args.answers as any[]).map((a: any) => ({ 
                     qId: a.questionId, 
                     quick: a.quick, 

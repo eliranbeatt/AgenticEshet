@@ -80,6 +80,7 @@ import type * as prompts_itemsPromptPack from "../prompts/itemsPromptPack.js";
 import type * as quests from "../quests.js";
 import type * as quotes from "../quotes.js";
 import type * as rateLimit from "../rateLimit.js";
+import type * as repro_facts from "../repro_facts.js";
 import type * as research from "../research.js";
 import type * as scenarios from "../scenarios.js";
 import type * as seed from "../seed.js";
@@ -169,6 +170,7 @@ declare const fullApi: ApiFromModules<{
   quests: typeof quests;
   quotes: typeof quotes;
   rateLimit: typeof rateLimit;
+  repro_facts: typeof repro_facts;
   research: typeof research;
   scenarios: typeof scenarios;
   seed: typeof seed;

@@ -14,6 +14,8 @@ import { FlowItemsPanel } from "./FlowItemsPanel";
 import { useThinkingMode } from "@/app/_context/ThinkingModeContext";
 import { useModel } from "@/app/_context/ModelContext";
 import { StructuredQuestionsPanel } from "./StructuredQuestionsPanel";
+import { FactsPanel } from "../facts/FactsPanel";
+import { CurrentStatePanel } from "../facts/CurrentStatePanel";
 
 type Mode = "clarify" | "generate";
 type ViewMode = "structured" | "chat";
@@ -96,6 +98,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const [workspaceId, setWorkspaceId] = useState<Id<"flowWorkspaces"> | null>(null);
     const [textDraft, setTextDraft] = useState("");
     const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+    const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts">("state");
 
     const lastLoadedScopeKeyRef = useRef<string | null>(null);
     const lastRemoteTextRef = useRef<string>("");
@@ -372,22 +375,28 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                 </div>
 
                 <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
-                    <div className="p-3 border-b flex items-center justify-between">
-                        <div>
-                            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                Current understanding
-                            </div>
-                            <div className="text-xs text-gray-500 mt-1">{saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved" : ""}</div>
+                    <div className="p-3 border-b flex items-center justify-between bg-gray-50">
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={() => setRightPanelTab("state")}
+                                className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "state" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                            >
+                                Current State
+                            </button>
+                            <button 
+                                onClick={() => setRightPanelTab("facts")}
+                                className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "facts" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                            >
+                                Facts Ledger
+                            </button>
                         </div>
                     </div>
-                    <div className="flex-1 min-h-0 p-3">
-                        <textarea
-                            className="w-full h-full border rounded p-3 text-sm font-mono"
-                            value={textDraft}
-                            onChange={(e) => setTextDraft(e.target.value)}
-                            placeholder="Project summary + per-item blocks (markdown)"
-                            dir="rtl"
-                        />
+                    <div className="flex-1 min-h-0 relative">
+                        {rightPanelTab === "state" ? (
+                            <CurrentStatePanel projectId={projectId} />
+                        ) : (
+                            <FactsPanel projectId={projectId} />
+                        )}
                     </div>
                 </div>
             </div>

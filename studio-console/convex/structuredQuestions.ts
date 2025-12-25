@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation } from "./_generated/server";
 import { StructuredAnswerSchema } from "./lib/zodSchemas";
+import { internal } from "./_generated/api";
 
 export const getActiveSession = query({
     args: {
@@ -105,6 +106,42 @@ export const saveAnswers = mutation({
         await ctx.db.patch(args.sessionId, {
             updatedAt: Date.now(),
         });
+
+        // --- FACTS PIPELINE INTEGRATION ---
+        const session = await ctx.db.get(args.sessionId);
+        if (session) {
+            const items = await ctx.db
+                .query("projectItems")
+                .withIndex("by_project", (q) => q.eq("projectId", session.projectId))
+                .collect();
+            
+            const itemRefs = items.map(i => ({ id: i._id, name: i.name }));
+
+            const stageMap: Record<string, "ideation" | "planning" | "solutioning"> = {
+                "clarification": "ideation",
+                "planning": "planning",
+                "solutioning": "solutioning"
+            };
+            const bundleStage = stageMap[session.stage] || "ideation";
+
+            await ctx.scheduler.runAfter(0, internal.turnBundles.createFromTurn, {
+                projectId: session.projectId,
+                stage: bundleStage,
+                scope: { type: "project" },
+                source: {
+                    type: "structuredQuestions",
+                    sourceIds: [turn._id],
+                },
+                itemRefs,
+                structuredQuestions: (turn.questions as any[]).map((q: any) => ({ id: q.id, text: q.text })),
+                userAnswers: (args.answers as any[]).map((a: any) => ({ 
+                    qId: a.questionId, 
+                    quick: a.quick, 
+                    text: a.text 
+                })),
+                freeChat: args.userInstructions,
+            });
+        }
     },
 });
 

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, mutation, query } from "./_generated/server";
+import { action, mutation, query, internalQuery } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { ItemSpecV2Schema, ItemUpdateOutputSchema, type ItemSpecV2 } from "./lib/zodSchemas";
@@ -23,6 +23,18 @@ const tabScopeValidator = v.union(
     v.literal("tasks"),
     v.literal("quote")
 );
+
+export const getItemRefs = internalQuery({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const items = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+        return items.map(i => ({ id: i._id, name: i.name }));
+    },
+});
+
 
 
 

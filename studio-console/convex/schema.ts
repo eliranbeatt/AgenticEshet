@@ -1,6 +1,15 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
+import { 
+  evidenceSchema, 
+  factValueSchema, 
+  factStatusSchema, 
+  factSourceKindSchema, 
+  factScopeTypeSchema,
+  factParseRunStatusSchema,
+  factParseRunStatsSchema
+} from "./lib/facts/schemas";
 
 export default defineSchema({
     // 1. PROJECTS: Core entity
@@ -302,6 +311,10 @@ export default defineSchema({
         latestRevisionNumber: v.number(),
         deleteRequestedAt: v.optional(v.number()),
         archivedAt: v.optional(v.number()),
+        manualOverrides: v.optional(v.any()),
+        projectionCache: v.optional(v.any()),
+        projectionRevision: v.optional(v.number()),
+        lastMaterializedAt: v.optional(v.number()),
         createdAt: v.number(),
         updatedAt: v.number(),
     })
@@ -510,6 +523,7 @@ export default defineSchema({
         // Vendor Link
         vendorId: v.optional(v.id("vendors")),
         vendorName: v.optional(v.string()), // Snapshot or ad-hoc name
+        canonicalItemId: v.optional(v.id("canonicalItems")),
 
         unit: v.string(), // m, sqm, unit
 
@@ -1325,4 +1339,70 @@ export default defineSchema({
     })
     .index("by_session_turn", ["sessionId", "turnNumber"])
     .index("by_project_stage_recent", ["projectId", "stage", "createdAt"]),
+
+    // --- FACTS PIPELINE ---
+
+    turnBundles: defineTable({
+        projectId: v.id("projects"),
+        source: v.object({
+            type: v.union(v.literal("structuredQuestions"), v.literal("chat"), v.literal("generation"), v.literal("mixed")),
+            sourceIds: v.array(v.string()),
+        }),
+        stage: v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning")),
+        scope: v.object({
+            type: v.union(v.literal("project"), v.literal("item"), v.literal("multiItem")),
+            itemIds: v.optional(v.array(v.id("projectItems"))),
+        }),
+        bundleText: v.string(), // immutable
+        bundleHash: v.string(), // sha256
+        createdAt: v.number(),
+    })
+    .index("by_project_createdAt", ["projectId", "createdAt"])
+    .index("by_hash", ["bundleHash"]),
+
+    factParseRuns: defineTable({
+        projectId: v.id("projects"),
+        turnBundleId: v.id("turnBundles"),
+        status: factParseRunStatusSchema,
+        model: v.string(), // "gpt-5-mini"
+        startedAt: v.number(),
+        finishedAt: v.optional(v.number()),
+        stats: v.optional(factParseRunStatsSchema),
+        error: v.optional(v.object({ message: v.string(), raw: v.optional(v.string()) })),
+    })
+    .index("by_bundle", ["turnBundleId"])
+    .index("by_project_createdAt", ["projectId", "startedAt"]),
+
+    facts: defineTable({
+        projectId: v.id("projects"),
+        scopeType: factScopeTypeSchema,
+        itemId: v.union(v.id("projectItems"), v.null()),
+        key: v.string(), // whitelisted canonical path
+        valueType: v.string(), // "boolean" | "enum" | "number" | "dimension" | "currency" | "date" | "string" | "note"
+        value: factValueSchema,
+        status: factStatusSchema,
+        needsReview: v.boolean(),
+        confidence: v.number(), // 0..1
+        sourceKind: factSourceKindSchema,
+        evidence: v.optional(evidenceSchema),
+        parseRunId: v.optional(v.id("factParseRuns")),
+        createdAt: v.number(),
+        supersedesFactId: v.optional(v.id("facts")),
+    })
+    .index("by_scope_key", ["projectId", "scopeType", "itemId", "key"])
+    .index("by_project_status", ["projectId", "status"])
+    .index("by_item", ["projectId", "itemId"]),
+
+    knowledgeBlocks: defineTable({
+        projectId: v.id("projects"),
+        scopeType: factScopeTypeSchema,
+        itemId: v.union(v.id("projectItems"), v.null()),
+        blockKey: v.string(),
+        json: v.any(), // structured object
+        renderedMarkdown: v.string(),
+        revision: v.number(),
+        updatedAt: v.number(),
+        updatedBy: v.object({ type: v.union(v.literal("system"), v.literal("user"), v.literal("agent")), refId: v.optional(v.string()) }),
+    })
+    .index("by_scope_block", ["projectId", "scopeType", "itemId", "blockKey"]),
 });

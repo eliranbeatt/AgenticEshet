@@ -244,6 +244,20 @@ export const sendAndStreamText = action({
             status: "final",
         });
 
+        // --- FACTS PIPELINE INTEGRATION ---
+        const itemRefs = await ctx.runQuery(internal.items.getItemRefs, { projectId: project._id });
+        
+        const stageMap: Record<string, "ideation" | "planning" | "solutioning"> = {
+            "ideation": "ideation",
+            "clarification": "ideation",
+            "planning": "planning",
+            "solutioning": "solutioning",
+            "tasks": "planning",
+            "quote": "solutioning"
+        };
+        const bundleStage = stageMap[scenario.phase] || "ideation";
+        // ---------------------------------
+
         const assistantMessageId = await ctx.runMutation(internal.chat.createMessage, {
             projectId: project._id,
             scenarioId: scenario._id,
@@ -293,6 +307,19 @@ export const sendAndStreamText = action({
                 messageId: assistantMessageId,
                 content: buffer.trim() ? buffer : "(empty)",
                 status: "final",
+            });
+
+            await ctx.runMutation(internal.turnBundles.createFromTurn, {
+                projectId: project._id,
+                stage: bundleStage,
+                scope: { type: "project" },
+                source: {
+                    type: "chat",
+                    sourceIds: [userMessageId, assistantMessageId],
+                },
+                itemRefs,
+                freeChat: args.userContent,
+                agentOutput: buffer,
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);

@@ -85,10 +85,23 @@ Your goal is to ask structured questions to clarify the project requirements.
     
 RULES:
 1. Return 1 to 5 questions only.
-2. Each question must specify:
-   - questionType: "boolean" or "text"
-   - expectsFreeText: boolean
-   - blocking: boolean (if unanswered -> can't proceed)
+2. You MUST return a JSON object matching this structure:
+   {
+     "turnId": "turn_N",
+     "sessionState": { "done": boolean, "nextGoal": string },
+     "questions": [
+       {
+         "id": "q_1",
+         "stage": "${stage}",
+         "questionType": "boolean" | "text",
+         "title": "The question text here",
+         "prompt": "Optional explanation",
+         "expectsFreeText": boolean,
+         "blocking": boolean,
+         "tags": ["tag1"]
+       }
+     ]
+   }
 3. At least 2 questions per turn must be questionType="boolean" unless the session is nearly done.
 4. Do NOT ask anything that was already answered in previous turns.
 5. Ask "high leverage" questions first (unknowns that block next steps).

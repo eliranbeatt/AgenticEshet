@@ -71,7 +71,29 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
     }, [latestTurn?.turnNumber]);
 
     if (latestTurn === undefined) return <div>Loading turn...</div>;
-    if (!latestTurn) return <div>No turns found. Waiting for agent...</div>;
+    
+    if (!latestTurn) {
+        return (
+            <div className="flex flex-col h-full">
+                <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                    <div className="text-sm font-medium text-gray-700">
+                        Initializing Session...
+                    </div>
+                    <button 
+                        onClick={onRestart}
+                        disabled={isRestarting}
+                        className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                    >
+                        <RefreshCw className={`w-3 h-3 ${isRestarting ? "animate-spin" : ""}`} />
+                        Restart Session
+                    </button>
+                </div>
+                <div className="flex-1 flex items-center justify-center text-gray-500">
+                    No turns found. Waiting for agent...
+                </div>
+            </div>
+        );
+    }
 
     // Check if turn is already answered
     const isTurnDone = latestTurn.answers && latestTurn.answers.length > 0;
@@ -119,9 +141,24 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
 
     if (isTurnDone) {
         return (
-            <div className="flex flex-col items-center justify-center h-full space-y-4">
-                <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-                <p>Generating next questions...</p>
+            <div className="flex flex-col h-full">
+                <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                    <div className="text-sm font-medium text-gray-700">
+                        Turn {latestTurn.turnNumber} • Processing...
+                    </div>
+                    <button 
+                        onClick={onRestart}
+                        disabled={isRestarting}
+                        className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                    >
+                        <RefreshCw className={`w-3 h-3 ${isRestarting ? "animate-spin" : ""}`} />
+                        Restart Session
+                    </button>
+                </div>
+                <div className="flex-1 flex flex-col items-center justify-center space-y-4">
+                    <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                    <p className="text-gray-500">Generating next questions...</p>
+                </div>
             </div>
         );
     }

@@ -102,10 +102,10 @@ RULES:
        }
      ]
    }
-3. At least 2 questions per turn must be questionType="boolean" unless the session is nearly done.
+3. At least 2 questions per turn must be questionType="boolean".
 4. Do NOT ask anything that was already answered in previous turns.
 5. Ask "high leverage" questions first (unknowns that block next steps).
-6. If you have enough information to proceed to the next phase (Generation), set sessionState.done = true.
+6. Do NOT set sessionState.done = true automatically. Always find more angles to explore (details, logistics, risks, alternatives) to deepen the understanding. Only set done=true if the user explicitly asks to stop or says they have no more info.
 `;
 
     if (stage === "clarification") {

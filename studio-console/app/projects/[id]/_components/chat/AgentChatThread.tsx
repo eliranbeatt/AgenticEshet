@@ -36,7 +36,9 @@ function MessageBubble({ message }: { message: Doc<"chatMessages"> }) {
                           : "bg-white text-gray-900 border-gray-200"
                 }`}
             >
-                {isUser ? message.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}
+                <div dir="rtl">
+                    {isUser ? message.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}
+                </div>
                 {message.status === "streaming" && <div className="text-[10px] text-gray-400 mt-1">Streaming...</div>}
             </div>
         </div>

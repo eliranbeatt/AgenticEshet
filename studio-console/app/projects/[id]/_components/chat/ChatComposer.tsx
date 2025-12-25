@@ -62,6 +62,7 @@ export function ChatComposer({
                     placeholder={placeholder ?? "Write a message…"}
                     className="flex-1 border rounded px-3 py-2 text-sm min-h-[44px] max-h-40 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                     disabled={disabled || isSending}
+                    dir="rtl"
                     onKeyDown={(event) => {
                         if (event.key === "Enter" && !event.shiftKey) {
                             event.preventDefault();

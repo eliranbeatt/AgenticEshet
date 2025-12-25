@@ -159,6 +159,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
 
     const [threadId, setThreadId] = useState<Id<"chatThreads"> | null>(null);
     const [viewMode, setViewMode] = useState<ViewMode>("structured");
+    const [mode, setMode] = useState<Mode>("generate");
 
     const generateItemUpdate = useAction(api.agents.flow.generateItemUpdate);
     const applySpec = useMutation(api.items.applySpec);
@@ -266,6 +267,29 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                             <div className="text-xs text-gray-500 mt-1 truncate">Scope: {scopeKey}</div>
                         </div>
                         <div className="flex items-center gap-2">
+                            {viewMode === "chat" && (
+                                <div className="flex items-center bg-gray-100 rounded p-1 gap-1 mr-2">
+                                    <button
+                                        onClick={() => setMode("clarify")}
+                                        className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+                                            mode === "clarify" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
+                                        }`}
+                                        title="Ask clarification questions"
+                                    >
+                                        Clarify
+                                    </button>
+                                    <button
+                                        onClick={() => setMode("generate")}
+                                        className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+                                            mode === "generate" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
+                                        }`}
+                                        title="Generate ideas and content"
+                                    >
+                                        Generate
+                                    </button>
+                                </div>
+                            )}
+
                             <div className="flex items-center bg-gray-100 rounded p-1 gap-1">
                                 <button
                                     onClick={() => setViewMode("structured")}
@@ -362,6 +386,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                             value={textDraft}
                             onChange={(e) => setTextDraft(e.target.value)}
                             placeholder="Project summary + per-item blocks (markdown)"
+                            dir="rtl"
                         />
                     </div>
                 </div>

@@ -183,6 +183,7 @@ export function ItemEditorPanel() {
                         className="w-full border rounded px-2 py-1 text-sm"
                         value={identity.title}
                         onChange={(e) => updateSpec({ ...specDraft, identity: { ...identity, title: e.target.value } })}
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm">
@@ -193,6 +194,7 @@ export function ItemEditorPanel() {
                         onChange={(e) =>
                             updateSpec({ ...specDraft, identity: { ...identity, typeKey: e.target.value } })
                         }
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm md:col-span-2">
@@ -203,6 +205,7 @@ export function ItemEditorPanel() {
                         onChange={(e) =>
                             updateSpec({ ...specDraft, identity: { ...identity, description: e.target.value } })
                         }
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm">
@@ -214,6 +217,7 @@ export function ItemEditorPanel() {
                             updateSpec({ ...specDraft, identity: { ...identity, tags: parseTags(e.target.value) } })
                         }
                         placeholder="tag1, tag2"
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm">
@@ -227,6 +231,7 @@ export function ItemEditorPanel() {
                                 identity: { ...identity, accountingGroup: e.target.value },
                             })
                         }
+                        dir="rtl"
                     />
                 </label>
             </div>
@@ -261,6 +266,7 @@ export function ItemEditorPanel() {
                         onChange={(e) =>
                             updateSpec({ ...specDraft, quality: { ...quality, notes: e.target.value } })
                         }
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm">
@@ -415,6 +421,7 @@ export function ItemEditorPanel() {
                                 },
                             })
                         }
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm flex items-center gap-2">
@@ -442,6 +449,7 @@ export function ItemEditorPanel() {
                             })
                         }
                         placeholder="carpentry, paint"
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm">
@@ -468,6 +476,7 @@ export function ItemEditorPanel() {
                                 studioWork: { ...studioWork, buildPlanMarkdown: e.target.value },
                             })
                         }
+                        dir="rtl"
                     />
                 </label>
             </div>
@@ -511,6 +520,7 @@ export function ItemEditorPanel() {
                                 logistics: { ...logistics, packagingNotes: e.target.value },
                             })
                         }
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm">
@@ -608,6 +618,7 @@ export function ItemEditorPanel() {
                         className="w-full border rounded px-2 py-1 text-sm resize-none min-h-[80px]"
                         value={safety.notes ?? ""}
                         onChange={(e) => updateSpec({ ...specDraft, safety: { ...safety, notes: e.target.value } })}
+                        dir="rtl"
                     />
                 </label>
             </div>
@@ -628,6 +639,7 @@ export function ItemEditorPanel() {
                                 state: { ...specDraft.state, openQuestions: parseLines(e.target.value) },
                             })
                         }
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm">
@@ -641,6 +653,7 @@ export function ItemEditorPanel() {
                                 state: { ...specDraft.state, assumptions: parseLines(e.target.value) },
                             })
                         }
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm md:col-span-2">
@@ -654,6 +667,7 @@ export function ItemEditorPanel() {
                                 state: { ...specDraft.state, decisions: parseLines(e.target.value) },
                             })
                         }
+                        dir="rtl"
                     />
                 </label>
             </div>
@@ -674,6 +688,7 @@ export function ItemEditorPanel() {
                         className="w-full border rounded px-2 py-1 text-sm resize-none min-h-[80px]"
                         value={quote.clientTextOverride ?? ""}
                         onChange={(e) => updateSpec({ ...specDraft, quote: { ...quote, clientTextOverride: e.target.value } })}
+                        dir="rtl"
                     />
                 </label>
                 <label className="text-sm md:col-span-2">
@@ -689,6 +704,7 @@ export function ItemEditorPanel() {
                                 quote: { ...quote, milestones: parseMilestones(e.target.value) },
                             })
                         }
+                        dir="rtl"
                     />
                 </label>
             </div>
@@ -699,6 +715,7 @@ export function ItemEditorPanel() {
                 value={changeReason}
                 onChange={(e) => setChangeReason(e.target.value)}
                 placeholder="Optional note for this revision..."
+                dir="rtl"
             />
 
             <SectionTitle title="Images" />

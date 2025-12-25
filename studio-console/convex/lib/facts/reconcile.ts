@@ -26,12 +26,20 @@ export async function reconcileOps(
 
   const acceptedFactsForPatch: any[] = [];
 
+  console.log("reconcileOps processing", ops.length, "ops");
+
   for (const op of ops) {
     // 1. Verify Evidence
     const verification = verifyEvidence(bundle.bundleText, op.evidence);
     if (!verification.valid) {
+      console.log("Op rejected due to invalid evidence:", op.evidence.quote);
       stats.rejected++;
       continue;
+    }
+
+    if (verification.correctedOffsets) {
+        op.evidence.startChar = verification.correctedOffsets.start;
+        op.evidence.endChar = verification.correctedOffsets.end;
     }
 
     // 2. Check Registry

@@ -105,6 +105,7 @@ export const createFromTurn = internalMutation({
     agentOutput: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    console.log("createFromTurn called for project", args.projectId);
     // 1. Generate ID (we need it for the text)
     // Since we can't know the ID before insertion, we might use a placeholder or insert first?
     // But the text needs to be immutable and contain the ID?
@@ -148,6 +149,7 @@ export const createFromTurn = internalMutation({
     });
 
     // 5. Trigger Parse (Phase 3)
+    console.log("Scheduling parseTurnBundle for bundle", bundleId);
     await ctx.scheduler.runAfter(0, internal.facts.parseTurnBundle, { turnBundleId: bundleId });
     
     return bundleId;

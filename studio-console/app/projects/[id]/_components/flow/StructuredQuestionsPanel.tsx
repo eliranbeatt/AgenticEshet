@@ -226,21 +226,28 @@ function QuestionCard({
     answer?: StructuredAnswer;
     onChange: (field: keyof StructuredAnswer, value: any) => void;
 }) {
+    const LABELS: Record<string, string> = {
+        yes: "כן",
+        no: "לא",
+        idk: "לא יודעת",
+        irrelevant: "לא רלוונטי"
+    };
+
     return (
         <div className="border rounded-lg p-4 bg-white shadow-sm space-y-3">
-            <div className="flex justify-between items-start gap-2">
-                <h4 className="font-medium text-gray-900">{question.title}</h4>
+            <div className="flex justify-between items-start gap-2 flex-row-reverse">
+                <h4 className="font-medium text-gray-900 text-right" dir="rtl">{question.title}</h4>
                 {question.blocking && (
                     <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded">Required</span>
                 )}
             </div>
             
             {question.prompt && (
-                <p className="text-sm text-gray-500">{question.prompt}</p>
+                <p className="text-sm text-gray-500 text-right" dir="rtl">{question.prompt}</p>
             )}
 
             <div className="space-y-3 pt-2">
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 justify-end">
                     {(["yes", "no", "idk", "irrelevant"] as const).map(opt => (
                         <button
                             key={opt}
@@ -251,7 +258,7 @@ function QuestionCard({
                                     : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
                             }`}
                         >
-                            {opt === "idk" ? "I don't know" : opt.charAt(0).toUpperCase() + opt.slice(1)}
+                            {LABELS[opt]}
                         </button>
                     ))}
                 </div>
@@ -261,7 +268,8 @@ function QuestionCard({
                     value={answer?.text || ""}
                     onChange={(e) => onChange("text", e.target.value)}
                     placeholder="Add details..."
-                    className="w-full text-sm border rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                    className="w-full text-sm border rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-right"
+                    dir="rtl"
                     rows={2}
                 />
             </div>

@@ -4,6 +4,12 @@ import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ClarificationSchema } from "../lib/zodSchemas";
 import { type Doc } from "../_generated/dataModel";
+import {
+    summarizeFacts,
+    summarizeItems,
+    summarizeKnowledgeBlocks,
+    summarizeKnowledgeDocs,
+} from "../lib/contextSummary";
 
 function formatAssistantMessage(result: { openQuestions?: string[] }) {
     if (result.openQuestions && result.openQuestions.length > 0) {
@@ -187,6 +193,26 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 includeSummaries: true,
             });
 
+            const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+                projectId: args.projectId,
+                stage: "clarification",
+            });
+
+            const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
+                projectId: args.projectId,
+            });
+
+            const recentDocs = await ctx.runQuery(api.knowledge.listRecentDocs, {
+                projectId: args.projectId,
+                limit: 6,
+                sourceTypes: ["doc_upload", "plan", "conversation"],
+            });
+
+            const { items } = await ctx.runQuery(api.items.listSidebarTree, {
+                projectId: args.projectId,
+                includeDrafts: true,
+            });
+
             const planSnippet = activePlan ? activePlan.contentMarkdown.slice(0, 1500) : "No approved plan yet.";
 
             const previousClarifications = recentClarifications
@@ -231,6 +257,18 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 `Client: ${project.clientName}`,
                 `Current Notes: ${project.details.notes || "N/A"}`,
                 `Existing Summary: ${project.overviewSummary || "No summary captured yet."}`,
+                "",
+                "KNOWN FACTS (accepted):",
+                summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+                "",
+                "KNOWLEDGE BLOCKS:",
+                summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
+                "",
+                "RECENT KNOWLEDGE DOCS:",
+                summarizeKnowledgeDocs(recentDocs ?? []),
+                "",
+                "CURRENT ITEMS SUMMARY:",
+                summarizeItems(items ?? []),
                 "",
                 `Active Plan Snapshot:\n${planSnippet}`,
                 "",

@@ -50,6 +50,7 @@ import type * as itemsProjection from "../itemsProjection.js";
 import type * as knowledge from "../knowledge.js";
 import type * as knowledgeDiagnostics from "../knowledgeDiagnostics.js";
 import type * as lib_architectTaskGeneration from "../lib/architectTaskGeneration.js";
+import type * as lib_contextSummary from "../lib/contextSummary.js";
 import type * as lib_costing from "../lib/costing.js";
 import type * as lib_facts_apply from "../lib/facts/apply.js";
 import type * as lib_facts_prompts from "../lib/facts/prompts.js";
@@ -140,6 +141,7 @@ declare const fullApi: ApiFromModules<{
   knowledge: typeof knowledge;
   knowledgeDiagnostics: typeof knowledgeDiagnostics;
   "lib/architectTaskGeneration": typeof lib_architectTaskGeneration;
+  "lib/contextSummary": typeof lib_contextSummary;
   "lib/costing": typeof lib_costing;
   "lib/facts/apply": typeof lib_facts_apply;
   "lib/facts/prompts": typeof lib_facts_prompts;

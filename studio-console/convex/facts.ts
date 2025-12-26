@@ -1,4 +1,4 @@
-import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { callChatWithSchema } from "./lib/openai";
@@ -9,6 +9,7 @@ import { reconcileOps } from "./lib/facts/reconcile";
 import { Id } from "./_generated/dataModel";
 import { patchBlocks } from "./lib/knowledgeBlocks/patch";
 import { applyFactsToItems } from "./lib/facts/apply";
+import { summarizeFacts } from "./lib/contextSummary";
 
 const FactOpSchema = z.object({
   op: z.enum(["ADD", "UPDATE", "CONFLICT", "NOTE"]),
@@ -200,8 +201,122 @@ export const processParseResults = internalMutation({
       finishedAt: Date.now(),
       stats,
     });
+
+    await refreshFlowWorkspaceFromFacts(ctx, run.projectId, run.turnBundleId);
   },
 });
+
+async function refreshFlowWorkspaceFromFacts(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  turnBundleId: Id<"turnBundles">
+) {
+  const bundle = await ctx.db.get(turnBundleId);
+  if (!bundle) return;
+
+  const tab =
+    bundle.stage === "ideation"
+      ? "ideation"
+      : bundle.stage === "planning"
+        ? "planning"
+        : "solutioning";
+
+  const scopeKey = "allProject";
+  const existing = await ctx.db
+    .query("flowWorkspaces")
+    .withIndex("by_project_tab_scopeKey", (q) =>
+      q.eq("projectId", projectId).eq("tab", tab).eq("scopeKey", scopeKey)
+    )
+    .unique();
+
+  if (existing?.manualEditedAt) {
+    return;
+  }
+
+  const blocks = await ctx.db
+    .query("knowledgeBlocks")
+    .withIndex("by_scope_block", (q) => q.eq("projectId", projectId))
+    .collect();
+
+  const items = await ctx.db
+    .query("projectItems")
+    .withIndex("by_project_status", (q) => q.eq("projectId", projectId))
+    .collect();
+
+  const itemTitleById = new Map(
+    items.map((item) => [
+      String(item._id),
+      item.title ?? item.name ?? "Untitled item",
+    ])
+  );
+
+  const projectBlocks = blocks.filter((block) => block.scopeType === "project");
+  const itemBlocks = blocks.filter((block) => block.scopeType === "item");
+
+  const renderedProjectBlocks = projectBlocks
+    .map((block) => block.renderedMarkdown)
+    .filter(Boolean);
+
+  const blocksByItemId = new Map<string, string[]>();
+  for (const block of itemBlocks) {
+    const id = block.itemId ? String(block.itemId) : "unknown";
+    const list = blocksByItemId.get(id) ?? [];
+    if (block.renderedMarkdown) list.push(block.renderedMarkdown);
+    blocksByItemId.set(id, list);
+  }
+
+  const acceptedFacts = await ctx.db
+    .query("facts")
+    .withIndex("by_project_status", (q) =>
+      q.eq("projectId", projectId).eq("status", "accepted")
+    )
+    .collect();
+
+  const factsSummary = summarizeFacts(
+    acceptedFacts.map((fact) => ({ key: fact.key, value: fact.value })),
+    20
+  );
+
+  const itemSections = Array.from(blocksByItemId.entries()).map(([itemId, mdBlocks]) => {
+    const title = itemTitleById.get(itemId) ?? `Item ${itemId}`;
+    const body = mdBlocks.length ? mdBlocks.join("\n\n") : "- No item facts yet.";
+    return `### ${title}\n\n${body}`;
+  });
+
+  const nextText = [
+    "# Current State (auto)",
+    "",
+    "## Project facts",
+    renderedProjectBlocks.length ? renderedProjectBlocks.join("\n\n") : factsSummary,
+    "",
+    "## Item facts",
+    itemSections.length ? itemSections.join("\n\n") : "- No item facts yet.",
+  ].join("\n");
+
+  const now = Date.now();
+  if (existing) {
+    await ctx.db.patch(existing._id, {
+      text: nextText,
+      updatedBy: "system",
+      lastAgentRunId: existing.lastAgentRunId,
+      revision: (existing.revision ?? 0) + 1,
+      updatedAt: now,
+    });
+  } else {
+    await ctx.db.insert("flowWorkspaces", {
+      projectId,
+      tab,
+      scopeType: "allProject",
+      scopeKey,
+      scopeItemIds: undefined,
+      text: nextText,
+      updatedBy: "system",
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+}
 
 export const acceptFact = mutation({
   args: { factId: v.id("facts") },

@@ -116,7 +116,10 @@ export const saveAnswers = mutation({
                 .withIndex("by_project_status", (q) => q.eq("projectId", session.projectId))
                 .collect();
             
-            const itemRefs = items.map(i => ({ id: i._id, name: i.name }));
+            const itemRefs = items.map((item) => ({
+                id: item._id,
+                name: item.name ?? item.title ?? "Untitled item",
+            }));
 
             const stageMap: Record<string, "ideation" | "planning" | "solutioning"> = {
                 "clarification": "ideation",

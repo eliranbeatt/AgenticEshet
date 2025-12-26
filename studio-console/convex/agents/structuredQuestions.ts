@@ -3,6 +3,12 @@ import { action } from "../_generated/server";
 import { internal, api } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { StructuredQuestionsTurnSchema } from "../lib/zodSchemas";
+import {
+    summarizeFacts,
+    summarizeItems,
+    summarizeKnowledgeBlocks,
+    summarizeKnowledgeDocs,
+} from "../lib/contextSummary";
 
 export const run = action({
     args: {
@@ -33,9 +39,34 @@ export const run = action({
         const project = await ctx.runQuery(api.projects.getProject, { projectId: args.projectId });
         if (!project) throw new Error("Project not found");
 
+        const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+            projectId: args.projectId,
+            stage: args.stage,
+        });
+
+        const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
+            projectId: args.projectId,
+        });
+
+        const knowledgeDocs = await ctx.runQuery(api.knowledge.listRecentDocs, {
+            projectId: args.projectId,
+            limit: 6,
+            sourceTypes: ["doc_upload", "plan", "conversation"],
+        });
+
+        const { items } = await ctx.runQuery(api.items.listSidebarTree, {
+            projectId: args.projectId,
+            includeDrafts: true,
+        });
+
         // 2. Build Prompt
         const systemPrompt = buildSystemPrompt(args.stage, project);
-        const userPrompt = buildUserPrompt(turns);
+        const userPrompt = buildUserPrompt(turns, {
+            factsSummary: summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+            knowledgeBlocksSummary: summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
+            knowledgeDocsSummary: summarizeKnowledgeDocs(knowledgeDocs ?? []),
+            itemsSummary: summarizeItems(items ?? []),
+        });
 
         try {
             // 3. Call Model
@@ -215,9 +246,28 @@ REQUIRED HANDLING:
     return base + "\n" + stagePrompt;
 }
 
-function buildUserPrompt(turns: any[]) {
+function buildUserPrompt(turns: any[], context: {
+    factsSummary: string;
+    knowledgeBlocksSummary: string;
+    knowledgeDocsSummary: string;
+    itemsSummary: string;
+}) {
     if (turns.length === 0) {
-        return "Start the questioning session. Ask the most critical initial questions.";
+        return [
+            "Start the questioning session. Ask the most critical initial questions.",
+            "",
+            "KNOWN FACTS (accepted):",
+            context.factsSummary,
+            "",
+            "KNOWLEDGE BLOCKS:",
+            context.knowledgeBlocksSummary,
+            "",
+            "RECENT KNOWLEDGE DOCS:",
+            context.knowledgeDocsSummary,
+            "",
+            "CURRENT ITEMS SUMMARY:",
+            context.itemsSummary,
+        ].join("\n");
     }
 
     const history = turns.map(t => {
@@ -229,5 +279,23 @@ ${t.answers ? t.answers.map((a: any) => `- [${a.quick}] ${a.text || ""}`).join("
 User Instructions: ${t.userInstructions || "None"}`;
     }).join("\n\n");
 
-    return `Here is the history of the session so far:\n\n${history}\n\nBased on these answers and instructions, generate the next batch of questions.`;
+    return [
+        "Here is the history of the session so far:",
+        "",
+        history,
+        "",
+        "KNOWN FACTS (accepted):",
+        context.factsSummary,
+        "",
+        "KNOWLEDGE BLOCKS:",
+        context.knowledgeBlocksSummary,
+        "",
+        "RECENT KNOWLEDGE DOCS:",
+        context.knowledgeDocsSummary,
+        "",
+        "CURRENT ITEMS SUMMARY:",
+        context.itemsSummary,
+        "",
+        "Based on these answers and instructions, generate the next batch of questions.",
+    ].join("\n");
 }

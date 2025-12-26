@@ -11,6 +11,12 @@ import {
     type ItemUpdateOutput,
 } from "../lib/zodSchemas";
 import type { Doc, Id } from "../_generated/dataModel";
+import {
+    summarizeFacts,
+    summarizeItems,
+    summarizeKnowledgeBlocks,
+    summarizeKnowledgeDocs,
+} from "../lib/contextSummary";
 
 function parseItemSpec(data: unknown): ItemSpecV2 | null {
     const parsed = ItemSpecV2Schema.safeParse(data);
@@ -113,6 +119,40 @@ export const send = action({
             projectId: project._id,
         });
 
+        const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+            projectId: project._id,
+            stage: "clarification",
+        });
+
+        const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
+            projectId: project._id,
+        });
+
+        const recentDocs = await ctx.runQuery(api.knowledge.listRecentDocs, {
+            projectId: project._id,
+            limit: 6,
+            sourceTypes: ["doc_upload", "plan", "conversation"],
+        });
+
+        const { items } = await ctx.runQuery(api.items.listSidebarTree, {
+            projectId: project._id,
+            includeDrafts: true,
+        });
+
+        const currentStateSummary = [
+            "KNOWN FACTS (accepted):",
+            summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+            "",
+            "KNOWLEDGE BLOCKS:",
+            summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
+            "",
+            "RECENT KNOWLEDGE DOCS:",
+            summarizeKnowledgeDocs(recentDocs ?? []),
+            "",
+            "CURRENT ITEMS SUMMARY:",
+            summarizeItems(items ?? []),
+        ].join("\n");
+
         if (args.itemId) {
             const itemData = await ctx.runQuery(api.items.getItem, { itemId: args.itemId });
             if (!itemData) throw new Error("Item not found");
@@ -169,6 +209,9 @@ export const send = action({
 
             const userPrompt = [
                 context,
+                "",
+                "Current state:",
+                currentStateSummary,
                 "",
                 "Conversation history:",
                 transcript,
@@ -329,6 +372,9 @@ export const send = action({
             `Project: ${project.name}`,
             `Client: ${project.clientName}`,
             `Default language: ${project.defaultLanguage ?? "he"}`,
+            "",
+            "Current state:",
+            currentStateSummary,
             "",
             "Active plan snapshot:",
             planSnippet,

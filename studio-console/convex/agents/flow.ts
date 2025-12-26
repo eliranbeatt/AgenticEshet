@@ -7,6 +7,12 @@ import { callChatWithSchema, streamChatText } from "../lib/openai";
 import type { Doc } from "../_generated/dataModel";
 import { ItemSpecV2Schema } from "../lib/zodSchemas";
 import { buildFlowAgentASystemPrompt, buildFlowAgentBSystemPrompt } from "../prompts/flowPromptPack";
+import {
+    summarizeFacts,
+    summarizeItems,
+    summarizeKnowledgeBlocks,
+    summarizeKnowledgeDocs,
+} from "../lib/contextSummary";
 
 const tabValidator = v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning"));
 const modeValidator = v.union(v.literal("clarify"), v.literal("generate"));
@@ -188,6 +194,26 @@ export const send = action({
             ? await ctx.runQuery(api.items.listByIds, { itemIds: args.scopeItemIds })
             : []) as Doc<"projectItems">[];
 
+        const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+            projectId: project._id,
+            stage: args.tab,
+        });
+
+        const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
+            projectId: project._id,
+        });
+
+        const knowledgeDocs = await ctx.runQuery(api.knowledge.listRecentDocs, {
+            projectId: project._id,
+            limit: 6,
+            sourceTypes: ["doc_upload", "plan", "conversation"],
+        });
+
+        const { items } = await ctx.runQuery(api.items.listSidebarTree, {
+            projectId: project._id,
+            includeDrafts: true,
+        });
+
         const scopeSummary =
             args.scopeType === "allProject"
                 ? "All Project"
@@ -235,6 +261,18 @@ export const send = action({
             `OVERVIEW: ${JSON.stringify(project.overview || {})}`,
             `TAB: ${args.tab}`,
             `SCOPE: ${scopeSummary}`,
+            "",
+            "KNOWN FACTS (accepted):",
+            summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+            "",
+            "KNOWLEDGE BLOCKS:",
+            summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
+            "",
+            "RECENT KNOWLEDGE DOCS:",
+            summarizeKnowledgeDocs(knowledgeDocs ?? []),
+            "",
+            "CURRENT ITEMS SUMMARY:",
+            summarizeItems(items ?? []),
             "",
             "Current Understanding (workspace markdown):",
             workspace?.text?.trim() ? workspace.text : "(empty)",

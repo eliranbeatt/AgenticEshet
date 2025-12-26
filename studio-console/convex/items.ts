@@ -31,7 +31,10 @@ export const getItemRefs = internalQuery({
             .query("projectItems")
             .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId))
             .collect();
-        return items.map(i => ({ id: i._id, name: i.name }));
+        return items.map((item) => ({
+            id: item._id,
+            name: item.name ?? item.title ?? "Untitled item",
+        }));
     },
 });
 

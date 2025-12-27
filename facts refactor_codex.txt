@@ -1,0 +1,174 @@
+Facts refactor codex plan (based on current repo state)
+
+1) What already exists (from code)
+- Turn bundles and parse scheduling are implemented in `studio-console/convex/turnBundles.ts` and called from `studio-console/convex/chat.ts`, `studio-console/convex/structuredQuestions.ts`, `studio-console/convex/agents/flow.ts`, `studio-console/convex/ingestion.ts`, and `studio-console/convex/knowledge.ts`.
+- Fact parsing pipeline exists in `studio-console/convex/facts.ts` with ops (ADD/UPDATE/CONFLICT/NOTE), using prompt + registry in `studio-console/convex/lib/facts/prompts.ts` and `studio-console/convex/lib/facts/registry.ts`.
+- Evidence verification is in `studio-console/convex/lib/facts/verify.ts`. Reconciliation logic is in `studio-console/convex/lib/facts/reconcile.ts`.
+- Facts are stored in `facts` table with status + evidence and indexed in `studio-console/convex/schema.ts`.
+- Knowledge blocks exist in `knowledgeBlocks` table and are updated via `studio-console/convex/lib/knowledgeBlocks/patch.ts`.
+- Item projections and overrides are updated via `studio-console/convex/lib/facts/apply.ts` and read via `studio-console/convex/itemsProjection.ts`.
+- Facts UI is a simple list with accept/reject/resolve in `studio-console/app/projects/[id]/_components/facts/FactsPanel.tsx`.
+- Agents consume facts and blocks via `summarizeFacts` and `summarizeKnowledgeBlocks` in `studio-console/convex/lib/contextSummary.ts` (used by flow, clarification, convertIdeas, structuredQuestions).
+- File ingestion creates turn bundles from document text but only uses a trimmed 12k slice (see `studio-console/convex/ingestion.ts` and `studio-console/convex/knowledge.ts`).
+
+2) Target state (from facts refactor.txt)
+- Facts can be any statement (no allowed-keys restriction), Hebrew output, atomic statements.
+- Append-first FactAtoms with evidence arrays, exact dedupe, semantic grouping suggestions, and contradiction warnings.
+- Two tiers: user_evidence vs hypothesis; hypothesis must be approved.
+- factIssues inbox for duplicates, contradictions, missing item links.
+- Item reference resolution tool that auto-links when confident, asks only when needed.
+- Context to agents = accepted + high-confidence proposed (exclude hypotheses by default).
+- Facts UI upgraded with filters and inbox.
+- File ingestion uses full content with chunking.
+
+3) Gap analysis (delta from current implementation)
+- Current pipeline is ops-based and key-whitelisted; new plan requires free-form facts and append-only atoms.
+- Current facts store is key/value only; new plan needs factTextHe, categories, groups, and issue tracking.
+- Dedupe and contradiction handling happen inline during reconciliation; new plan wants explicit background steps and issues.
+- No embeddings or semantic similarity over facts in current system.
+- No item reference resolver; item linking relies on prompt and itemRefs only.
+- File ingestion uses a single trimmed chunk, not full content or per-file chunking.
+- Agent context functions and UI assume key/value facts; must move to factTextHe.
+
+4) Updated refactor plan (phased, using existing code where possible)
+
+Phase 0 - Guardrails and migration strategy
+- Add a feature flag to gate Facts 2.0 per project (for example `projects.features.factsV2` or `settings`).
+- Decide migration path:
+  - Option A: dual-write (keep old facts, write new factAtoms in parallel).
+  - Option B: big switch with backfill and a rollback flag.
+- Keep existing pipeline running until Facts 2.0 UI and agent context are stable.
+
+Phase 1 - Schema additions and indexes
+- Add new tables in `studio-console/convex/schema.ts`:
+  - `factExtractionRuns` (replaces or coexists with factParseRuns).
+  - `factAtoms` (core append-only facts).
+  - `factGroups` (canonical grouping).
+  - `factIssues` (contradictions, duplicates, missing item links).
+  - `factEmbeddings` (vector for semantic matching).
+- Add indexes:
+  - `factAtoms.byProjectScopeStatus`, `factAtoms.byExactHash`, `factAtoms.byGroupId`, `factAtoms.byProjectItem`.
+  - `factExtractionRuns.byBundle`, `factExtractionRuns.byProjectCreatedAt`.
+  - `factIssues.byProjectStatus`, `factIssues.byFact`, `factIssues.byTypeStatus`.
+  - `factEmbeddings.byProjectFact` and a vector index for similarity search if using Convex vector search.
+- Keep existing `facts` and `factParseRuns` tables for backward compatibility during migration.
+
+Phase 2 - New extraction pipeline (Facts 2.0)
+- Create a new action/mutations in `studio-console/convex/facts.ts` (or a new file like `factsV2.ts`) that:
+  - Loads bundle text from `turnBundles`.
+  - Performs chunking for large bundles (store chunk metadata on run).
+  - Calls the LLM with a new prompt that outputs Hebrew, atomic facts, and evidence.
+  - Writes `factAtoms` with status/tier rules (see Phase 3).
+- Update `studio-console/convex/lib/facts/prompts.ts` (or add a new prompt file) to:
+  - Remove allowed-keys restriction.
+  - Require `factTextHe`, `category`, `importance`, `confidence`, `sourceTier`.
+  - Make `key` optional and not validated against a registry.
+- Update scheduling in `studio-console/convex/turnBundles.ts` to branch on the feature flag:
+  - If factsV2 enabled, schedule the new extraction run.
+  - Otherwise keep existing parseTurnBundle path.
+
+Phase 3 - FactAtoms insertion and auto-accept rules
+- Implement deterministic rules in the new pipeline:
+  - user_evidence with confidence >= 0.80 -> status accepted.
+  - user_evidence below threshold -> status proposed.
+  - hypothesis -> status hypothesis (always).
+- Evidence requirements:
+  - user_evidence requires evidence quotes; reject or downgrade if missing.
+  - hypothesis can have empty evidence array.
+- Store createdFrom metadata (turnBundleId, runId, chunkId, sourceKind).
+
+Phase 4 - Exact dedupe + evidence merge
+- Add exact hash function (normalize factTextHe + scope + optional key/value).
+- If duplicate found:
+  - Mark new factAtom as status duplicate.
+  - Set duplicateOfFactId and merge evidence into canonical fact.
+- Keep duplicate rows for history (soft delete behavior).
+
+Phase 5 - Embeddings and semantic grouping
+- Generate embeddings for non-duplicate factAtoms (reuse `embedText` from `studio-console/convex/lib/openai`).
+- Run similarity search within same project/scope/item and same key (or both key null).
+- If high similarity:
+  - Auto-group into factGroups (safe).
+- If medium similarity:
+  - Create `factIssues` of type semantic_duplicate_suggestion.
+- Never auto-merge across different keys.
+
+Phase 6 - Contradictions as warnings
+- Key/value contradiction:
+  - For facts with key + value, compare against accepted/proposed with same scope+key.
+  - If normalized values differ, create `factIssues` type contradiction (warning).
+- Semantic contradiction:
+  - Use a judge prompt (small model) on similar facts, create issue when contradictions detected.
+- Do not change fact status automatically (warnings only).
+
+Phase 7 - Item reference resolution
+- Implement `resolveItemReference` (new module, for example `studio-console/convex/lib/facts/itemResolution.ts`):
+  - Token match on item names + synonyms.
+  - Optional embedding similarity over item names/descriptions.
+- Integration:
+  - If confidence >= 0.80, assign itemId and set scopeType item.
+  - Else create `factIssues` type missing_item_link and keep scopeType project.
+- Add a mutation to assign item from UI and re-run dedupe in new scope.
+
+Phase 8 - Facts context selection and knowledge blocks
+- Create `getFactsContext(projectId, stage, scopeHint, queryText)` (new query or helper):
+  - Select accepted + proposed above threshold.
+  - Rank by relevance, importance, recency.
+  - Return compact Hebrew bullets and optional structured JSON.
+- Update agents to use this function:
+  - `studio-console/convex/agents/flow.ts`
+  - `studio-console/convex/agents/clarification.ts`
+  - `studio-console/convex/agents/clarificationV2.ts`
+  - `studio-console/convex/agents/convertIdeas.ts`
+  - `studio-console/convex/agents/structuredQuestions.ts`
+- Decide fate of knowledgeBlocks:
+  - Option A: keep as cache built from factAtoms by category and optional key mapping.
+  - Option B: deprecate knowledgeBlocks and keep only manual notes in UI.
+- If keeping blocks, update `studio-console/convex/lib/knowledgeBlocks/patch.ts` to map categories to blocks and remove registry dependency.
+
+Phase 9 - UI upgrade (reuse existing facts UI)
+- Extend `studio-console/app/projects/[id]/_components/facts/FactsPanel.tsx`:
+  - Filters: status, tier, category, scope, item, warnings, importance.
+  - Show factTextHe, confidence, evidence list, scope badges.
+  - Inbox tab with queues: proposed, hypotheses, warnings.
+  - Actions: accept, reject, edit (creates superseding fact), merge evidence, mark duplicate, resolve contradiction, assign item.
+- Add API endpoints in `studio-console/convex/facts.ts` to support UI actions and issue resolution.
+
+Phase 10 - File ingestion changes
+- Update `studio-console/convex/ingestion.ts` and `studio-console/convex/knowledge.ts`:
+  - Stop trimming to 12k when creating turn bundles for facts extraction.
+  - Pass full text to extraction and let chunking happen inside the run.
+  - Optionally store per-file bundle metadata or chunk refs on `factExtractionRuns`.
+
+Phase 11 - Migration and backfill
+- Add a migration job to convert existing `facts` rows into `factAtoms`:
+  - factTextHe from key/value (best effort).
+  - category from key prefix (project.* -> constraints/logistics/etc).
+  - sourceTier from sourceKind + evidence presence.
+  - status mapping with conflicts turned into `factIssues`.
+- Generate embeddings for migrated accepted facts.
+- Optional: re-parse older `turnBundles` to populate richer facts 2.0, mark as proposed.
+
+Phase 12 - Deprecation of old pipeline
+- Update UI and agents to read from factAtoms only.
+- Freeze or retire `facts`, `factParseRuns`, and registry-based prompts.
+- Keep old tables for audit until data confidence is high, then archive.
+
+Phase 13 - Observability and tests
+- Extend `factExtractionRuns.stats` to track: factsProduced, userFacts, hypotheses, exactDuplicates, semanticCandidates, contradictions.
+- Add admin surface to view runs and issues.
+- Add tests for:
+  - evidence verification
+  - exact hash dedupe
+  - item resolution confidence thresholds
+  - contradiction detection
+
+5) Acceptance checklist (for completion)
+- Each trigger (user message, agent output, file upload) creates a factExtractionRun and inserts factAtoms.
+- Facts are Hebrew, atomic, and evidence-backed for user_evidence.
+- Hypotheses never enter context until approved.
+- Exact duplicates merge evidence and keep one canonical fact.
+- Semantic duplicates and contradictions appear in the inbox as warnings.
+- Item references auto-link when confident; otherwise prompt in inbox.
+- Agents consume accepted + high-confidence proposed facts via getFactsContext.
+- Facts UI supports review flows end-to-end without losing history.

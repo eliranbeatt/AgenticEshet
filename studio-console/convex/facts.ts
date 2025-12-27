@@ -6,7 +6,7 @@ import { SYSTEM_PROMPT, buildUserPrompt } from "./lib/facts/prompts";
 import { z } from "zod";
 import { HIGH_RISK_KEYS } from "./lib/facts/registry";
 import { reconcileOps } from "./lib/facts/reconcile";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { patchBlocks } from "./lib/knowledgeBlocks/patch";
 import { applyFactsToItems } from "./lib/facts/apply";
 
@@ -279,6 +279,78 @@ export const rejectFact = mutation({
   args: { factId: v.id("facts") },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.factId, { status: "rejected", needsReview: false });
+  },
+});
+
+export const acceptPendingFacts = mutation({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const pendingFacts = await ctx.db
+      .query("facts")
+      .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", "proposed"))
+      .collect();
+
+    if (pendingFacts.length === 0) return { accepted: 0 };
+
+    const acceptedFactsForPatch: Array<{
+      _id: Id<"facts">;
+      key: string;
+      value: any;
+      scopeType: "project" | "item";
+      itemId?: Id<"projectItems"> | null;
+    }> = [];
+
+    for (const fact of pendingFacts) {
+      let existingFact: Doc<"facts"> | null = null;
+      if (fact.scopeType === "project") {
+        existingFact = await ctx.db
+          .query("facts")
+          .withIndex("by_scope_key", (q) =>
+            q.eq("projectId", fact.projectId)
+              .eq("scopeType", "project")
+              .eq("itemId", null)
+              .eq("key", fact.key)
+          )
+          .filter((q) => q.eq(q.field("status"), "accepted"))
+          .first();
+      } else if (fact.itemId) {
+        existingFact = await ctx.db
+          .query("facts")
+          .withIndex("by_scope_key", (q) =>
+            q.eq("projectId", fact.projectId)
+              .eq("scopeType", "item")
+              .eq("itemId", fact.itemId)
+              .eq("key", fact.key)
+          )
+          .filter((q) => q.eq(q.field("status"), "accepted"))
+          .first();
+      }
+
+      if (existingFact && existingFact._id !== fact._id) {
+        await ctx.db.patch(existingFact._id, { status: "superseded" });
+      }
+
+      await ctx.db.patch(fact._id, {
+        status: "accepted",
+        needsReview: false,
+        supersedesFactId: existingFact?._id,
+      });
+
+      acceptedFactsForPatch.push({
+        _id: fact._id,
+        key: fact.key,
+        value: fact.value,
+        scopeType: fact.scopeType as "project" | "item",
+        itemId: fact.itemId,
+      });
+    }
+
+    if (acceptedFactsForPatch.length > 0) {
+      await patchBlocks(ctx, args.projectId, acceptedFactsForPatch);
+      await applyFactsToItems(ctx, args.projectId, acceptedFactsForPatch);
+    }
+
+    return { accepted: acceptedFactsForPatch.length };
   },
 });
 

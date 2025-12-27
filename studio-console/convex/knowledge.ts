@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, mutation, query, internalQuery, internalMutation, internalAction } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { embedText, callChatWithSchema, normalizeEmbedding } from "./lib/openai";
 import { chunkText } from "./lib/textChunker";
 import { EnhancerSchema } from "./lib/zodSchemas";
@@ -19,6 +19,20 @@ const sourceTypeEnum = v.union(
 
 type SourceType = "doc_upload" | "plan" | "conversation" | "task" | "quest" | "quote" | "item" | "system_note";
 const scopeEnum = v.union(v.literal("project"), v.literal("global"), v.literal("both"));
+
+function resolveBundleStage(projectStage?: string | null): "ideation" | "planning" | "solutioning" {
+    switch (projectStage) {
+        case "ideation":
+            return "ideation";
+        case "planning":
+            return "planning";
+        case "production":
+        case "done":
+            return "solutioning";
+        default:
+            return "ideation";
+    }
+}
 
 // --- Mutations ---
 
@@ -334,6 +348,22 @@ export const ingestArtifactInternal: ReturnType<typeof internalAction> = interna
 
         await ctx.runMutation(internal.knowledge.insertChunks, { chunks: chunkPayload });
         await ctx.runMutation(internal.knowledge.updateDocStatus, { docId, status: "ready" });
+
+        const trimmedText = normalizedText.slice(0, 12000).trim();
+        if (args.projectId && trimmedText) {
+            const project = await ctx.runQuery(api.projects.getProject, { projectId: args.projectId });
+            const itemRefs = await ctx.runQuery(internal.items.getItemRefs, { projectId: args.projectId });
+            const sourceIds = [String(args.sourceRefId ?? docId)];
+            const useAgentOutput = ["task", "quest", "quote", "item", "system_note", "plan"].includes(args.sourceType);
+            await ctx.runMutation(internal.turnBundles.createFromTurn, {
+                projectId: args.projectId,
+                stage: resolveBundleStage(project?.stage),
+                scope: { type: "project" },
+                source: { type: useAgentOutput ? "generation" : "chat", sourceIds },
+                itemRefs,
+                ...(useAgentOutput ? { agentOutput: trimmedText } : { freeChat: trimmedText }),
+            });
+        }
         return docId;
     },
 });

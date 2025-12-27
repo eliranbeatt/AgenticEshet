@@ -97,6 +97,7 @@ export default defineSchema({
             itemsTree: v.optional(v.boolean()),
             changeSetFlow: v.optional(v.boolean()),
             accountingLinesV1: v.optional(v.boolean()),
+            factsV2: v.optional(v.boolean()),
         })),
         rootItemId: v.optional(v.id("projectItems")),
         overviewSummary: v.optional(v.string()),
@@ -1444,6 +1445,134 @@ export default defineSchema({
     .index("by_scope_key", ["projectId", "scopeType", "itemId", "key"])
     .index("by_project_status", ["projectId", "status"])
     .index("by_item", ["projectId", "itemId"]),
+
+    factExtractionRuns: defineTable({
+        projectId: v.id("projects"),
+        turnBundleId: v.id("turnBundles"),
+        status: v.union(
+            v.literal("queued"),
+            v.literal("running"),
+            v.literal("succeeded"),
+            v.literal("failed")
+        ),
+        model: v.string(),
+        startedAt: v.number(),
+        finishedAt: v.optional(v.number()),
+        chunking: v.optional(v.object({
+            chunks: v.number(),
+            strategy: v.string(),
+            chunkSize: v.number(),
+            overlap: v.number(),
+        })),
+        stats: v.optional(v.object({
+            factsProduced: v.number(),
+            userFacts: v.number(),
+            hypotheses: v.number(),
+            exactDuplicates: v.number(),
+            semanticCandidates: v.number(),
+            contradictions: v.number(),
+        })),
+        error: v.optional(v.object({ message: v.string(), raw: v.optional(v.string()) })),
+        createdAt: v.number(),
+    })
+    .index("by_bundle", ["turnBundleId"])
+    .index("by_project_createdAt", ["projectId", "createdAt"]),
+
+    factAtoms: defineTable({
+        projectId: v.id("projects"),
+        scopeType: factScopeTypeSchema,
+        itemId: v.union(v.id("projectItems"), v.null()),
+        factTextHe: v.string(),
+        category: v.string(),
+        importance: v.number(),
+        sourceTier: v.union(v.literal("user_evidence"), v.literal("hypothesis")),
+        status: v.union(
+            v.literal("proposed"),
+            v.literal("accepted"),
+            v.literal("rejected"),
+            v.literal("hypothesis"),
+            v.literal("superseded"),
+            v.literal("duplicate")
+        ),
+        confidence: v.number(),
+        key: v.optional(v.string()),
+        valueType: v.optional(v.string()),
+        value: v.optional(v.any()),
+        evidence: v.optional(v.array(v.object({
+            turnBundleId: v.id("turnBundles"),
+            quoteHe: v.string(),
+            startChar: v.number(),
+            endChar: v.number(),
+            sourceSection: v.string(),
+            sourceKind: v.union(v.literal("user"), v.literal("doc"), v.literal("agentOutput")),
+        }))),
+        createdFrom: v.object({
+            turnBundleId: v.id("turnBundles"),
+            runId: v.id("factExtractionRuns"),
+            chunkId: v.optional(v.string()),
+            sourceKind: v.union(v.literal("user"), v.literal("doc"), v.literal("agent")),
+        }),
+        dedupe: v.object({
+            exactHash: v.string(),
+            duplicateOfFactId: v.optional(v.id("factAtoms")),
+        }),
+        groupId: v.optional(v.id("factGroups")),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+    .index("by_project_scope_status", ["projectId", "scopeType", "itemId", "status"])
+    .index("by_exactHash", ["projectId", "dedupe.exactHash"])
+    .index("by_group", ["projectId", "groupId"])
+    .index("by_project_item", ["projectId", "itemId"]),
+
+    factGroups: defineTable({
+        projectId: v.id("projects"),
+        scopeType: factScopeTypeSchema,
+        itemId: v.union(v.id("projectItems"), v.null()),
+        key: v.optional(v.string()),
+        canonicalFactId: v.id("factAtoms"),
+        memberFactIds: v.optional(v.array(v.id("factAtoms"))),
+        labelHe: v.optional(v.string()),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+    .index("by_project_scope", ["projectId", "scopeType", "itemId"])
+    .index("by_canonical", ["canonicalFactId"]),
+
+    factIssues: defineTable({
+        projectId: v.id("projects"),
+        type: v.union(
+            v.literal("contradiction"),
+            v.literal("semantic_duplicate_suggestion"),
+            v.literal("missing_item_link")
+        ),
+        severity: v.union(v.literal("info"), v.literal("warning"), v.literal("high")),
+        status: v.union(v.literal("open"), v.literal("resolved"), v.literal("dismissed")),
+        factId: v.id("factAtoms"),
+        relatedFactIds: v.optional(v.array(v.id("factAtoms"))),
+        proposedAction: v.optional(v.string()),
+        explanationHe: v.optional(v.string()),
+        createdAt: v.number(),
+        resolvedByUserId: v.optional(v.string()),
+        resolvedAt: v.optional(v.number()),
+    })
+    .index("by_project_status", ["projectId", "status"])
+    .index("by_fact", ["factId"])
+    .index("by_type_status", ["type", "status"]),
+
+    factEmbeddings: defineTable({
+        projectId: v.id("projects"),
+        factId: v.id("factAtoms"),
+        vector: v.array(v.float64()),
+        model: v.string(),
+        createdAt: v.number(),
+    })
+    .index("by_project_fact", ["projectId", "factId"])
+    .vectorIndex("by_embedding", {
+        vectorField: "vector",
+        dimensions: 1536,
+        filterFields: ["projectId"],
+    }),
 
     knowledgeBlocks: defineTable({
         projectId: v.id("projects"),

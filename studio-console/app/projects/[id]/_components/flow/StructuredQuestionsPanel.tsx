@@ -58,8 +58,6 @@ export function StructuredQuestionsPanel({ projectId, stage }: StructuredQuestio
 function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting }: { session: any, projectId: Id<"projects">, stage: any, onRestart: () => void, isRestarting: boolean }) {
     const latestTurn = useQuery(api.structuredQuestions.getLatestTurn, { sessionId: session._id });
     const saveAnswers = useMutation(api.structuredQuestions.saveAnswers);
-    const runAgent = useAction(api.agents.structuredQuestions.run);
-
     const [answers, setAnswers] = useState<Record<string, StructuredAnswer>>({});
     const [userInstructions, setUserInstructions] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -120,12 +118,6 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
                 turnNumber: latestTurn.turnNumber,
                 answers: answerList,
                 userInstructions,
-            });
-
-            await runAgent({
-                projectId,
-                stage,
-                sessionId: session._id,
             });
         } catch (e) {
             console.error(e);

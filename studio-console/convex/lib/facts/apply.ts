@@ -107,6 +107,13 @@ export async function applyFactsToItems(
                     }
                     break;
                 }
+                case "item.materials.color": {
+                    if (materialFacts.color !== fact.value) {
+                        materialFacts.color = fact.value;
+                        changed = true;
+                    }
+                    break;
+                }
                 case "item.production.method": {
                     if (productionFacts.method !== fact.value) {
                         productionFacts.method = fact.value;

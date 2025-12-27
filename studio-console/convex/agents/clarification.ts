@@ -5,7 +5,6 @@ import { callChatWithSchema } from "../lib/openai";
 import { ClarificationSchema } from "../lib/zodSchemas";
 import { type Doc } from "../_generated/dataModel";
 import {
-    summarizeFacts,
     summarizeItems,
     summarizeKnowledgeBlocks,
     summarizeKnowledgeDocs,
@@ -193,9 +192,10 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 includeSummaries: true,
             });
 
-            const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+            const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
                 projectId: args.projectId,
-                stage: "clarification",
+                scopeType: "project",
+                queryText: args.chatHistory.map((m) => m.content).join("\n").slice(0, 500),
             });
 
             const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -258,8 +258,8 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 `Current Notes: ${project.details.notes || "N/A"}`,
                 `Existing Summary: ${project.overviewSummary || "No summary captured yet."}`,
                 "",
-                "KNOWN FACTS (accepted):",
-                summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+                "KNOWN FACTS (accepted + high-confidence proposed):",
+                factsContext.bullets,
                 "",
                 "KNOWLEDGE BLOCKS:",
                 summarizeKnowledgeBlocks(knowledgeBlocks ?? []),

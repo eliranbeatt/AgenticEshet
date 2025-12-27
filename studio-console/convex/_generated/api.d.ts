@@ -41,6 +41,7 @@ import type * as currentState from "../currentState.js";
 import type * as deepResearch from "../deepResearch.js";
 import type * as drive from "../drive.js";
 import type * as facts from "../facts.js";
+import type * as factsV2 from "../factsV2.js";
 import type * as flowWorkspaces from "../flowWorkspaces.js";
 import type * as http from "../http.js";
 import type * as ideaSelections from "../ideaSelections.js";
@@ -56,6 +57,8 @@ import type * as lib_architectTaskGeneration from "../lib/architectTaskGeneratio
 import type * as lib_contextSummary from "../lib/contextSummary.js";
 import type * as lib_costing from "../lib/costing.js";
 import type * as lib_currentState from "../lib/currentState.js";
+import type * as lib_factsV2_prompts from "../lib/factsV2/prompts.js";
+import type * as lib_factsV2_verify from "../lib/factsV2/verify.js";
 import type * as lib_facts_apply from "../lib/facts/apply.js";
 import type * as lib_facts_prompts from "../lib/facts/prompts.js";
 import type * as lib_facts_reconcile from "../lib/facts/reconcile.js";
@@ -136,6 +139,7 @@ declare const fullApi: ApiFromModules<{
   deepResearch: typeof deepResearch;
   drive: typeof drive;
   facts: typeof facts;
+  factsV2: typeof factsV2;
   flowWorkspaces: typeof flowWorkspaces;
   http: typeof http;
   ideaSelections: typeof ideaSelections;
@@ -151,6 +155,8 @@ declare const fullApi: ApiFromModules<{
   "lib/contextSummary": typeof lib_contextSummary;
   "lib/costing": typeof lib_costing;
   "lib/currentState": typeof lib_currentState;
+  "lib/factsV2/prompts": typeof lib_factsV2_prompts;
+  "lib/factsV2/verify": typeof lib_factsV2_verify;
   "lib/facts/apply": typeof lib_facts_apply;
   "lib/facts/prompts": typeof lib_facts_prompts;
   "lib/facts/reconcile": typeof lib_facts_reconcile;

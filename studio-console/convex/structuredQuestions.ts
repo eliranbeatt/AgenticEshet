@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { StructuredAnswerSchema } from "./lib/zodSchemas";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 export const getActiveSession = query({
     args: {
@@ -171,6 +171,12 @@ export const saveAnswers = mutation({
                     text: a.text 
                 })),
                 freeChat: args.userInstructions,
+            });
+
+            await ctx.scheduler.runAfter(0, api.agents.structuredQuestions.run, {
+                projectId: session.projectId,
+                stage: session.stage,
+                sessionId: session._id,
             });
         }
     },

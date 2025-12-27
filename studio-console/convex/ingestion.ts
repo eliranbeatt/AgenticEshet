@@ -9,6 +9,20 @@ import { extractTextFromFile } from "./lib/fileParsers";
 import { chunkText } from "./lib/textChunker";
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
+
+function resolveBundleStage(projectStage?: string | null): "ideation" | "planning" | "solutioning" {
+    switch (projectStage) {
+        case "ideation":
+            return "ideation";
+        case "planning":
+            return "planning";
+        case "production":
+        case "done":
+            return "solutioning";
+        default:
+            return "ideation";
+    }
+}
 // --- Mutations ---
 
 export const createJob = mutation({
@@ -436,6 +450,21 @@ async function processSingleFile(
         stage: "ready",
         ragDocId: docId,
     });
+
+    const projectId = file.projectId ?? job.projectId;
+    const trimmedText = textSource.slice(0, 12000).trim();
+    if (projectId && trimmedText) {
+        const project = await ctx.runQuery(api.projects.getProject, { projectId });
+        const itemRefs = await ctx.runQuery(internal.items.getItemRefs, { projectId });
+        await ctx.runMutation(internal.turnBundles.createFromTurn, {
+            projectId,
+            stage: resolveBundleStage(project?.stage),
+            scope: { type: "project" },
+            source: { type: "chat", sourceIds: [String(file._id)] },
+            itemRefs,
+            freeChat: trimmedText,
+        });
+    }
 }
 
 // --- Queries ---

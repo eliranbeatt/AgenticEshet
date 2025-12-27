@@ -9,7 +9,7 @@ import {
     extractGuardrails,
     sharedContextContract,
 } from "../prompts/itemsPromptPack";
-import { summarizeFacts, summarizeItems, summarizeKnowledgeBlocks } from "../lib/contextSummary";
+import { summarizeItems, summarizeKnowledgeBlocks } from "../lib/contextSummary";
 
 function normalizeChangeSet(input: any, projectId: string) {
     const base = ChangeSetSchema.parse(input);
@@ -52,9 +52,10 @@ export const createChangeSet = action({
             detailsMarkdown: card!.detailsMarkdown,
         }));
 
-        const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+        const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
             projectId: args.projectId,
-            stage: "ideation",
+            scopeType: "project",
+            queryText: selection.notes ?? project.name,
         });
 
         const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -78,8 +79,8 @@ export const createChangeSet = action({
             `CLIENT: ${project.clientName}`,
             `DEFAULT_LANGUAGE: ${project.defaultLanguage ?? "he"}`,
             "",
-            "KNOWN FACTS (accepted):",
-            summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+            "KNOWN FACTS (accepted + high-confidence proposed):",
+            factsContext.bullets,
             "",
             "KNOWLEDGE BLOCKS:",
             summarizeKnowledgeBlocks(knowledgeBlocks ?? []),

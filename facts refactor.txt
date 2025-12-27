@@ -1,0 +1,615 @@
+Below is a **full, dev-ready plan** for “Facts 2.0” that matches every decision you made:
+
+* **No allowed-keys restriction** (facts can be anything)
+* **Hebrew facts**
+* **Everything is a fact** (style prefs, soft constraints, vibes, risks, stakeholders, etc.)
+* Only **project + item** scope for now
+* **Item resolution tool** (map “הרצפה” → Floor item; ask user only when unsure)
+* Triggers: **user message, agent output, per uploaded file** (no streaming chunks)
+* Documents: **all content**, chunk if needed
+* **Soft delete**, dedupe keeps one fact (canonical) and merges evidence
+* Contradictions: **key/value + semantic**
+* Contradictions are **warnings** (don’t block)
+* Approval: **all users**
+* Context to agents: **accepted + high-confidence proposed**
+* Two-tier: **User-evidence facts** + **Agent hypotheses (must be approved)**
+* Add **Fact UI inbox**, but **reuse your existing Facts UI** (extend, not replace)
+* Relevance filtering with category list + **“other”**
+* **Never auto-merge across keys** (only suggest)
+
+---
+
+## 0) What changes vs today
+
+### Today (ops-based)
+
+You store TurnBundle → run “ops” (ADD/UPDATE/CONFLICT/NOTE) → insert “facts” rows → rebuild knowledgeBlocks → apply item overrides.
+
+### Facts 2.0 (append-first + review)
+
+Every trigger produces **many atomic FactAtoms**, stored append-only. Then background jobs:
+
+1. **Normalize + exact dedupe**
+2. **Semantic near-duplicate suggestions** (safe)
+3. **Contradiction detection** (warnings + review queue)
+4. **KnowledgeBlocks + agent-context are views** built from accepted + high-confidence proposed
+
+You stop relying on “LLM deciding updates right now”. Updates happen via **grouping + approvals**.
+
+---
+
+## 1) Data model (Convex tables)
+
+### 1.1 `turnBundles` (keep as-is)
+
+Immutable `bundleText` remains your provenance anchor.
+
+### 1.2 `factExtractionRuns` (rename/replace `factParseRuns`)
+
+Tracks background work per bundle.
+
+**Fields**
+
+* `projectId`, `turnBundleId`
+* `status`: `queued | running | succeeded | failed`
+* `model`: `"gpt-5-mini"`
+* `startedAt`, `finishedAt`
+* `chunking`: `{ chunks: number, strategy: "token", chunkSize, overlap }`
+* `stats`: `{ factsProduced, userFacts, hypotheses, exactDuplicates, semanticCandidates, contradictions }`
+* `error`
+
+### 1.3 `factAtoms` (new core table)
+
+One row = one atomic statement extracted from input.
+
+**Fields**
+
+* `projectId`
+* `scopeType`: `"project" | "item"`
+* `itemId`: Id | null
+* `factTextHe`: string  *(required, concise Hebrew sentence)*
+* `category`: `"constraints" | "dimensions" | "materials" | "logistics" | "timeline" | "stakeholders" | "budget" | "preferences" | "risks" | "other"`
+* `importance`: 1–5
+* `sourceTier`:
+
+  * `"user_evidence"` (facts that are directly stated in user input or in uploaded docs; must have evidence)
+  * `"hypothesis"` (agent-inferred; must be approved)
+* `status`:
+
+  * `"proposed"` (default for user_evidence until auto-accept rules run)
+  * `"accepted"`
+  * `"rejected"`
+  * `"hypothesis"` (for sourceTier=hypothesis; separate from proposed)
+  * `"superseded"` (kept for history)
+  * `"duplicate"` (soft-deleted by dedupe)
+  * `"conflict"` (optional status; but you said warnings only → keep as `accepted/proposed` and track conflicts separately)
+* `confidence`: 0–1
+* `key` (optional string): **NOT restricted**
+
+  * This is a *soft grouping key* (e.g., `"item.floor.finish"`, `"project.deadline"`, `"item.dimensions.width"`, `"client.preference.colorTone"`)
+  * Can be null; system still works.
+* `valueType` (optional): `"string" | "number" | "boolean" | "date" | "currency" | "dimension" | "enum" | "other"`
+* `value` (optional typed payload)
+* `evidence` *(array; for canonical fact we keep all evidence here)*
+
+  * `[{ turnBundleId, quoteHe, startChar, endChar, sourceSection, sourceKind: "user"|"doc"|"agentOutput" }]`
+* `createdFrom`:
+
+  * `turnBundleId`, `runId`, `chunkId`, `sourceKind: "user"|"agent"|"doc"`
+* `dedupe`:
+
+  * `exactHash`
+  * `duplicateOfFactId` (if status=duplicate)
+* `groupId` (nullable): links to `factGroups`
+* `createdAt`, `updatedAt`
+
+### 1.4 `factGroups` (new)
+
+Groups near-duplicates / same concept under a canonical fact.
+
+**Fields**
+
+* `projectId`, `scopeType`, `itemId`
+* `key` (nullable)
+* `canonicalFactId`
+* `memberFactIds` (or store membership in separate table if you prefer)
+* `labelHe` (optional short title for UI)
+* `createdAt`, `updatedAt`
+
+### 1.5 `factIssues` (new) – contradictions + item-link uncertainty
+
+This is your review/inbox engine.
+
+**Fields**
+
+* `projectId`
+* `type`: `"contradiction" | "semantic_duplicate_suggestion" | "missing_item_link"`
+* `severity`: `"info" | "warning" | "high"`
+* `status`: `"open" | "resolved" | "dismissed"`
+* `factId` (the new fact that triggered)
+* `relatedFactIds` (the older facts it conflicts/duplicates with)
+* `proposedAction`:
+
+  * `"mergeEvidence" | "markDuplicate" | "createGroup" | "supersede" | "keepBoth" | "askUserToPickItem" | "editFact"`
+* `explanationHe` (1–2 lines)
+* `createdAt`, `resolvedByUserId`, `resolvedAt`
+
+### 1.6 `factEmbeddings` (new)
+
+Embeddings per canonical fact (and optionally per non-canonical until deduped).
+
+**Fields**
+
+* `projectId`
+* `factId`
+* `vector` (float[] or stored externally and referenced)
+* `model`
+* `createdAt`
+
+> With “hundreds per project”, you can do simple cosine in-app initially; if you later scale, move to a vector DB.
+
+---
+
+## 2) Event triggers → what gets queued
+
+### Trigger A: User message (final)
+
+* Create `turnBundles` row (as you do)
+* Enqueue `factExtractionRuns` for that bundle
+
+### Trigger B: Agent output (final)
+
+* Same: create `turnBundles` row
+* Enqueue extraction run
+
+### Trigger C: File upload (per file)
+
+* Normalize doc to text
+* If too big: chunk (token-based)
+* Create a single `turnBundle` that includes metadata + concatenated chunk markers (or one bundle per file with `chunkRefs`)
+* Enqueue extraction run(s) (one run per file; within it chunking is internal)
+
+**No streaming triggers**.
+
+---
+
+## 3) Pipeline steps (background jobs)
+
+### Step 1 — Extract facts (gpt-5-mini)
+
+**Input**
+
+* `bundleText` (or chunk text)
+* Minimal context: **accepted + high-confidence proposed facts** (top-K relevant, not full dump)
+* Current project items list (names + short descriptions) for item resolution
+
+**Output contract**
+Return JSON array of facts:
+
+* Must be **Hebrew**
+* Must be **atomic** (one claim per line)
+* Must be **concise**
+* Must include `category`, `importance`, `confidence`
+* Must set `sourceTier`:
+
+  * `user_evidence` if directly supported by quote in input
+  * `hypothesis` if inferred/suggested beyond direct evidence
+
+**Critical rule**
+
+* For `user_evidence`: evidence quote is required.
+* For `hypothesis`: quote is optional, but still allowed; status must be `hypothesis`.
+
+**Auto-accept rule (recommended)**
+
+* If `sourceTier=user_evidence` AND confidence ≥ 0.80 → set `status=accepted` automatically
+* Else `status=proposed`
+* If `sourceTier=hypothesis` → `status=hypothesis` always (even if confidence high)
+
+### Step 2 — Normalize + exact dedupe (deterministic)
+
+For each newly inserted fact:
+
+* Create `exactHash = sha256(projectId + scopeType + itemId + key + normalized(factTextHe or value))`
+* If an **accepted/proposed** fact already exists with same hash:
+
+  * Keep the older as canonical (or newest—pick one consistent rule)
+  * Mark the new one `status=duplicate`, set `duplicateOfFactId`
+  * Merge evidence into canonical fact (`evidence[]` append, dedupe quotes)
+  * Create/close a `factIssue` only if you want visibility (optional)
+
+**Soft delete** is satisfied because the duplicate row stays, just not active.
+
+### Step 3 — Embedding + semantic dedupe suggestions
+
+For each **non-duplicate** fact:
+
+* Embed `factTextHe`
+* Find top-K similar facts within:
+
+  * same `projectId`
+  * same `scopeType`
+  * same `itemId` (if item scope)
+  * **same `key`** (or both key=null)  ✅ “never auto-merge across keys”
+* If similarity ≥ threshold (e.g., 0.90):
+
+  * If keys match: **auto-group** into `factGroups` (safe)
+  * If keys don’t match (shouldn’t happen due to filter) → only suggest
+* If similarity in mid band (0.82–0.90):
+
+  * Create `factIssue` type `semantic_duplicate_suggestion` (user can approve merge/group)
+
+### Step 4 — Contradiction detection (warnings)
+
+Two mechanisms:
+
+#### 4.1 Easy contradiction (key/value)
+
+If `key` exists and `value` exists:
+
+* Compare against other accepted/proposed facts with same `(scopeType, itemId, key)`
+* If normalized value differs materially → create `factIssue` type `contradiction` severity warning
+
+#### 4.2 Semantic contradiction (NLI-style judge)
+
+For new fact, compare against top similar facts (same scope + key):
+
+* Run a small judge prompt (can also be gpt-5-mini) that labels:
+
+  * `entails | compatible | contradicts | unrelated`
+* If `contradicts` with confidence → create warning issue
+
+**Important**: you said contradictions don’t block, so:
+
+* Facts remain accepted/proposed as-is
+* Issues appear in inbox and in warning badges in the Facts UI
+
+### Step 5 — Update “Current Knowledge” views
+
+Recompute (incrementally) two views:
+
+1. **Agent Context View**
+
+* Select facts where:
+
+  * `status=accepted`
+  * OR (`status=proposed` AND `confidence >= ProposedContextThreshold`, e.g. 0.85)
+* Exclude `status=hypothesis` by default (unless user toggles “include hypotheses”)
+* Rank by:
+
+  * relevance to current stage/question (embedding)
+  * importance
+  * recency
+* Provide as compact bullet list in Hebrew
+
+2. **knowledgeBlocks** (optional to keep)
+   You can keep your existing `knowledgeBlocks` table, but it becomes a **rendered cache** from the view above (not a truth source).
+
+---
+
+## 4) Item reference resolution tool (required)
+
+You want: if user says “הרצפה”, the agent updates the **Floor item** without asking, unless unsure.
+
+### Implement `resolveItemReference(projectId, mentionTextHe, surroundingContextHe) -> { itemId, confidence, candidates[] }`
+
+**How it works**
+
+* Candidate generation:
+
+  * Match by item name tokens + synonyms dictionary
+  * Embed mentionText and compare to embeddings of item names/descriptions + recent item facts
+* Return:
+
+  * best candidate and confidence
+  * top 3 candidates
+
+**Rules**
+
+* If confidence ≥ 0.80 → assign `itemId`
+* If < 0.80:
+
+  * Create `factIssue` type `missing_item_link` with candidates
+  * Extracted fact stays at `scopeType=project` temporarily
+  * UI asks user to pick item; on selection, update fact’s scope to item
+
+This gives you the behavior you want without nagging.
+
+---
+
+## 5) Fact UI (extend the existing one)
+
+You said you already have a Facts UI—so the plan is: **keep it, add these capabilities**.
+
+### 5.1 Main list view (existing)
+
+Add filters:
+
+* Status: accepted / proposed / hypothesis / rejected / duplicate
+* Tier: user_evidence / hypothesis
+* Scope: project / item (+ item picker)
+* Category (+ “other”)
+* Has warnings (linked open issues)
+* Importance slider
+
+Each fact row shows:
+
+* FactText (Hebrew)
+* Badges: tier, status, category, importance
+* Confidence
+* Evidence “quote” expand
+* Linked item (if item scope)
+* Warning icon if it has open `factIssues`
+
+### 5.2 Inbox tab (new section inside current UI)
+
+Three queues:
+
+1. **New Proposed** (batch accept/reject)
+2. **Hypotheses** (batch approve → becomes proposed/accepted; or reject)
+3. **Warnings**
+
+   * Contradictions
+   * Missing item link
+   * Semantic duplicate suggestions
+
+### 5.3 Actions
+
+* Accept
+* Reject
+* Edit text (creates a new fact that supersedes old; old becomes superseded)
+* Merge evidence (for duplicates)
+* “Create group” / “Mark as duplicate”
+* Resolve contradiction:
+
+  * keep both
+  * supersede older
+  * mark one wrong
+* Assign item (for missing item link)
+
+**All users can approve**: so store `resolvedByUserId`.
+
+---
+
+## 6) Context injection into other agents (planning/solutioning/quote)
+
+You requested: **accepted + high-confidence proposed**.
+
+Create a single function used by all agents:
+
+`getFactsContext(projectId, stage, scopeHint, queryTextHe?) -> FactsContext`
+
+**Behavior**
+
+* Pull eligible facts (accepted + proposed>=threshold)
+* If stage/item context exists, prefer same item scope
+* Rank by relevance (embedding to queryText), then importance, then recency
+* Output as:
+
+  * compact bullets in Hebrew
+  * * structured JSON (optional) for deterministic usage
+
+This replaces “knowledgeBlocks as truth”. KnowledgeBlocks can still exist as cached markdown.
+
+---
+
+## 7) Hypotheses tier (strict)
+
+You explicitly want:
+
+* **User facts with evidence**
+* **Generated facts as hypotheses until approved**
+
+So enforce:
+
+* Any fact whose sourceKind is agent inference → `sourceTier=hypothesis` and `status=hypothesis`
+* Hypotheses never enter agent context unless user toggles “include hypotheses”
+
+When user approves a hypothesis:
+
+* It becomes `status=proposed` (or accepted if user chooses “accept”)
+* Then it can enter context if confidence qualifies.
+
+---
+
+## 8) Requirements checklist (what “done” means)
+
+### Functional
+
+* ✅ Every user message produces atomic facts (not “too few”)
+* ✅ Every agent output produces facts
+* ✅ Every uploaded file produces facts (full text, chunked)
+* ✅ Facts are Hebrew, atomic, concise
+* ✅ User-evidence facts require evidence quotes
+* ✅ Hypotheses are stored separately and require approval
+* ✅ Soft dedupe: identical facts become duplicate; canonical keeps merged evidence
+* ✅ Semantic dedupe suggestions only within same key (or key=null)
+* ✅ Contradictions generate warnings; do not block flows
+* ✅ Item reference tool links “הרצפה” to Floor item; asks only when low confidence
+* ✅ Existing Facts UI remains, extended with Inbox + filters + actions
+
+### Non-functional
+
+* Background OK: extraction runs async with retries
+* Scales to hundreds of facts per project
+* Observability: per run stats + failure logs
+
+---
+
+## 9) Implementation tasks (epics + acceptance criteria)
+
+### Epic 1 — Schema + migrations
+
+**Tasks**
+
+* Add: `factExtractionRuns`, `factAtoms`, `factGroups`, `factIssues`, `factEmbeddings`
+* Add indexes:
+
+  * `factAtoms.byProjectScopeItemStatus`
+  * `factAtoms.byExactHash`
+  * `factIssues.byProjectStatus`
+  * `factEmbeddings.byProjectFact`
+* Migration:
+
+  * Copy existing `facts` into `factAtoms`:
+
+    * `factTextHe`: from existing key/value rendered to Hebrew sentence (best effort)
+    * `status`: accepted stays accepted
+    * `sourceTier`: user_evidence if evidence exists; else proposed
+    * preserve evidence pointers
+  * Generate embeddings for migrated accepted facts
+
+**Acceptance**
+
+* Old facts visible in new UI
+* No data loss; duplicates preserved as soft status
+
+---
+
+### Epic 2 — Trigger wiring + job queue
+
+**Tasks**
+
+* Hook triggers:
+
+  * `onUserMessageFinal` → create turnBundle → enqueue extraction
+  * `onAgentOutputFinal` → create turnBundle → enqueue extraction
+  * `onFileUploadFinal` → build bundleText w/ chunk markers → enqueue extraction
+* Implement run state machine + retry policy
+
+**Acceptance**
+
+* Any of the three triggers creates a run row and results in extracted facts
+
+---
+
+### Epic 3 — Fact extractor (gpt-5-mini) + chunking
+
+**Tasks**
+
+* Define extraction prompt + strict JSON schema output
+* Implement chunking for large documents
+* Store `createdFrom.chunkId` so evidence points to correct part
+* Auto-accept rules for user_evidence
+
+**Acceptance**
+
+* Typical user message yields ~8–30 facts (not 1–3)
+* Docs yield many facts across chunks
+* All user facts have evidence quotes
+
+---
+
+### Epic 4 — Dedupe + semantic grouping
+
+**Tasks**
+
+* exactHash pipeline + evidence merge into canonical
+* embeddings generation for non-duplicate facts
+* semantic similarity search within same (scope,item,key)
+* create groups + suggestions via `factIssues`
+
+**Acceptance**
+
+* Identical facts collapse to one canonical with multiple evidences
+* Near duplicates create either grouping or an inbox suggestion
+* No auto-merge across different keys
+
+---
+
+### Epic 5 — Contradiction engine (warnings)
+
+**Tasks**
+
+* key/value contradiction detector
+* semantic contradiction judge (mini)
+* create `factIssues` warnings
+
+**Acceptance**
+
+* Contradictions appear as warnings in inbox and on fact rows
+* Nothing is blocked; no forced superseding
+
+---
+
+### Epic 6 — Item resolution tool
+
+**Tasks**
+
+* Implement `resolveItemReference`
+* Integrate into extractor:
+
+  * when mention implies item → link automatically if confident
+  * else create `missing_item_link` issue with candidates
+* UI action: assign item → updates fact scope + re-runs dedupe in new scope
+
+**Acceptance**
+
+* “הרצפה” maps to Floor item without asking when clear
+* When ambiguous, user sees a simple picker in inbox
+
+---
+
+### Epic 7 — Facts UI upgrade (reuse current UI)
+
+**Tasks**
+
+* Add filters + badges
+* Add Inbox with 3 queues (Proposed, Hypotheses, Warnings)
+* Add batch approve/reject
+* Add resolve flows for issues
+* Add “include hypotheses in context” toggle (optional global)
+
+**Acceptance**
+
+* Users can manage facts end-to-end from existing Facts UI
+* Hypotheses are clearly separated and require explicit approval
+
+---
+
+### Epic 8 — Agent context integration
+
+**Tasks**
+
+* Build `getFactsContext()` selector (accepted + proposed>=threshold)
+* Provide compact Hebrew bullets + optional JSON payload
+* Replace existing “accepted facts snapshot” usage everywhere
+
+**Acceptance**
+
+* All agents receive the correct context, consistently
+* High-confidence proposed appears; hypotheses don’t (unless toggled)
+
+---
+
+### Epic 9 — Observability + evaluation
+
+**Tasks**
+
+* Run dashboards: facts per run, avg per trigger type, duplication rate, contradiction rate, latency
+* QA tests with fixtures: chat, agent output, docs
+
+**Acceptance**
+
+* You can see why “too few facts” happens and fix prompt/settings quickly
+
+---
+
+## 10) Defaults I’m baking in (since you didn’t want more questions)
+
+* `ProposedContextThreshold = 0.85`
+* `AutoAcceptUserEvidenceThreshold = 0.80`
+* Semantic duplicate thresholds:
+
+  * auto-group: ≥ 0.90 (same key only)
+  * suggestion: 0.82–0.90
+* Item auto-link threshold: 0.80
+* Hypotheses excluded from agent context by default
+
+---
+
+* extractor output
+* issue objects
+* UI payloads
+* and the “facts context” payload that every agent receives
+

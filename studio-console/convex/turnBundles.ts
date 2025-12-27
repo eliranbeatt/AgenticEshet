@@ -1,6 +1,6 @@
-import { mutation, internalMutation } from "./_generated/server";
+import { mutation, internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
+import { internal, api } from "./_generated/api";
 
 // Helper to format the bundle text deterministically
 function formatBundleText(args: {
@@ -150,8 +150,28 @@ export const createFromTurn = internalMutation({
 
     // 5. Trigger Parse (Phase 3)
     console.log("Scheduling parseTurnBundle for bundle", bundleId);
-    await ctx.scheduler.runAfter(0, internal.facts.parseTurnBundle, { turnBundleId: bundleId });
+    const project = await ctx.runQuery(api.projects.getProject, { projectId: args.projectId });
+    if (project?.features?.factsV2 !== false) {
+      await ctx.scheduler.runAfter(0, internal.factsV2.extractTurnBundle, { turnBundleId: bundleId });
+    } else {
+      await ctx.scheduler.runAfter(0, internal.facts.parseTurnBundle, { turnBundleId: bundleId });
+    }
     
     return bundleId;
+    },
+});
+
+export const listByProject = query({
+  args: {
+    projectId: v.id("projects"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.max(1, Math.min(args.limit ?? 15, 50));
+    return await ctx.db
+      .query("turnBundles")
+      .withIndex("by_project_createdAt", (q) => q.eq("projectId", args.projectId))
+      .order("desc")
+      .take(limit);
   },
 });

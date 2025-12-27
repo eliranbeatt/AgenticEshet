@@ -5,7 +5,6 @@ import { internal, api } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { StructuredQuestionsTurnSchema } from "../lib/zodSchemas";
 import {
-    summarizeFacts,
     summarizeItems,
     summarizeKnowledgeBlocks,
     summarizeKnowledgeDocs,
@@ -40,9 +39,10 @@ export const run = action({
         const project = await ctx.runQuery(api.projects.getProject, { projectId: args.projectId });
         if (!project) throw new Error("Project not found");
 
-        const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+        const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
             projectId: args.projectId,
-            stage: args.stage,
+            scopeType: "project",
+            queryText: project?.name ?? "",
         });
 
         const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -63,7 +63,7 @@ export const run = action({
         // 2. Build Prompt
         const systemPrompt = buildSystemPrompt(args.stage, project);
         const userPrompt = buildUserPrompt(turns, {
-            factsSummary: summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+            factsSummary: factsContext.bullets,
             knowledgeBlocksSummary: summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
             knowledgeDocsSummary: summarizeKnowledgeDocs(knowledgeDocs ?? []),
             itemsSummary: summarizeItems(items ?? []),

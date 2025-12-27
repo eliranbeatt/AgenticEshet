@@ -107,6 +107,9 @@ export const createProject = mutation({
             details: args.details,
             createdAt: Date.now(),
             createdBy: "user", // TODO: auth
+            features: {
+                factsV2: true,
+            },
 
             currency: "ILS",
             overheadPercent: 0.15,
@@ -170,6 +173,15 @@ export const updateProject = mutation({
                 budgetCap: v.optional(v.number()),
                 location: v.optional(v.string()),
                 notes: v.optional(v.string()),
+            })
+        ),
+        features: v.optional(
+            v.object({
+                itemsModelV1: v.optional(v.boolean()),
+                itemsTree: v.optional(v.boolean()),
+                changeSetFlow: v.optional(v.boolean()),
+                accountingLinesV1: v.optional(v.boolean()),
+                factsV2: v.optional(v.boolean()),
             })
         ),
     },

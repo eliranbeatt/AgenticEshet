@@ -12,7 +12,6 @@ import {
 } from "../lib/zodSchemas";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
-    summarizeFacts,
     summarizeItems,
     summarizeKnowledgeBlocks,
     summarizeKnowledgeDocs,
@@ -119,9 +118,11 @@ export const send = action({
             projectId: project._id,
         });
 
-        const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+        const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
             projectId: project._id,
-            stage: "clarification",
+            scopeType: args.itemId ? "item" : "project",
+            itemIds: args.itemId ? [args.itemId] : undefined,
+            queryText: args.userContent,
         });
 
         const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -140,8 +141,8 @@ export const send = action({
         });
 
         const currentStateSummary = [
-            "KNOWN FACTS (accepted):",
-            summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+            "KNOWN FACTS (accepted + high-confidence proposed):",
+            factsContext.bullets,
             "",
             "KNOWLEDGE BLOCKS:",
             summarizeKnowledgeBlocks(knowledgeBlocks ?? []),

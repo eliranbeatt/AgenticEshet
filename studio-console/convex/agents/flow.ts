@@ -7,7 +7,6 @@ import type { Doc } from "../_generated/dataModel";
 import { ItemSpecV2Schema } from "../lib/zodSchemas";
 import { buildFlowAgentASystemPrompt } from "../prompts/flowPromptPack";
 import {
-    summarizeFacts,
     summarizeItems,
     summarizeKnowledgeBlocks,
     summarizeKnowledgeDocs,
@@ -96,9 +95,16 @@ export const send = action({
             ? await ctx.runQuery(api.items.listByIds, { itemIds: args.scopeItemIds })
             : []) as Doc<"projectItems">[];
 
-        const factsSnapshot = await ctx.runQuery(internal.facts.getSnapshot, {
+        const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
             projectId: project._id,
-            stage: args.tab,
+            scopeType:
+                args.scopeType === "allProject"
+                    ? "project"
+                    : args.scopeType === "singleItem"
+                        ? "item"
+                        : "multiItem",
+            itemIds: args.scopeItemIds,
+            queryText: args.userContent,
         });
 
         const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -164,8 +170,8 @@ export const send = action({
             `TAB: ${args.tab}`,
             `SCOPE: ${scopeSummary}`,
             "",
-            "KNOWN FACTS (accepted):",
-            summarizeFacts(factsSnapshot.acceptedFacts ?? []),
+            "KNOWN FACTS (accepted + high-confidence proposed):",
+            factsContext.bullets,
             "",
             "KNOWLEDGE BLOCKS:",
             summarizeKnowledgeBlocks(knowledgeBlocks ?? []),

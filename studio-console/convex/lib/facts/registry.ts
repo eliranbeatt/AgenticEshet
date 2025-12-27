@@ -96,6 +96,12 @@ export const FACT_KEY_REGISTRY: Record<string, FactKeyDefinition> = {
     risk: "medium",
     description: "Primary material used",
   },
+  "item.materials.color": {
+    valueType: "string",
+    blockKey: "item.materials",
+    risk: "medium",
+    description: "Primary color or finish for the item",
+  },
   "item.production.method": {
     valueType: "string",
     blockKey: "item.production",

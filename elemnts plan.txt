@@ -1,0 +1,268 @@
+Here’s a **dev-ready epic list** (ordered), with **tickets + acceptance criteria** to turn your current Magnetic Studio Console into a truly **element-focused** app. 
+
+---
+
+## Epic 0 — Element-first product decision + definitions (1–2 tickets)
+
+### 0.1 “Element = projectItem” naming + rules (Product/Tech)
+
+**Goal:** lock terminology so devs don’t implement two competing models.
+**Acceptance criteria**
+
+* “Element” is the UI term; DB table remains `projectItems` for now.
+* Written rules exist:
+
+  * Every task + cost line must attach to an element.
+  * Quote view is a traversal of the element tree.
+  * Management is not double-counted (see Epic 1).
+
+---
+
+## Epic 1 — Schema upgrades to make Elements the spine (BE, Convex)
+
+### 1.1 Add `elementId` to tasks (Convex schema + types)
+
+**Acceptance criteria**
+
+* `tasks` rows can store `elementId` (optional initially).
+* Query `tasks.listByProject` supports filtering by `elementId`.
+* No existing pages crash when older tasks have `elementId=null`.
+
+### 1.2 Add `elementId` + visibility flags to accounting lines
+
+Add to `materialLines` + `workLines`:
+
+* `elementId` (optional initially)
+* `isManagement` (boolean)
+* `quoteVisibility` (`include | exclude | optional`) OR a boolean `includeInQuote`
+  **Acceptance criteria**
+* Accounting CRUD supports these fields.
+* “Accounting summary” can compute totals both:
+
+  * including management
+  * excluding management
+
+### 1.3 Indexes for performance
+
+**Acceptance criteria**
+
+* Index exists for `tasks.by_project_element` (or equivalent)
+* Index exists for `materialLines/workLines` by `(projectId, elementId)`
+
+---
+
+## Epic 2 — Backend APIs for element tree + rollups (BE)
+
+### 2.1 `elements.getTree(projectId)` query
+
+Returns: ordered tree with node metadata + children.
+**Acceptance criteria**
+
+* Returns stable ordering (explicit order field or createdAt sort).
+* Supports deep nesting (no artificial depth limit).
+
+### 2.2 `elements.getRollups(projectId)` (or integrated into `getTree`)
+
+Rollups per element:
+
+* materials total
+* labor total
+* grand total
+* optional: “quote total” (respecting visibility flags)
+  **Acceptance criteria**
+* Rollups match accounting tables.
+* Root rollup equals project rollup (within rounding rules).
+
+### 2.3 “Include in quote” rule engine (shared util)
+
+**Acceptance criteria**
+
+* A single function determines quote totals (used by Quote UI + PDF + agent).
+
+---
+
+## Epic 3 — New Elements UI (FE, Next.js)
+
+### 3.1 Add `/projects/[id]/elements` tab in project layout
+
+**Acceptance criteria**
+
+* Tab appears in project sidebar/nav.
+* Page loads with element tree + rollups.
+
+### 3.2 Element tree component (collapse/expand, unlimited depth)
+
+Features:
+
+* expand/collapse per node
+* inline rename
+* add child / add sibling
+* delete requires **double confirm**
+  **Acceptance criteria**
+* Tree supports: create → rename → move (optional) → delete with double confirm.
+* Rollups update live after edits.
+
+### 3.3 Element Inspector panel (right-side)
+
+Sub-tabs:
+
+* Specs (text, dimensions, links)
+* Tasks (filtered list/kanban)
+* Costs (filtered accounting lines)
+* History (revisions/changesets if you keep them)
+  **Acceptance criteria**
+* Clicking an element updates the inspector.
+* All edits persist and reflect immediately in rollups.
+
+---
+
+## Epic 4 — Make Tasks/Accounting/Quote pages element-aware (FE+BE)
+
+### 4.1 Tasks page: filter + group by element
+
+**Acceptance criteria**
+
+* Filter dropdown/search by element.
+* Optional: group swimlanes by element (or “show element column”).
+* Task create/edit UI includes selecting an element.
+
+### 4.2 Accounting page: element column + filter + totals
+
+**Acceptance criteria**
+
+* Material/work lines show element name.
+* Filter by element works.
+* A toggle exists: “Hide management costs” (uses `isManagement`).
+
+### 4.3 Quote page: “Element Quote View”
+
+**Acceptance criteria**
+
+* Quote preview is rendered as an element tree traversal:
+
+  * element name
+  * short description
+  * element price (rollup)
+* Include/exclude toggles affect totals instantly.
+
+---
+
+## Epic 5 — Agent contracts: generate everything *under elements* (BE prompts + FE wiring)
+
+### 5.1 Planning agent outputs an element tree skeleton
+
+**Acceptance criteria**
+
+* Planning output includes structured JSON: elements with hierarchy + tags/kinds.
+* App can apply it to create/update `projectItems`.
+
+### 5.2 Architect agent outputs tasks with `elementId`
+
+**Acceptance criteria**
+
+* Generated tasks always include an element linkage (or element path resolvable to id).
+* Validator rejects tasks without element assignment.
+
+### 5.3 Estimator agent outputs accounting lines with `elementId` + flags
+
+**Acceptance criteria**
+
+* Each cost line attaches to an element.
+* Management tasks/lines are flagged `isManagement=true`.
+* Validator rejects “materials in wrong bucket / missing elementId”.
+
+### 5.4 Quote agent uses element traversal rules
+
+**Acceptance criteria**
+
+* Quote output groups by element.
+* Quote numbers match UI totals and PDF totals.
+
+---
+
+## Epic 6 — Migration & backfill (BE + one-time scripts)
+
+### 6.1 Backfill `elementId` for existing tasks
+
+Strategy:
+
+* If task already references an item → map directly
+* Else assign to project root element
+* Optional heuristic: title prefix / section name mapping
+  **Acceptance criteria**
+* 100% tasks have `elementId` after migration (or explicitly assigned to root).
+* No “orphan tasks” remain.
+
+### 6.2 Backfill `elementId` for existing accounting lines
+
+**Acceptance criteria**
+
+* 100% lines assigned (default root if unknown).
+* Rollups before/after migration remain consistent at project-total level.
+
+### 6.3 Trello sync: include element context in card title/description (optional but recommended)
+
+**Acceptance criteria**
+
+* New sync writes element name in card payload.
+* No duplicate cards created; mapping remains idempotent.
+
+---
+
+## Epic 7 — Quote PDF (server route) becomes element-driven (FE/BE)
+
+### 7.1 Update `/api/quote-pdf` rendering to use element quote view
+
+**Acceptance criteria**
+
+* PDF matches Quote page ordering + totals.
+* Include/exclude toggles reflected in PDF output.
+* Supports Hebrew RTL correctly (if applicable in your template).
+
+### 7.2 Quote versioning + “Approved” snapshot
+
+**Acceptance criteria**
+
+* You can generate multiple quote versions.
+* “Approved quote” is locked (no silent changes).
+
+---
+
+## Epic 8 — QA, observability, and release hardening (FE+BE)
+
+### 8.1 Automated tests (minimum set)
+
+* unit tests for rollup calculator
+* unit tests for include/exclude rules
+* migration script dry-run test
+  **Acceptance criteria**
+* CI runs tests; rollup logic covered.
+
+### 8.2 Guardrails + validators in production
+
+**Acceptance criteria**
+
+* If an agent returns tasks/lines without element IDs → run fails with actionable error.
+* If an agent links wrong IDs → rejected by validator.
+
+### 8.3 Gradual rollout flag
+
+**Acceptance criteria**
+
+* Feature flag: enable Elements tab per project or per user.
+* Rollback path: disable Elements UI without breaking existing pages.
+
+---
+
+# Recommended order (what to implement first)
+
+1. **Epic 0** (definitions)
+2. **Epic 1** (schema)
+3. **Epic 2** (tree + rollups backend)
+4. **Epic 3** (Elements UI)
+5. **Epic 4** (element-aware Tasks/Accounting/Quote UI)
+6. **Epic 6** (migration)
+7. **Epic 5** (agents updated to element contracts)
+8. **Epic 7** (PDF + approvals)
+9. **Epic 8** (tests, validators, rollout)
+

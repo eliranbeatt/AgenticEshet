@@ -6,8 +6,23 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { Plus, Wand2, Pencil, Trash2, Save, X } from "lucide-react";
 import { type ProjectAccountingData } from "./AccountingTypes";
+import { calculateSectionStats, type CostingOptions } from "@/src/lib/costing";
 
-export default function SummaryTab({ data, projectId }: { data: ProjectAccountingData, projectId: Id<"projects"> }) {
+export default function SummaryTab({
+  data,
+  projectId,
+  selectedElementId,
+  includeManagement,
+  includeOptional,
+  respectVisibility,
+}: {
+  data: ProjectAccountingData;
+  projectId: Id<"projects">;
+  selectedElementId: Id<"projectItems"> | "unlinked" | null;
+  includeManagement: boolean;
+  includeOptional: boolean;
+  respectVisibility: boolean;
+}) {
   const addSection = useMutation(api.accounting.addSection);
   const estimateProject = useAction(api.agents.estimator.estimateProject);
   const generateAccounting = useAction(api.agents.accountingGenerator.run);
@@ -107,6 +122,54 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
   const formatMoney = (amount: number) => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: data.project.currency || 'ILS' }).format(amount);
   };
+
+  const filteredSections = selectedElementId
+    ? data.sections.filter((row) =>
+        selectedElementId === "unlinked"
+          ? !row.section.itemId
+          : row.section.itemId === selectedElementId
+      )
+    : data.sections;
+
+  const defaults = {
+    overhead: data.project.overheadPercent ?? 0.15,
+    risk: data.project.riskPercent ?? 0.1,
+    profit: data.project.profitPercent ?? 0.3,
+  };
+
+  const options: CostingOptions = {
+    includeManagement,
+    includeOptional,
+    respectVisibility,
+  };
+
+  const computedSections = filteredSections.map((row) => ({
+    ...row,
+    stats: calculateSectionStats(row.section, row.materials, row.work, defaults, options),
+  }));
+
+  const totals = computedSections.reduce(
+    (acc, curr) => ({
+      plannedDirect: acc.plannedDirect + curr.stats.plannedDirectCost,
+      plannedClientPrice: acc.plannedClientPrice + curr.stats.plannedClientPrice,
+      actualDirect: acc.actualDirect + curr.stats.actualDirectCost,
+      plannedMaterials: acc.plannedMaterials + curr.stats.plannedMaterialsCostE,
+      plannedWork: acc.plannedWork + curr.stats.plannedWorkCostS,
+      plannedOverhead: acc.plannedOverhead + curr.stats.plannedOverhead,
+      plannedRisk: acc.plannedRisk + curr.stats.plannedRisk,
+      plannedProfit: acc.plannedProfit + curr.stats.plannedProfit,
+    }),
+    {
+      plannedDirect: 0,
+      plannedClientPrice: 0,
+      actualDirect: 0,
+      plannedMaterials: 0,
+      plannedWork: 0,
+      plannedOverhead: 0,
+      plannedRisk: 0,
+      plannedProfit: 0,
+    }
+  );
 
   return (
     <div className="flex flex-col space-y-4">
@@ -229,7 +292,7 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {data.sections.map((item) => (
+            {computedSections.map((item) => (
                 <SectionRow
                     key={item.section._id}
                     item={item}
@@ -251,13 +314,13 @@ export default function SummaryTab({ data, projectId }: { data: ProjectAccountin
             {/* Totals Row */}
             <tr className="bg-gray-100 font-bold border-t-2 border-gray-300">
               <td className="px-3 py-2" colSpan={2}>TOTALS</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedMaterialsCostE, 0))}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedWorkCostS, 0))}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.totals.plannedDirect)}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedOverhead, 0))}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedRisk, 0))}</td>
-              <td className="px-3 py-2 text-right">{formatMoney(data.sections.reduce((sum, i) => sum + i.stats.plannedProfit, 0))}</td>
-              <td className="px-3 py-2 text-right bg-yellow-100">{formatMoney(data.totals.plannedClientPrice)}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(totals.plannedMaterials)}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(totals.plannedWork)}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(totals.plannedDirect)}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(totals.plannedOverhead)}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(totals.plannedRisk)}</td>
+              <td className="px-3 py-2 text-right">{formatMoney(totals.plannedProfit)}</td>
+              <td className="px-3 py-2 text-right bg-yellow-100">{formatMoney(totals.plannedClientPrice)}</td>
               <td className="px-3 py-2" />
             </tr>
           </tbody>
@@ -380,7 +443,7 @@ function SectionRow(props: {
                         <span>{section.name}</span>
                         {section.description && <span className="text-xs text-gray-500">{section.description}</span>}
                         {item.item && (
-                            <span className="text-xs text-blue-600">Item: {item.item.title}</span>
+                            <span className="text-xs text-blue-600">Element: {item.item.title}</span>
                         )}
                     </div>
                 )}

@@ -16,6 +16,7 @@ RULES:
 9. For valueType "dimension" or "currency", return an object { value: number, unit: string }.
 10. For valueType "date", return an object { iso: string }.
 11. If a value is a range or not a single value, output a "NOTE" op instead of a fact.
+12. NEVER output null for "value". For NOTES, use a short string like "unknown" or "unspecified".
 
 OUTPUT FORMAT:
 Return a JSON object with a list of "ops".

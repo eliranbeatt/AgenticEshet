@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
-import { Id } from "../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../convex/_generated/dataModel";
 import SummaryTab from "./_components/SummaryTab";
 import MaterialsTab from "./_components/MaterialsTab";
 import LaborTab from "./_components/LaborTab";
@@ -16,8 +16,19 @@ export default function AccountingPage() {
   const projectId = params.id as Id<"projects">;
   
   const [activeTab, setActiveTab] = useState<"summary" | "materials" | "labor" | "deep-research">("summary");
+  const [selectedElementId, setSelectedElementId] = useState<string>("all");
+  const [includeManagement, setIncludeManagement] = useState(true);
+  const [respectVisibility, setRespectVisibility] = useState(false);
+  const [includeOptional, setIncludeOptional] = useState(true);
 
   const accountingData = useQuery(api.accounting.getProjectAccounting, { projectId });
+  const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
+  const elements = useMemo(() => (itemsData?.items ?? []) as Array<Doc<"projectItems">>, [itemsData?.items]);
+  const elementSelection = selectedElementId === "all"
+    ? null
+    : selectedElementId === "unlinked"
+      ? "unlinked"
+      : (selectedElementId as Id<"projectItems">);
 
   if (!accountingData) {
     return <div className="p-8">Loading accounting data...</div>;
@@ -26,6 +37,49 @@ export default function AccountingPage() {
   return (
     <div className="flex flex-col h-full space-y-4">
       <ChangeSetReviewBanner projectId={projectId} phase="accounting" />
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        <label className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Element</span>
+          <select
+            className="border rounded px-2 py-1 text-sm"
+            value={selectedElementId}
+            onChange={(event) => setSelectedElementId(event.target.value)}
+          >
+            <option value="all">All elements</option>
+            <option value="unlinked">Unlinked sections</option>
+            {elements.map((item) => (
+              <option key={item._id} value={item._id}>
+                {item.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-gray-600">
+          <input
+            type="checkbox"
+            checked={!includeManagement}
+            onChange={(event) => setIncludeManagement(!event.target.checked)}
+          />
+          Exclude management costs
+        </label>
+        <label className="flex items-center gap-2 text-xs text-gray-600">
+          <input
+            type="checkbox"
+            checked={respectVisibility}
+            onChange={(event) => setRespectVisibility(event.target.checked)}
+          />
+          Use quote visibility
+        </label>
+        <label className="flex items-center gap-2 text-xs text-gray-600">
+          <input
+            type="checkbox"
+            checked={includeOptional}
+            onChange={(event) => setIncludeOptional(event.target.checked)}
+            disabled={!respectVisibility}
+          />
+          Include optional lines
+        </label>
+      </div>
       <div className="flex space-x-2 border-b">
         <TabButton 
           label="Detailed Costs Planning (Summary)" 
@@ -50,9 +104,36 @@ export default function AccountingPage() {
       </div>
 
       <div className="flex-1 overflow-auto bg-white rounded-lg shadow p-4">
-        {activeTab === "summary" && <SummaryTab data={accountingData} projectId={projectId} />}
-        {activeTab === "materials" && <MaterialsTab data={accountingData} projectId={projectId} />}
-        {activeTab === "labor" && <LaborTab data={accountingData} projectId={projectId} />}
+        {activeTab === "summary" && (
+          <SummaryTab
+            data={accountingData}
+            projectId={projectId}
+            selectedElementId={elementSelection}
+            includeManagement={includeManagement}
+            includeOptional={includeOptional}
+            respectVisibility={respectVisibility}
+          />
+        )}
+        {activeTab === "materials" && (
+          <MaterialsTab
+            data={accountingData}
+            projectId={projectId}
+            selectedElementId={elementSelection}
+            includeManagement={includeManagement}
+            includeOptional={includeOptional}
+            respectVisibility={respectVisibility}
+          />
+        )}
+        {activeTab === "labor" && (
+          <LaborTab
+            data={accountingData}
+            projectId={projectId}
+            selectedElementId={elementSelection}
+            includeManagement={includeManagement}
+            includeOptional={includeOptional}
+            respectVisibility={respectVisibility}
+          />
+        )}
         {activeTab === "deep-research" && <DeepResearchTab projectId={projectId} />}
       </div>
     </div>

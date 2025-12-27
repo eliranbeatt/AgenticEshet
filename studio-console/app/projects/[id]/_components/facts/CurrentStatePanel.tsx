@@ -6,6 +6,7 @@ import { useState } from "react";
 type SaveStatus = "idle" | "saving" | "saved";
 
 type CurrentStatePanelProps = {
+    derivedMarkdown: string;
     text: string;
     onChange: (next: string) => void;
     saveStatus: SaveStatus;
@@ -20,6 +21,7 @@ function formatTimestamp(value?: number) {
 }
 
 export function CurrentStatePanel({
+    derivedMarkdown,
     text,
     onChange,
     saveStatus,
@@ -74,19 +76,33 @@ export function CurrentStatePanel({
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4">
-                {viewMode === "edit" ? (
-                    <textarea
-                        className="w-full h-full min-h-[320px] border rounded p-3 text-xs font-mono text-gray-800 resize-none"
-                        value={text}
-                        onChange={(event) => onChange(event.target.value)}
-                        placeholder="Capture the current state of knowledge here. Use headings and item blocks."
-                    />
-                ) : (
-                    <div className="prose prose-sm max-w-none">
-                        <ReactMarkdown>{text || "No current state yet."}</ReactMarkdown>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                        Derived View (Facts + Elements)
                     </div>
-                )}
+                    <div className="prose prose-sm max-w-none bg-gray-50 border rounded p-3">
+                        <ReactMarkdown>{derivedMarkdown || "No derived state yet."}</ReactMarkdown>
+                    </div>
+                </div>
+
+                <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                        Manual Notes
+                    </div>
+                    {viewMode === "edit" ? (
+                        <textarea
+                            className="w-full min-h-[240px] border rounded p-3 text-xs font-mono text-gray-800 resize-none"
+                            value={text}
+                            onChange={(event) => onChange(event.target.value)}
+                            placeholder="Add manual notes or decisions here. This section is never auto-edited."
+                        />
+                    ) : (
+                        <div className="prose prose-sm max-w-none">
+                            <ReactMarkdown>{text || "No manual notes yet."}</ReactMarkdown>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );

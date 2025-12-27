@@ -1,0 +1,361 @@
+Step 1 — Inventory (files + paths)
+
+Frontend routes/pages (Next.js App Router): app/page.tsx, app/projects/page.tsx, app/projects/[id]/layout.tsx, app/ingestion/page.tsx, app/ingestion/[jobId]/page.tsx, app/ingestion/connectors/page.tsx, app/rag-chat/page.tsx, app/management/page.tsx, app/admin/page.tsx, app/admin/items/page.tsx, app/admin/skills/page.tsx, app/admin/settings/page.tsx, app/admin/enrichment/page.tsx, app/api/quote-pdf/route.ts, shared providers/components under app/ConvexClientProvider.tsx, app/_components/*, context under app/_context/*, styles app/globals.css.
+
+Key UI components (outside pages): app/_components/ModelSelector.tsx, SidebarAgentActivity.tsx, ThinkingModeToggle.tsx, ingestion app/ingestion/_components/UploadComponent.tsx, management app/management/_components/PriceHistoryTable.tsx.
+
+Convex schema/table definitions: convex/schema.ts (projects, projectScenarios, chatThreads, chatMessages, ideationConceptCards, projectAssets, assetLinks, projectItems, itemRevisions, itemChangeSets, itemChangeSetOps, itemLocks, itemTemplates, itemProjectionLocks, rateLimitBuckets, sections, materialLines, tasks, trelloMappings, plans, knowledgeDocs, … full schema).
+
+Convex queries/mutations/actions: top-level domain modules such as convex/projects.ts, quests.ts, tasks.ts, trelloSync.ts, ingestion.ts, knowledge.ts, chat.ts, agentRuns.ts, flowWorkspaces.ts, etc., plus internal libs and prompts. Agents under convex/agents/*. Full list from repository scan includes 50+ functions across modules (see Section E).
+
+Agent implementations: convex/agents/flow.ts, clarification.ts, clarificationV2.ts, structuredQuestions.ts, solutioning.ts, solutioningV2.ts, planning.ts, architect.ts, architect.test.ts, taskRefiner.ts, taskEditor.ts, estimator.ts, quote.ts, ideation.ts, deepResearch.ts, accountingGenerator.ts, accountingFromDeepResearch.ts.
+
+Skills/prompts storage: prompt packs in convex/prompts/flowPromptPack.ts, convex/prompts/itemsPromptPack.ts; settings/skills managed in convex/settings.ts and admin UI (app/admin/skills/page.tsx).
+
+RAG ingestion/retrieval pipeline code: convex/ingestion.ts, convex/knowledge.ts, convex/clarificationDocs.ts, convex/lib/textChunker.ts, convex/lib/fileParsers.ts, convex/lib/knowledgeBlocks/patch.ts.
+
+Trello integration: convex/trelloSync.ts handling task ↔ Trello mappings; schema table trelloMappings.
+
+Logging/telemetry: agent run tracking in convex/agentRuns.ts; context summaries in convex/lib/contextSummary.ts; rate limiting buckets convex/rateLimit.ts; conversation logging via convex/chat.ts.
+
+A) Executive Overview
+Product: Magnetic Studio Console — Next.js + Convex application for project/production workflows with AI agent orchestration, RAG knowledge, and Trello task sync. Users create projects, converse with agents, generate plans/tasks/quotes, and sync tasks to Trello.
+
+Architecture (high-level): Next.js frontend (App Router) -> Convex backend (queries/mutations/actions, schema) -> LLM providers via convex/lib/openai.ts and prompt packs -> Trello via convex/trelloSync.ts.
+
+Mermaid (architecture):
+
+flowchart LR
+    UI[Next.js App Router] <--> Convex[Convex Functions + Schema]
+    Convex <--> LLM[OpenAI/Gemini via convex/lib/openai.ts]
+    Convex <--> RAG[Knowledge Docs/Chunks in Convex]
+    Convex <--> Trello[Trello API via convex/trelloSync.ts]
+Top features (code-grounded):
+
+Project creation and stage tracking (convex/projects.ts, convex/schema.ts).
+
+Scenario/threaded chat per phase (convex/chat.ts, schema chatThreads/chatMessages).
+
+Flow dual-agent chat (Agent A/B) with workspaces (convex/agents/flow.ts, flowWorkspaces).
+
+Planning/clarification agents (convex/agents/clarification.ts, planning.ts).
+
+Item/task generation and revisions (convex/tasks.ts, convex/agents/taskRefiner.ts, schema projectItems, tasks, itemRevisions).
+
+Quote/estimation agents (convex/agents/estimator.ts, quote.ts).
+
+RAG ingestion + retrieval (convex/ingestion.ts, knowledge.ts).
+
+Trello sync of tasks/cards (convex/trelloSync.ts, trelloMappings).
+
+Admin skills/settings pages (app/admin/skills/page.tsx, convex/settings.ts).
+
+Quote PDF API route (app/api/quote-pdf/route.ts).
+
+B) Agentic Orchestration (Deep)
+1) Agent Roster
+Agent/Skill Name	Implementation	Trigger	Inputs	Processing	Outputs	Persistence	Downstream	Idempotency	Failure/Recovery
+Flow Agent A/B	convex/agents/flow.ts	UI chat send in flow tabs	Project, scenario, messages, selected items, facts snapshot, knowledge summaries	Agent A streams response via streamChatText; Agent B updates workspace via callChatWithSchema	Chat messages, workspace markdown, agent run events	chatMessages, flowWorkspaces, agentRuns	Further user turns, planning agents	RunId stored; workspace saved by scopeKey prevents duplicates	Agent run status set failed; system error message stored
+Clarification (V1/V2)	convex/agents/clarification.ts, clarificationV2.ts	Possibly admin/flow triggers (UI unknown)	Project context, plan state (inference)	Generates clarification questions/notes	Clarification documents/messages	clarificationDocs/knowledgeDocs (INFERENCE)	Planning agents	Versioning via plan/phase	Error handling via agentRuns (INFERENCE)
+StructuredQuestions	convex/agents/structuredQuestions.ts	Manual? (Unknown)	Project details	Generates structured Q&A	Q&A artifacts	knowledgeDocs (INFERENCE)	Clarification workflows	Hashing? unknown	Unknown
+Planning	convex/agents/planning.ts	Planning tab action	Project info, knowledge	Produces plan markdown	plans entries	Used by architect/tasks	Version field ensures dedupe	Run status error handling	
+Architect/TaskRefiner/TaskEditor	convex/agents/architect.ts, taskRefiner.ts, taskEditor.ts	Architecture/Tasks stage actions	Plan, items, knowledge	Break down into items/tasks	projectItems, tasks, itemRevisions	Estimation/quote, Trello sync	Uses change sets/revisions for idempotency	run status	
+Estimator	convex/agents/estimator.ts	Estimation stage	Tasks/items	Calculates costs	Work/material lines, pricing	materialLines, workLines, quotes (INFERENCE)	Quote agent	Possibly content hash	Error -> agentRuns
+Quote	convex/agents/quote.ts	Quote stage	Estimates	Generates quote text/PDF	Quote artifact	quotes, knowledgeDocs (plan?)	Trello sync?	Versioned plans	Agent runs
+DeepResearch/Accounting agents	convex/agents/deepResearch.ts, accountingGenerator.ts, accountingFromDeepResearch.ts	Admin/research triggers	Project + external search	Generates research/accounting lines	Knowledge docs, accounting entries	knowledgeDocs, materialLines	Planning/estimation	Unknown	Unknown
+Ideation	convex/agents/ideation.ts	Ideation chat	Project scope	Generates ideas/concepts	ideationConceptCards	Planning stage	Using unique IDs	run status	
+Solutioning / V2	convex/agents/solutioning.ts, solutioningV2.ts	Solutioning stage	Plans	Produces solution docs	Plans/items	Tasks	change sets	run status	
+TaskRefiner/TaskEditor	same	Task editing pipeline	Task list	refine/update	task revisions	itemRevisions, tasks	Trello	uses revisions	run status
+(Several details marked INFERENCE where code not inspected.)
+
+2) Global “Studio Workflow” State Machine (INFERENCE + schema evidence)
+Phases: Clarification → Planning → Architecture/Tasks → Estimation → Quote → Trello Sync → Execution.
+
+Entry/exit conditions: Phase stored in projectScenarios.phase and projects.stage (schema.ts). Transition occurs when relevant artifacts (plans, tasks, quotes) exist.
+
+Artifacts: Clarification docs (knowledgeDocs), plans (plans table), tasks (tasks), item revisions/changeSets, estimates (material/work lines), quotes (quotes table INFERENCE), Trello mappings (trelloMappings).
+
+Agents: Clarification agents, planning agent, architect/task agents, estimator, quote agent, trelloSync action.
+
+Canonical storage: Each phase writes to Convex tables; plans have version/isDraft to track active plan; trelloMappings link tasks to Trello. Idempotency via runId/version fields and content hashes (trelloMappings).
+
+3) Inter-agent Handoffs (contracts)
+Clarification summary → Planning: Producer: Clarification agent; Consumer: Planning agent; Storage: likely knowledgeDocs with phase="clarification" (INFERENCE). Format: markdown Q&A; version via plan version.
+
+Plan markdown → Architecture/Tasks: Producer: Planning agent; Consumer: Architect/task agents; Storage: plans.contentMarkdown (markdown). Version numbers avoid overwrites; isActive/isDraft flags manage transitions.
+
+Items/tasks → Estimation: Producer: Architect/task agents; Consumer: Estimator; Storage: projectItems, tasks; revisions logged in itemRevisions/changeSets; estimator reads tasks/items.
+
+Estimates → Quote: Producer: Estimator; Consumer: Quote agent; Storage: material/work lines tables (schema earlier), quotes (INFERENCE). Format: structured cost lines.
+
+Tasks → Trello sync: Producer: task generation; Consumer: trelloSync functions; Storage: tasks + mapping table trelloMappings with contentHash to dedupe.
+
+4) Multi-agent Sequence Diagrams (Mermaid)
+User creates project → seed skills → first agent run (INFERENCE):
+
+sequenceDiagram
+    participant User
+    participant UI as Next.js UI
+    participant Convex as Convex (projects.ts, settings.ts)
+    participant Flow as flow.send
+    User->>UI: Create project (projects.ts mutation)
+    UI->>Convex: Create project record
+    Convex-->>UI: projectId
+    UI->>Convex: Seed scenario/thread (chat.ts)
+    User->>UI: Send first message
+    UI->>Flow: action flow.send(threadId,...)
+    Flow->>Convex: agentRuns.createRun
+    Flow->>LLM: streamChatText (Agent A)
+    LLM-->>Flow: assistant text
+    Flow->>Convex: chatMessages, agentRuns events
+    Flow->>LLM: callChatWithSchema (Agent B)
+    Flow->>Convex: flowWorkspaces.saveText
+Clarification cycle (INFERENCE):
+
+sequenceDiagram
+    User->>UI: Start clarification thread
+    UI->>clarification agent: action/mutation
+    agent->>Convex: fetch project/knowledge
+    agent->>LLM: prompt with context
+    LLM-->>agent: questions/summary
+    agent->>Convex: chatMessages, knowledgeDocs (clarification)
+    Convex->>RAG: ingest via ingestion.ts
+Planning generation:
+
+sequenceDiagram
+    User/UI->>planning agent: action
+    planning agent->>Convex: read project + clarification docs
+    planning agent->>LLM: generate plan markdown
+    planning agent->>Convex: write plans (versioned)
+    Convex->>knowledge: create knowledgeDocs (source plan) (INFERENCE)
+Architecture/tasks:
+
+sequenceDiagram
+    User->>architect/task agents: action
+    agents->>Convex: read plans/items
+    agents->>LLM: produce tasks/items
+    agents->>Convex: write projectItems, tasks, itemRevisions/changeSets
+Estimation + Quote:
+
+sequenceDiagram
+    User->>estimator: action
+    estimator->>Convex: read tasks/items
+    estimator->>LLM: produce cost lines
+    estimator->>Convex: materialLines/workLines
+    User->>quote agent: action
+    quote agent->>Convex: read costs
+    quote agent->>LLM: generate quote markdown/PDF
+    quote agent->>Convex: quotes table (INFERENCE)
+    UI->>API: GET /api/quote-pdf (renders)
+Trello sync:
+
+sequenceDiagram
+    User->>UI: Sync tasks to Trello
+    UI->>convex/trelloSync.ts: action
+    trelloSync->>Convex: read tasks + trelloMappings
+    trelloSync->>Trello API: create/update cards
+    trelloSync->>Convex: update trelloMappings (contentHash, listId)
+    Trello->>Convex: statuses pulled (INFERENCE)
+5) Agent Context Assembly (examples)
+Flow Agent A/B: pulls project, scenario, thread messages, scope items via api.items.listByIds, facts snapshot from internal.facts.getSnapshot, knowledge summaries from contextSummary helpers before LLM call (lines 193-205 etc.).
+
+Planning/others: likely use project + plan tables, knowledge docs per phase (INFERENCE). Ordering typically: project/scenario → scope items → knowledge/facts → recent messages.
+
+6) Reliability, Idempotency, Observability
+AgentRuns tracking: internal.agentRuns.createRun/setStatus/appendEvent used in flow; runId ties events and status updates enabling retries.
+
+Content hashing: trelloMappings.contentHash prevents duplicate Trello updates.
+
+Versioning: plans.version + isDraft/isActive avoid overwriting; itemRevisions with revisionNumber/state manage updates.
+
+Logging: chat messages stored with status streaming/final; agentRuns events log stages. Failures set status failed and write system error message.
+
+C) Information Architecture: Tabs, Pages, Routes
+1) Tabs Inventory
+Tab Name	Route(s)	Purpose	Key Components	Backend Calls	Tables Touched	Notes
+Home	/	Landing	n/a	Project list queries (INFERENCE)	projects	
+Projects	/projects	Project listing	-	projects query/mutation	projects	
+Project detail layout	/projects/[id]	Layout for project tabs	-	Various child queries	multiple	
+Ingestion	/ingestion, /ingestion/[jobId], /ingestion/connectors	Upload/connect knowledge	UploadComponent	ingestion actions	knowledgeDocs/chunks	
+RAG Chat	/rag-chat	Chat UI for RAG	-	chat/actions	chatThreads/messages	
+Management	/management	Price history	PriceHistoryTable	management queries	prices	
+Admin	/admin + subpages (items, skills, settings, enrichment)	Manage skills/items/settings	pages in app/admin/*	admin.ts, settings.ts etc.	skills/settings tables (INFERENCE)	
+API route	/api/quote-pdf	Generate quote PDF	route handler	reads quotes	quotes	
+2) Pages Inventory (selected details)
+Route	Page Name	Parent Layout	Sections	User Actions	Queries	Mutations/Actions	Notes
+/page.tsx	Home	root layout	TBD (not inspected)	Navigate	projects?	-	
+/projects/page.tsx	Projects list	root layout	list	Create/select project	projects query	projects create	
+/projects/[id]/layout.tsx	Project layout	projects layout	slots for tabs	Navigate tabs	project fetch	-	
+/ingestion/page.tsx	Ingestion	root	upload form	Upload files	ingestion list	ingestion.startUpload	
+/ingestion/[jobId]/page.tsx	Ingestion detail	ingestion layout	job status	View progress	ingestion.getJob	ingestion.resume	
+/ingestion/connectors/page.tsx	Connectors	ingestion layout	connectors list	Configure	ingestion connectors	-	
+/rag-chat/page.tsx	RAG Chat	root	chat UI	send messages	chat queries	chat actions	
+/management/page.tsx	Management	root	price history	filter/export	management queries	-	
+/admin/page.tsx	Admin home	admin layout	cards	nav	admin queries	-	
+/admin/items/page.tsx	Admin Items	admin layout	items management	add/edit	admin item queries	admin mutations	
+/admin/skills/page.tsx	Admin Skills	admin layout	skills table	add/update	settings/skills queries	settings mutations	
+/admin/settings/page.tsx	Admin Settings	admin layout	config forms	edit	settings queries	settings mutations	
+/admin/enrichment/page.tsx	Admin Enrichment	admin layout	enrichment	trigger jobs	enrichment queries	enrichment actions	
+/api/quote-pdf/route.ts	Quote PDF	n/a	API only	Request PDF	reads quotes	-	
+3) Per-page deep spec
+(Details largely INFERENCE due to limited inspection; UI code not opened. Routes above call corresponding Convex functions based on naming.)
+
+D) Data Model (Convex Schema — key tables)
+projects: core project metadata, status/stage, budget info, features flags, root item, timestamps.
+
+projectScenarios: per-project phase/scenario records with metadata/indexes.
+
+chatThreads / chatMessages: threaded conversations per scenario with roles/status, index by thread/time.
+
+ideationConceptCards: generated ideas per thread.
+
+projectAssets / assetLinks: uploaded/generated assets and cross-entity linkage.
+
+projectItems: hierarchical items with status/kind/scope/links/rollups/quote defaults/versioning and indexes/search.
+
+itemRevisions / itemChangeSets / itemChangeSetOps / itemLocks: revisioning/locking/change set operations for items/tasks.
+
+itemTemplates, itemProjectionLocks, rateLimitBuckets: templates, projection sync, rate limiting.
+
+sections, materialLines, workLines (not fully shown), tasks: costing sections, cost lines, canonical tasks with dependencies and indexes.
+
+trelloMappings: mapping task ↔ Trello card with contentHash, lastSyncedAt.
+
+plans: versioned plans per project/phase with draft/active flags.
+
+knowledgeDocs: documents with processing status, metadata (project scope, sourceType).
+
+(Additional tables beyond shown due to truncation: knowledgeChunks, ingestion jobs/files, facts, costPlanDocs, quotes, etc. not fully inspected.)
+
+ERD (simplified, INFERENCE):
+
+erDiagram
+    projects ||--o{ projectScenarios : has
+    projectScenarios ||--o{ chatThreads : has
+    chatThreads ||--o{ chatMessages : has
+    projects ||--o{ projectItems : has
+    projectItems ||--o{ itemRevisions : revises
+    projectItems ||--o{ tasks : relates
+    tasks ||--o{ trelloMappings : mapped
+    projects ||--o{ plans : versions
+    projects ||--o{ knowledgeDocs : contains
+    projects ||--o{ sections : cost
+    sections ||--o{ materialLines : lines
+    sections ||--o{ workLines : lines
+E) Backend (Convex) API Surface & Pipelines
+1) Function Inventory (by file, INFERENCE from filenames)
+projects.ts: create/update/list projects.
+
+quests.ts: quest management.
+
+tasks.ts: task CRUD, numbering, dependencies.
+
+trelloSync.ts: sync tasks with Trello (create/update mappings).
+
+ingestion.ts: start/resume ingestion jobs, chunking/upload.
+
+knowledge.ts: knowledge doc/chunk queries.
+
+chat.ts: thread/message creation, retrieval.
+
+agentRuns.ts: run tracking (create, setStatus, appendEvent).
+
+flowWorkspaces.ts: ensure/get/save workspace.
+
+settings.ts, admin.ts: admin/config/skills management.
+
+items.ts, itemsProjection.ts, itemsMigrations.ts: item operations.
+
+deepResearch.ts, research.ts, buying.ts, accounting.ts, quotes.ts, prices.ts, management.ts, etc.: domain-specific actions/queries.
+(Exact inputs/outputs not fully inspected.)
+
+2) RAG Ingestion Pipeline (INFERENCE)
+Upload via app/ingestion pages using ingestion.ts actions.
+
+Files parsed by convex/lib/fileParsers.ts, chunked by textChunker.ts, embeddings via lib/openai.ts.
+
+Stored as knowledgeDocs (metadata) and chunks (table not fully viewed) with processingStatus updated.
+
+Dedup/reingest handled by metadata/hashes (unknown).
+
+Sequence (inference):
+
+sequenceDiagram
+    UI->>ingestion.start: upload file
+    ingestion.start->>storage: save file
+    ingestion.start->>queue: processing job
+    ingestion.processor->>fileParsers: parse
+    fileParsers->>textChunker: chunk
+    textChunker->>openai: embed
+    processor->>Convex: write knowledgeDocs + chunks (processing->ready)
+3) Retrieval Pipeline (INFERENCE)
+Query embedding via lib/openai.ts; vector search over knowledge chunks (table unspecified) filtered by project/phase metadata.
+
+Results returned with citations; logged via retrieval logs (not inspected).
+
+F) Trello Integration & Sync
+Table trelloMappings stores taskId, trelloCardId, trelloListId, contentHash, lastSyncedAt for idempotency.
+
+Action convex/trelloSync.ts likely computes hash of task fields; creates/updates cards; updates mapping.
+
+Sequence (inference):
+
+sequenceDiagram
+    UI->>trelloSync.sync: trigger
+    trelloSync.sync->>Convex: fetch tasks + mappings
+    trelloSync.sync->>Trello: create/update card per task
+    trelloSync.sync->>Convex: store trelloCardId/listId/contentHash
+    Trello-->>Convex: status updates (if pulled)
+G) Frontend Architecture (Next.js App Router)
+Root layout app/layout.tsx wraps ConvexClientProvider.
+
+Global styles app/globals.css; contexts ModelContext, ThinkingModeContext used by ModelSelector and ThinkingModeToggle.
+
+Sidebar agent activity component for showing runs.
+
+Pages under app/* (see inventory) using server/client components (not fully inspected).
+
+H) Security, Config, Ops
+Convex URL/config via .env.local per AGENTS instructions.
+
+Rate limiting via convex/rateLimit.ts and rateLimitBuckets table; flow send consumes bucket before agent run.
+
+Secrets: OpenAI API key, Trello tokens stored in env (not in repo).
+
+AuthN/AuthZ not evident (likely none; user identified by email strings in schema).
+
+I) How to Run / Extend (INFERENCE)
+Install deps: npm install (from AGENTS). Run npm run dev + npx convex dev.
+
+Env vars: NEXT_PUBLIC_CONVEX_URL, CONVEX_DEPLOYMENT, OPENAI_API_KEY, Trello credentials.
+
+Add new agent: create file under convex/agents/, wire prompts/tools, export action/internalAction, add UI trigger.
+
+Add new page/tab: create route under app/; use Convex hooks to call backend.
+
+Add new schema table: edit convex/schema.ts, regenerate via npx convex dev, implement queries/mutations.
+
+Add new ingestion type: extend convex/lib/fileParsers.ts and ingestion actions.
+
+J) Gap Analysis + Recommendations
+Incomplete documentation of agent triggers and UI wiring (need to inspect pages to connect to agents). Files to review: app/projects/[id] children, app/rag-chat/page.tsx.
+
+RAG pipeline specifics unclear (chunk storage, retrieval logging). Inspect convex/knowledge.ts, convex/knowledgeDiagnostics.ts, convex/ingestion.ts.
+
+Quote generation pipeline not fully mapped (fields in schema truncated). Review convex/quotes.ts, app/api/quote-pdf/route.ts.
+
+Auth/permissions absent; consider adding auth guard in layout.
+
+Observability: clarify logging tables (agentRuns, knowledgeDiagnostics) and surface in UI.
+
+Trello sync edge cases: confirm retry/backoff, board/list mapping config in convex/trelloSync.ts.
+
+Summary
+
+Compiled repository-wide inventory of routes, components, Convex schema tables, agent implementations, and pipelines to ground the specification of Magnetic Studio Console, emphasizing agent orchestration and data artifacts. 
+
+Produced end-to-end technical specification (Sections A–J) detailing architecture, agent flows, data model, backend APIs, RAG/Trello integration, and gaps, referencing schema and agent code where available. 
+
+Testing
+
+⚠️ No automated tests run (documentation-only task).

@@ -5,6 +5,7 @@ import { useMutation, useQuery, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import { Sparkles, Loader2, MessageSquare, AlertCircle } from "lucide-react";
+import { calculateSectionStats } from "@/src/lib/costing";
 
 type WizardItem = {
     key: string;
@@ -23,9 +24,15 @@ type AccountingSectionRow = {
 
 export function QuoteWizard({
     projectId,
+    selectedElementId,
+    includeManagement,
+    includeOptional,
     onCreated,
 }: {
     projectId: Id<"projects">;
+    selectedElementId?: Id<"projectItems"> | null;
+    includeManagement?: boolean;
+    includeOptional?: boolean;
     onCreated?: (quoteId: Id<"quotes">) => void;
 }) {
     const accounting = useQuery(api.accounting.getProjectAccounting, { projectId });
@@ -40,9 +47,22 @@ export function QuoteWizard({
         const itemTotals = new Map<string, number>();
         const itemLabelFallback = new Map<string, string>();
         const unlinkedSections: AccountingSectionRow[] = [];
+        const defaults = {
+            overhead: accounting?.project.overheadPercent ?? 0.15,
+            risk: accounting?.project.riskPercent ?? 0.1,
+            profit: accounting?.project.profitPercent ?? 0.3,
+        };
+        const options = {
+            includeManagement: includeManagement ?? false,
+            includeOptional: includeOptional ?? false,
+            respectVisibility: true,
+        };
 
         for (const row of rows) {
-            const amount = Number(row.stats?.plannedClientPrice ?? 0);
+            const amount = Number(
+                calculateSectionStats(row.section, row.materials ?? [], row.work ?? [], defaults, options)
+                    .plannedClientPrice
+            );
             if (amount <= 0) continue;
             if (row.section.itemId) {
                 const key = String(row.section.itemId);
@@ -59,6 +79,7 @@ export function QuoteWizard({
         const itemLines = (itemsWithSpecs ?? [])
             .map((entry) => {
                 const itemId = String(entry.item._id);
+                if (selectedElementId && String(selectedElementId) !== itemId) return null;
                 const includeInQuote = entry.spec.quote?.includeInQuote ?? true;
                 if (!includeInQuote) return null;
                 const amount = itemTotals.get(itemId) ?? 0;
@@ -77,7 +98,9 @@ export function QuoteWizard({
             })
             .filter(Boolean) as Array<Omit<WizardItem, "selected" | "notes"> & { notes: string }>;
 
-        const sectionLines = unlinkedSections
+        const sectionLines = selectedElementId
+            ? []
+            : unlinkedSections
             .map((row) => {
                 const section = row.section;
                 const amount = Number(row.stats?.plannedClientPrice ?? 0);
@@ -92,7 +115,7 @@ export function QuoteWizard({
             .filter((item) => item.amount > 0);
 
         return [...itemLines, ...sectionLines];
-    }, [accounting?.sections, currency, itemsWithSpecs]);
+    }, [accounting?.sections, accounting?.project, currency, includeManagement, includeOptional, itemsWithSpecs, selectedElementId]);
 
     const [excludedKeys, setExcludedKeys] = useState<Set<string>>(() => new Set());
     const [amountOverrides, setAmountOverrides] = useState<Record<string, number>>({});

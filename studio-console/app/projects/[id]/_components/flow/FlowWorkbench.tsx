@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { ItemSpecV2 } from "@/convex/lib/zodSchemas";
 import { AgentChatThread } from "../chat/AgentChatThread";
 import { useItemsContext } from "../items/ItemsContext";
 import { ItemEditorPanel } from "../items/ItemEditorPanel";
@@ -16,6 +15,8 @@ import { useModel } from "@/app/_context/ModelContext";
 import { StructuredQuestionsPanel } from "./StructuredQuestionsPanel";
 import { FactsPanel } from "../facts/FactsPanel";
 import { CurrentStatePanel } from "../facts/CurrentStatePanel";
+import { IdeasPanel } from "./IdeasPanel";
+import { ChangeSetReviewBanner } from "../changesets/ChangeSetReviewBanner";
 
 type Mode = "clarify" | "generate";
 type ViewMode = "structured" | "chat";
@@ -37,33 +38,6 @@ function saveMode(projectId: string, tab: FlowTab, mode: ViewMode) {
     }
 }
 
-function systemPromptFor(tab: FlowTab, mode: Mode) {
-    const focus =
-        tab === "ideation"
-            ? "Ideation"
-            : tab === "planning"
-                ? "Planning"
-                : "Solutioning";
-
-    if (mode === "generate") {
-        return [
-            `You are assisting in ${focus}.`,
-            "Generate/Expand mode: propose alternatives and expansions.",
-            "Do not claim to have updated any structured fields.",
-            "If you suggest item updates, express them as candidates only.",
-        ].join("\n");
-    }
-
-    return [
-        `You are assisting in ${focus}.`,
-        "Clarify & Suggest mode:",
-        "Return exactly 3 targeted clarification questions and exactly 3 actionable suggestions.",
-        "Use this markdown format:",
-        "## Clarification questions\n1. ...\n2. ...\n3. ...\n\n## Suggestions\n1. **Title**: ...\n   - Details: ...\n   - Why it helps: ...\n2. ...\n3. ...",
-        "Do not output a full item spec. Do not say you updated fields.",
-    ].join("\n");
-}
-
 export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; tab: FlowTab }) {
     const { selectedItemId, setSelectedItemId } = useItemsContext();
     const { thinkingMode } = useThinkingMode();
@@ -76,7 +50,6 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const generateUploadUrl = useMutation(api.assets.generateUploadUrl);
     const createAssetFromUpload = useMutation(api.assets.createAssetFromUpload);
 
-    const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
     const [selectedAllProject, setSelectedAllProject] = useState(true);
     const [selectedItemIds, setSelectedItemIds] = useState<Array<Id<"projectItems">>>([]);
 
@@ -99,7 +72,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const [textDraft, setTextDraft] = useState("");
     const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
     const [hasRemoteUpdate, setHasRemoteUpdate] = useState(false);
-    const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts">("state");
+    const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts" | "ideas">("state");
 
     const lastLoadedScopeKeyRef = useRef<string | null>(null);
     const lastRemoteTextRef = useRef<string>("");
@@ -189,56 +162,6 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const [viewMode, setViewMode] = useState<ViewMode>("structured");
     const [mode, setMode] = useState<Mode>("generate");
 
-    const generateItemUpdate = useAction(api.agents.flow.generateItemUpdate);
-    const applySpec = useMutation(api.items.applySpec);
-    const [previewSpec, setPreviewSpec] = useState<ItemSpecV2 | null>(null);
-    const [isGeneratingSpec, setIsGeneratingSpec] = useState(false);
-    const [isApplyingSpec, setIsApplyingSpec] = useState(false);
-
-    const handleTurnIntoItem = async () => {
-        if (!threadId || !textDraft) return;
-        setIsGeneratingSpec(true);
-        try {
-            const result = await generateItemUpdate({
-                threadId,
-                workspaceText: textDraft,
-                model: selectedModel,
-            });
-            
-            // Auto-apply the spec
-            await applySpec({
-                projectId,
-                itemId: selectedItemId ? (selectedItemId as Id<"projectItems">) : undefined,
-                spec: result as ItemSpecV2,
-            });
-            
-            // setPreviewSpec(result as ItemSpecV2); // Skipped preview
-        } catch (e) {
-            console.error("Failed to generate spec", e);
-            alert("Failed to generate item spec. See console.");
-        } finally {
-            setIsGeneratingSpec(false);
-        }
-    };
-
-    const handleApplySpec = async () => {
-        if (!previewSpec || !projectId) return;
-        setIsApplyingSpec(true);
-        try {
-            await applySpec({
-                projectId,
-                itemId: selectedItemId ? (selectedItemId as Id<"projectItems">) : undefined,
-                spec: previewSpec,
-            });
-            setPreviewSpec(null);
-        } catch (e) {
-            console.error("Failed to apply spec", e);
-            alert("Failed to apply spec. See console.");
-        } finally {
-            setIsApplyingSpec(false);
-        }
-    };
-
     const applyRemoteUpdate = () => {
         const pending = pendingRemoteTextRef.current;
         if (pending === null) return;
@@ -249,6 +172,12 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
         setSaveStatus("idle");
     };
 
+    const derivedState = useQuery(api.currentState.getDerived, {
+        projectId,
+        scopeType,
+        scopeItemIds: selectedAllProject ? undefined : selectedItemIds,
+    });
+
 
     useEffect(() => {
         setViewMode(loadMode(String(projectId), tab));
@@ -257,6 +186,12 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     useEffect(() => {
         saveMode(String(projectId), tab, viewMode);
     }, [viewMode, projectId, tab]);
+
+    useEffect(() => {
+        if (tab !== "ideation" && rightPanelTab === "ideas") {
+            setRightPanelTab("state");
+        }
+    }, [rightPanelTab, tab]);
 
     useEffect(() => {
         void (async () => {
@@ -275,6 +210,9 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
 
     return (
         <div className="flex flex-col gap-8 pb-20">
+            {tab === "ideation" && (
+                <ChangeSetReviewBanner projectId={projectId} phase="convert" />
+            )}
             {/* Top row: left / center / right */}
             <div className="grid gap-4 h-[85vh] grid-cols-[260px_minmax(0,1fr)_420px]">
                 <FlowItemsPanel
@@ -346,16 +284,6 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                     Generation Chat
                                 </button>
                             </div>
-                            
-                            <button
-                                type="button"
-                                className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
-                                onClick={handleTurnIntoItem}
-                                disabled={isGeneratingSpec || !threadId}
-                                title="Generate item spec from current understanding"
-                            >
-                                {isGeneratingSpec ? "Generating..." : "Turn into item"}
-                            </button>
                         </div>
                     </div>
 
@@ -409,36 +337,47 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                     </div>
                 </div>
 
-                <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
-                    <div className="p-3 border-b flex items-center justify-between bg-gray-50">
-                        <div className="flex gap-2">
-                            <button 
-                                onClick={() => setRightPanelTab("state")}
-                                className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "state" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                            >
-                                Current State
-                            </button>
-                            <button 
-                                onClick={() => setRightPanelTab("facts")}
-                                className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "facts" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                            >
-                                Facts Ledger
-                            </button>
+                    <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
+                        <div className="p-3 border-b flex items-center justify-between bg-gray-50">
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={() => setRightPanelTab("state")}
+                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "state" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                >
+                                    Current State
+                                </button>
+                                <button 
+                                    onClick={() => setRightPanelTab("facts")}
+                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "facts" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                >
+                                    Facts Ledger
+                                </button>
+                                {tab === "ideation" && (
+                                    <button
+                                        onClick={() => setRightPanelTab("ideas")}
+                                        className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "ideas" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                    >
+                                        Ideas
+                                    </button>
+                                )}
+                            </div>
                         </div>
-                    </div>
-                    <div className="flex-1 min-h-0 relative">
-                        {rightPanelTab === "state" ? (
-                            <CurrentStatePanel
-                                text={textDraft}
-                                onChange={setTextDraft}
-                                saveStatus={saveStatus}
-                                updatedAt={workspace?.updatedAt}
-                                hasRemoteUpdate={hasRemoteUpdate}
-                                onApplyRemote={applyRemoteUpdate}
-                            />
-                        ) : (
-                            <FactsPanel projectId={projectId} />
-                        )}
+                        <div className="flex-1 min-h-0 relative">
+                            {rightPanelTab === "state" ? (
+                                <CurrentStatePanel
+                                    derivedMarkdown={derivedState?.markdown ?? ""}
+                                    text={textDraft}
+                                    onChange={setTextDraft}
+                                    saveStatus={saveStatus}
+                                    updatedAt={workspace?.updatedAt}
+                                    hasRemoteUpdate={hasRemoteUpdate}
+                                    onApplyRemote={applyRemoteUpdate}
+                                />
+                            ) : rightPanelTab === "facts" ? (
+                                <FactsPanel projectId={projectId} />
+                            ) : (
+                                <IdeasPanel projectId={projectId} />
+                            )}
                     </div>
                 </div>
             </div>
@@ -482,37 +421,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                     <ItemEditorPanel />
                 </div>
             </div>
-
-            {previewSpec && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div className="bg-white rounded-lg shadow-xl w-[800px] max-h-[90vh] flex flex-col">
-                        <div className="p-4 border-b flex items-center justify-between">
-                            <h3 className="font-semibold">Preview Item Update</h3>
-                            <button onClick={() => setPreviewSpec(null)} className="text-gray-500 hover:text-gray-700">
-                                ✕
-                            </button>
-                        </div>
-                        <div className="p-4 overflow-y-auto flex-1 font-mono text-xs">
-                            <pre>{JSON.stringify(previewSpec, null, 2)}</pre>
-                        </div>
-                        <div className="p-4 border-t flex justify-end gap-2">
-                            <button
-                                onClick={() => setPreviewSpec(null)}
-                                className="px-3 py-1 border rounded hover:bg-gray-50"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleApplySpec}
-                                disabled={isApplyingSpec}
-                                className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                            >
-                                {isApplyingSpec ? "Applying..." : "Apply Changes"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
+

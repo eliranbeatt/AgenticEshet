@@ -14,6 +14,13 @@ export default function QuotePage() {
 
     const quotes = useQuery(api.agents.quote.listQuotes, { projectId }) as Array<Doc<"quotes">> | undefined;
     const [selectedQuoteId, setSelectedQuoteId] = useState<Id<"quotes"> | null>(null);
+    const [selectedElementId, setSelectedElementId] = useState<string>("all");
+    const [includeManagement, setIncludeManagement] = useState(false);
+    const [includeOptional, setIncludeOptional] = useState(false);
+
+    const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
+    const elements = useMemo(() => (itemsData?.items ?? []) as Array<Doc<"projectItems">>, [itemsData?.items]);
+    const elementSelection = selectedElementId === "all" ? null : (selectedElementId as Id<"projectItems">);
 
     const selectedQuote = useMemo(() => {
         if (!quotes || quotes.length === 0) return null;
@@ -24,8 +31,46 @@ export default function QuotePage() {
     return (
         <div className="grid gap-6 lg:grid-cols-[420px,1fr]">
             <div className="space-y-4">
+                <div className="bg-white border rounded shadow-sm p-4 space-y-3">
+                    <label className="flex items-center gap-2 text-sm">
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Element</span>
+                        <select
+                            className="border rounded px-2 py-1 text-sm"
+                            value={selectedElementId}
+                            onChange={(event) => setSelectedElementId(event.target.value)}
+                        >
+                            <option value="all">All elements</option>
+                            {elements.map((item) => (
+                                <option key={item._id} value={item._id}>
+                                    {item.title}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <div className="flex flex-wrap gap-3 text-xs text-gray-600">
+                        <label className="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                checked={includeManagement}
+                                onChange={(event) => setIncludeManagement(event.target.checked)}
+                            />
+                            Include management costs
+                        </label>
+                        <label className="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                checked={includeOptional}
+                                onChange={(event) => setIncludeOptional(event.target.checked)}
+                            />
+                            Include optional lines
+                        </label>
+                    </div>
+                </div>
                 <QuoteWizard
                     projectId={projectId}
+                    selectedElementId={elementSelection}
+                    includeManagement={includeManagement}
+                    includeOptional={includeOptional}
                     onCreated={(quoteId) => {
                         setSelectedQuoteId(quoteId);
                     }}

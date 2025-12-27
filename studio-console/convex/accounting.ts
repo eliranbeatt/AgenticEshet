@@ -183,6 +183,13 @@ export const addMaterialLine = mutation({
     category: v.string(),
     label: v.string(),
     description: v.optional(v.string()),
+    workstream: v.optional(v.string()),
+    isManagement: v.optional(v.boolean()),
+    quoteVisibility: v.optional(v.union(
+      v.literal("include"),
+      v.literal("exclude"),
+      v.literal("optional")
+    )),
     procurement: v.optional(
       v.union(
         v.literal("in_stock"),
@@ -216,6 +223,13 @@ export const updateMaterialLine = mutation({
         category: v.optional(v.string()),
         label: v.optional(v.string()),
         description: v.optional(v.string()),
+        workstream: v.optional(v.string()),
+        isManagement: v.optional(v.boolean()),
+        quoteVisibility: v.optional(v.union(
+          v.literal("include"),
+          v.literal("exclude"),
+          v.literal("optional")
+        )),
         procurement: v.optional(
           v.union(
             v.literal("in_stock"),
@@ -259,6 +273,13 @@ export const addWorkLine = mutation({
     workType: v.string(),
     role: v.string(),
     rateType: v.string(),
+    workstream: v.optional(v.string()),
+    isManagement: v.optional(v.boolean()),
+    quoteVisibility: v.optional(v.union(
+      v.literal("include"),
+      v.literal("exclude"),
+      v.literal("optional")
+    )),
     plannedQuantity: v.number(),
     plannedUnitCost: v.number(),
     status: v.string(),
@@ -278,6 +299,13 @@ export const updateWorkLine = mutation({
         workType: v.optional(v.string()),
         role: v.optional(v.string()),
         rateType: v.optional(v.string()),
+        workstream: v.optional(v.string()),
+        isManagement: v.optional(v.boolean()),
+        quoteVisibility: v.optional(v.union(
+          v.literal("include"),
+          v.literal("exclude"),
+          v.literal("optional")
+        )),
         plannedQuantity: v.optional(v.number()),
         plannedUnitCost: v.optional(v.number()),
         actualQuantity: v.optional(v.number()),

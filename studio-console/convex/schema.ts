@@ -167,6 +167,17 @@ export default defineSchema({
         createdBy: v.string(),
     }).index("by_project_createdAt", ["projectId", "createdAt"]),
 
+    ideaSelections: defineTable({
+        projectId: v.id("projects"),
+        conceptCardIds: v.array(v.id("ideationConceptCards")),
+        notes: v.optional(v.string()),
+        status: v.union(v.literal("pending"), v.literal("converted"), v.literal("failed")),
+        changeSetId: v.optional(v.id("itemChangeSets")),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        updatedAt: v.optional(v.number()),
+    }).index("by_project_createdAt", ["projectId", "createdAt"]),
+
     projectAssets: defineTable({
         projectId: v.id("projects"),
         kind: v.union(v.literal("image")),
@@ -290,7 +301,11 @@ export default defineSchema({
             v.literal("accounting"),
             v.literal("tasks"),
             v.literal("item_edit"),
-            v.literal("convert")
+            v.literal("convert"),
+            v.literal("element_edit"),
+            v.literal("procurement"),
+            v.literal("runbook"),
+            v.literal("closeout")
         )),
         deleteRequestedBy: v.optional(v.string()),
         deletedAt: v.optional(v.number()),
@@ -344,7 +359,11 @@ export default defineSchema({
             v.literal("accounting"),
             v.literal("tasks"),
             v.literal("item_edit"),
-            v.literal("convert")
+            v.literal("convert"),
+            v.literal("element_edit"),
+            v.literal("procurement"),
+            v.literal("runbook"),
+            v.literal("closeout")
         )),
         source: v.optional(v.union(v.literal("user"), v.literal("agent"))),
         agentName: v.optional(v.string()),
@@ -389,10 +408,15 @@ export default defineSchema({
             v.literal("accounting"),
             v.literal("tasks"),
             v.literal("item_edit"),
-            v.literal("convert")
+            v.literal("convert"),
+            v.literal("element_edit"),
+            v.literal("procurement"),
+            v.literal("runbook"),
+            v.literal("closeout")
         ),
         agentName: v.string(),
         runId: v.optional(v.string()),
+        ideaSelectionId: v.optional(v.id("ideaSelections")),
         status: v.union(
             v.literal("pending"),
             v.literal("approved"),
@@ -448,7 +472,11 @@ export default defineSchema({
             v.literal("accounting"),
             v.literal("tasks"),
             v.literal("item_edit"),
-            v.literal("convert")
+            v.literal("convert"),
+            v.literal("element_edit"),
+            v.literal("procurement"),
+            v.literal("runbook"),
+            v.literal("closeout")
         ),
         lockedBy: v.string(),
         runId: v.optional(v.string()),
@@ -510,6 +538,13 @@ export default defineSchema({
         category: v.string(), // e.g., "PVC", "Paint"
         label: v.string(),
         description: v.optional(v.string()),
+        workstream: v.optional(v.string()),
+        isManagement: v.optional(v.boolean()),
+        quoteVisibility: v.optional(v.union(
+            v.literal("include"),
+            v.literal("exclude"),
+            v.literal("optional")
+        )),
 
         procurement: v.optional(
             v.union(
@@ -561,6 +596,13 @@ export default defineSchema({
         workType: v.string(), // studio, field, management
         role: v.string(),
         personId: v.optional(v.string()), // Link to user/employee if needed
+        workstream: v.optional(v.string()),
+        isManagement: v.optional(v.boolean()),
+        quoteVisibility: v.optional(v.union(
+            v.literal("include"),
+            v.literal("exclude"),
+            v.literal("optional")
+        )),
 
         rateType: v.string(), // hour, day, flat
 
@@ -590,10 +632,18 @@ export default defineSchema({
             v.literal("purchase"),
             v.literal("rental"),
             v.literal("shipping"),
+            v.literal("service"),
             v.literal("misc")
         ),
         title: v.string(),
         notes: v.optional(v.string()),
+        workstream: v.optional(v.string()),
+        isManagement: v.optional(v.boolean()),
+        quoteVisibility: v.optional(v.union(
+            v.literal("include"),
+            v.literal("exclude"),
+            v.literal("optional")
+        )),
         quantity: v.optional(v.number()),
         unit: v.optional(v.string()),
         unitCost: v.optional(v.number()),
@@ -709,6 +759,8 @@ export default defineSchema({
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
         itemId: v.optional(v.id("projectItems")),
         itemSubtaskId: v.optional(v.string()),
+        workstream: v.optional(v.string()),
+        isManagement: v.optional(v.boolean()),
         // Dependencies
         taskNumber: v.optional(v.number()),
         dependencies: v.optional(v.array(v.id("tasks"))),

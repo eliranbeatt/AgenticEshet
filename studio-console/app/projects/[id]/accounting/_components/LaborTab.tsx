@@ -6,8 +6,23 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { Plus, Wand2, Save, Pencil, Trash2, X } from "lucide-react";
 import { type ProjectAccountingData, type ProjectAccountingSection } from "./AccountingTypes";
+import { type CostingOptions } from "@/src/lib/costing";
 
-export default function LaborTab({ data, projectId }: { data: ProjectAccountingData, projectId: Id<"projects"> }) {
+export default function LaborTab({
+  data,
+  projectId,
+  selectedElementId,
+  includeManagement,
+  includeOptional,
+  respectVisibility,
+}: {
+  data: ProjectAccountingData;
+  projectId: Id<"projects">;
+  selectedElementId: Id<"projectItems"> | "unlinked" | null;
+  includeManagement: boolean;
+  includeOptional: boolean;
+  respectVisibility: boolean;
+}) {
   const addWorkLine = useMutation(api.accounting.addWorkLine);
   const updateWorkLine = useMutation(api.accounting.updateWorkLine);
   const deleteWorkLine = useMutation(api.accounting.deleteWorkLine);
@@ -35,9 +50,20 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
     }
   };
 
-  const filteredSections = filterSection === "all" 
-    ? data.sections 
-    : data.sections.filter((s: ProjectAccountingSection) => s.section._id === filterSection);
+  const baseSections = selectedElementId
+    ? data.sections.filter((s) =>
+        selectedElementId === "unlinked"
+          ? !s.section.itemId
+          : s.section.itemId === selectedElementId
+      )
+    : data.sections;
+
+  const options: CostingOptions = { includeManagement, includeOptional, respectVisibility };
+
+  const filteredSections =
+    filterSection === "all"
+      ? baseSections
+      : baseSections.filter((s: ProjectAccountingSection) => s.section._id === filterSection);
 
   const handleAddLine = async (sectionId: Id<"sections">) => {
     await addWorkLine({
@@ -69,7 +95,7 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
                 onChange={(e) => setFilterSection(e.target.value)}
             >
                 <option value="all">All Sections</option>
-                {data.sections.map((s) => (
+                {baseSections.map((s) => (
                     <option key={s.section._id} value={s.section._id}>{s.section.name}</option>
                 ))}
             </select>
@@ -78,14 +104,22 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
 
       <div className="space-y-6">
         {filteredSections.map((item) => {
-            const { section, work } = item;
+            const { section } = item;
+            const work = item.work.filter((line) => {
+                if (!options.includeManagement && line.isManagement) return false;
+                if (!options.respectVisibility) return true;
+                const visibility = line.quoteVisibility ?? "include";
+                if (visibility === "exclude") return false;
+                if (visibility === "optional" && !options.includeOptional) return false;
+                return true;
+            });
             return (
                 <div key={section._id} className="border rounded-lg overflow-hidden">
                     <div className="bg-gray-50 px-4 py-2 border-b flex justify-between items-center">
                         <div>
                             <h3 className="font-medium text-gray-700">{section.name}</h3>
                             {item.item && (
-                                <div className="text-xs text-blue-600">Item: {item.item.title}</div>
+                                <div className="text-xs text-blue-600">Element: {item.item.title}</div>
                             )}
                         </div>
                          <div className="flex space-x-2">
@@ -133,6 +167,7 @@ export default function LaborTab({ data, projectId }: { data: ProjectAccountingD
                                     <tr>
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Task / Role</th>
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Rate Type</th>
+                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Visibility</th>
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-blue-50">Plan Qty</th>
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-blue-50">Plan Rate</th>
                                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Qty</th>
@@ -220,6 +255,7 @@ function WorkRow({
         return Number.isNaN(parsed) ? fallback : parsed;
     };
 
+    const visibility = line.quoteVisibility ?? "include";
     const plannedQty = draft.rateType === "flat" ? 1 : parseNumber(draft.plannedQuantity, line.plannedQuantity);
     const plannedRate = parseNumber(draft.plannedUnitCost, line.plannedUnitCost);
     const plannedTotal = draft.rateType === "flat" ? plannedRate : plannedQty * plannedRate;
@@ -333,7 +369,25 @@ function WorkRow({
                  )}
             </td>
             
-            <td className="px-3 py-2 text-right bg-blue-50/30">
+                <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                            visibility === "exclude"
+                                ? "border-red-200 bg-red-50 text-red-700"
+                                : visibility === "optional"
+                                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        }`}>
+                            {visibility}
+                        </span>
+                        {line.isManagement && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600">
+                                management
+                            </span>
+                        )}
+                    </div>
+                </td>
+                <td className="px-3 py-2 text-right bg-blue-50/30">
                 {plannedQuantityCell}
             </td>
             <td className="px-3 py-2 text-right bg-blue-50/30">

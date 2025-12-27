@@ -41,9 +41,9 @@ export function ItemDetailDrawer({ itemId, open, onClose }: DrawerProps) {
             <div className="w-full max-w-xl bg-white shadow-xl border-l flex flex-col">
                 <div className="p-4 border-b flex items-start justify-between gap-4">
                     <div>
-                        <div className="text-xs text-gray-500">Item details</div>
+                        <div className="text-xs text-gray-500">Element details</div>
                         <div className="text-lg font-semibold text-gray-900">
-                            {content?.item.name ?? content?.item.title ?? "Item"}
+                            {content?.item.name ?? content?.item.title ?? "Element"}
                         </div>
                         {content?.item.category && (
                             <div className="text-xs text-gray-500 mt-1">

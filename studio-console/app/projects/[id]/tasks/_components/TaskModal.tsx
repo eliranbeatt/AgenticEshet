@@ -290,7 +290,7 @@ export function TaskModal({
 
                             <div className="md:col-span-2">
                                 <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
-                                    Linked item
+                                    Linked element
                                 </label>
                                 <select
                                     className="w-full border rounded px-3 py-2 text-sm bg-white"

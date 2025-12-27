@@ -311,17 +311,20 @@ export const ItemUpdateOutputSchema = z.object({
 });
 
 const CurrencySchema = z.enum(["ILS", "USD", "EUR"]);
-const ItemKindSchema = z.enum(["deliverable", "service", "day", "fee", "group"]);
+const ItemKindSchema = z.enum(["deliverable", "service", "day", "fee", "group", "option"]);
 const ItemCategorySchema = z.enum([
-    "set_piece",
-    "print",
+    "branding_prints",
     "floor",
+    "ceiling",
     "prop",
+    "set_piece",
     "rental",
     "purchase",
-    "transport",
-    "installation",
-    "studio_production",
+    "logistics",
+    "install",
+    "teardown",
+    "shoot",
+    "admin",
     "management",
     "other",
 ]);
@@ -334,8 +337,10 @@ const AccountingLineTypeSchema = z.enum([
     "purchase",
     "rental",
     "shipping",
+    "service",
     "misc",
 ]);
+const QuoteVisibilitySchema = z.enum(["include", "exclude", "optional"]);
 const PurchaseStatusSchema = z.enum(["planned", "quoted", "ordered", "received", "cancelled"]);
 
 const ItemFlagsSchema = z.object({
@@ -416,6 +421,8 @@ const TaskCreateSchema = z.object({
     parentTaskTempId: z.string().nullable().optional(),
     title: z.string().min(1),
     description: z.string().optional(),
+    workstream: z.string().optional(),
+    isManagement: z.boolean().optional(),
     durationHours: z.number().min(0),
     status: TaskStatusSchema,
     tags: z.array(z.string()),
@@ -428,6 +435,8 @@ const TaskPatchSchema = z.object({
     patch: z.object({
         title: z.string().optional(),
         description: z.string().optional(),
+        workstream: z.string().optional(),
+        isManagement: z.boolean().optional(),
         durationHours: z.number().min(0).optional(),
         status: TaskStatusSchema.optional(),
         tags: z.array(z.string()).optional(),
@@ -450,6 +459,9 @@ const AccountingLineCreateSchema = z.object({
     lineType: AccountingLineTypeSchema,
     title: z.string().min(1),
     notes: z.string().optional(),
+    workstream: z.string().optional(),
+    isManagement: z.boolean().optional(),
+    quoteVisibility: QuoteVisibilitySchema.optional(),
     quantity: z.number().min(0).optional(),
     unit: z.string().optional(),
     unitCost: z.number().min(0).optional(),
@@ -466,6 +478,9 @@ const AccountingLinePatchSchema = z.object({
     patch: z.object({
         title: z.string().optional(),
         notes: z.string().optional(),
+        workstream: z.string().optional(),
+        isManagement: z.boolean().optional(),
+        quoteVisibility: QuoteVisibilitySchema.optional(),
         quantity: z.number().min(0).optional(),
         unit: z.string().optional(),
         unitCost: z.number().min(0).optional(),
@@ -481,7 +496,18 @@ const AccountingLinePatchSchema = z.object({
 export const ChangeSetSchema = z.object({
     type: z.literal("ChangeSet"),
     projectId: z.string().min(1),
-    phase: z.enum(["planning", "solutioning", "accounting", "tasks", "item_edit", "convert"]),
+    phase: z.enum([
+        "planning",
+        "solutioning",
+        "accounting",
+        "tasks",
+        "item_edit",
+        "convert",
+        "element_edit",
+        "procurement",
+        "runbook",
+        "closeout",
+    ]),
     agentName: z.string().min(1),
     summary: z.string(),
     assumptions: z.array(z.string()),

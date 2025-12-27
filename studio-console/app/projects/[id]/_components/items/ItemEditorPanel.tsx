@@ -97,7 +97,7 @@ export function ItemEditorPanel() {
     if (!selectedItemId) {
         return (
             <div className="bg-white border rounded-lg shadow-sm p-4 text-sm text-gray-500">
-                Select an item to edit its details.
+                Select an element to edit its details.
             </div>
         );
     }
@@ -105,7 +105,7 @@ export function ItemEditorPanel() {
     if (!item || !specDraft) {
         return (
             <div className="bg-white border rounded-lg shadow-sm p-4 text-sm text-gray-500">
-                Loading item details...
+                Loading element details...
             </div>
         );
     }
@@ -141,7 +141,7 @@ export function ItemEditorPanel() {
         <div className="bg-white border rounded-lg shadow-sm p-4 space-y-4">
             <div className="flex items-center justify-between gap-3">
                 <div>
-                    <div className="text-xs text-gray-500">Item</div>
+                    <div className="text-xs text-gray-500">Element</div>
                     <div className="text-lg font-semibold text-gray-900">{identity.title}</div>
                     <div className="text-xs text-gray-500 mt-1">
                         {item.typeKey} - {item.status}

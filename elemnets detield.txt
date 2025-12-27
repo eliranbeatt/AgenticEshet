@@ -1,0 +1,222 @@
+According to a document from **December 26, 2025**, your current app already has the *right building blocks* for an **element-focused** workflow: `projectItems` (hierarchical items with rollups + quote defaults + versioning), separate `tasks`, separate accounting (`sections`, `materialLines`, `workLines`), and agents that flow **Planning → Architect/Tasks → Estimation → Quote**, plus a `/api/quote-pdf` route. 
+
+What’s missing is not “items support” — it’s making **the item/element tree the primary spine** that everything else (tasks, costs, quote, knowledge, Trello) hangs off of.
+
+Below is an implementation plan to convert the app into a truly **Element-Focused StudioOps** product while reusing your existing tables/agents as much as possible. 
+
+---
+
+## 1) Define “Element” as the primary unit (and make everything reference it)
+
+### Your current state (good)
+
+* `projectItems` already exists as a **hierarchical** entity with rollups and quote defaults/versioning. 
+* Tasks exist separately and Trello sync maps **task ↔ card**. 
+* Accounting exists separately as `sections → materialLines/workLines`. 
+
+### Target state
+
+Treat `projectItems` as **Elements** (rename in UI; keep table name initially to avoid migration pain).
+
+**Hard rule:** every operational object must attach to an element:
+
+* task → `elementId`
+* material line → `elementId`
+* work line → `elementId`
+* knowledge asset link → `elementId` (optional but powerful)
+* quote breakdown → element rollups
+
+This is the single change that makes the whole app feel like “how Eliran works”: you think in *deliverables/elements* first, and everything else is subordinate.
+
+---
+
+## 2) Schema changes needed (minimal but crucial)
+
+### A) Tasks: add element linkage + “tsaka language” fields
+
+Add:
+
+* `task.elementId` (required after migration)
+* `task.workstream` (your “tsaka” grouping: סטודיו / קניות / הובלה / התקנה / פירוק / גרפיקה / ספקים / אדמין…)
+* `task.isManagement` (see accounting fix below)
+
+Why: your Tasks page is currently Kanban-based and also “links to accounting”— it becomes much more useful when it’s scoped under an element.
+
+### B) Accounting lines: add element linkage + visibility rules
+
+Add:
+
+* `materialLines.elementId`
+* `workLines.elementId`
+* `*.isManagement` (or `costRole = management|production`)
+* `*.quoteVisibility = include|exclude|optional`
+* optionally `*.scenarioId` (if you use scenarios/phases heavily)
+
+You already have project phases (`projectScenarios.phase` and `projects.stage`).
+This makes it easy to store “Draft estimate” vs “Final quote” per scenario without duplicating the entire project.
+
+### C) Elements: ensure element metadata supports your real decisions
+
+Make sure each element has:
+
+* `kind` (build / rent / buy / service / logistics)
+* `location` (studio / site / vendor)
+* `procurementMode` (local / abroad / client supplied)
+* `status` (idea → planned → in progress → done)
+* quote defaults: (already mentioned in doc)
+
+---
+
+## 3) UI changes: restructure project workspace around the Element Tree
+
+You can keep your existing tabs, but **Elements becomes the first-class control surface** that the other tabs “follow”.
+
+### A) Add an “Elements” tab (or replace Tasks tab UI)
+
+Create: `/projects/[id]/elements`
+
+Layout:
+
+1. **Left panel**: collapsible element tree (unlimited depth)
+
+   * each row shows: name + kind icons + rollup totals (materials/labor/total) + quote include toggle
+2. **Right panel**: Element inspector with sub-tabs:
+
+   * **Specs** (description, dimensions, materials notes, vendor links)
+   * **Tasks** (Kanban filtered to this element)
+   * **Costs** (materials/work lines filtered to this element)
+   * **Files** (knowledgeDocs / assetLinks related)
+   * **History** (revisions / changesets)
+
+This directly leverages your existing structure: element hierarchy exists, tasks exist, accounting exists. 
+
+### B) Keep “Tasks” tab, but make it element-aware
+
+Your current tasks page supports Kanban, filters, generate/regenerate, and accounting linking. 
+Modify it to add:
+
+* filter: **Element**
+* quick jump: “Open parent element”
+* group by: element/workstream
+
+### C) Quote tab becomes an “Element Quote View”
+
+Your current quote tab already pulls accounting + quote runs. 
+Change its main display to:
+
+* element tree with **client-facing grouping**
+* per element: short description + price (rollup)
+* include toggles, optional alternates (scenario)
+
+And keep “Generate Quote” button calling the same agent pipeline. 
+
+---
+
+## 4) Agent pipeline changes: make every agent operate “per element”
+
+Your document already defines the phase pipeline and the agent roster (Planning, Architect, Estimator, Quote).
+
+### A) Planning agent output → Element Tree skeleton
+
+Instead of producing only markdown, the planning agent should also output:
+
+* a proposed element tree (names + kind + rough scope tags)
+* “open questions” attached to elements (so clarification is element-scoped)
+
+### B) Architect agent: generate tasks **under each element**
+
+Currently: “auto-generate tasks” exists. 
+Change contract to: output `[{ elementId, tasks: [...] }]` with:
+
+* workstream (tsaka)
+* dependency hints
+* estimate “effort type” (studio build / purchase / logistics)
+
+### C) Estimator agent: generate cost lines **per element**
+
+Estimator already writes to accounting tables. 
+Change contract so every produced line includes `elementId` and `isManagement`.
+
+### D) Quote agent: render quote from the element tree
+
+Quote already reads accounting snapshot and generates quote versions/PDF. 
+Change it to:
+
+* traverse elements included in quote
+* price per element = rollup(material + labor + external services) + element-level overhead rules
+* produce:
+
+  1. internal breakdown (full)
+  2. client quote (clean list)
+
+---
+
+## 5) Fix your known accounting problem “by design”
+
+You previously described a real issue: management tasks shouldn’t be double-counted in accounting totals.
+
+Element-focused approach solves it cleanly:
+
+* Any “ניהול/תיאומים/אדמין” task is `isManagement=true`.
+* Accounting summary defaults:
+
+  * **Production Cost** = everything except management
+  * **Overhead/Profit** already contains management (or you can show it separately)
+* Quote defaults exclude management lines unless explicitly included.
+
+This becomes a permanent rule instead of a fragile UI filter.
+
+---
+
+## 6) Migration plan (safe + incremental)
+
+You already have migrations tooling suggested in the repo (`itemsMigrations.ts` exists by name).
+
+Do it in 4 passes:
+
+1. **Add new fields** (elementId on tasks/lines) but keep them optional initially.
+2. **Backfill elementId**:
+
+   * if tasks already reference items in any way → map directly
+   * else heuristic: match by title prefixes / section names / existing “accounting linking” metadata from tasks page.
+3. **Enforce**: new tasks/lines must have elementId.
+4. **UI switch**: ship Elements tab and make it the primary entrypoint.
+
+---
+
+## 7) “Make it feel like Eliran” (tsaka language + habits)
+
+To make the agents behave like you:
+
+* introduce controlled vocabularies for **workstreams** (tsaka categories)
+* introduce element `kind` presets (קוליסה / פרופ / הדפסה / שילוט / רצפה / הובלה / יום הקמה / פירוק…)
+* store your repeated patterns as **templates** (you already have `itemTemplates` in the model list).
+
+Then agents don’t “invent” structure — they select from *your* structure.
+
+---
+
+## 8) Concrete implementation checklist (what to do next in codebase)
+
+1. **Schema.ts**
+
+   * add `elementId/workstream/isManagement/quoteVisibility` fields
+2. **Convex functions**
+
+   * `tasks.listByProject` add optional `elementId` filter
+   * `accounting.getProjectAccounting` optionally return rollups per element
+3. **New queries**
+
+   * `elements.getTree(projectId)` → returns tree + rollups
+4. **UI**
+
+   * new `/elements` page with tree + inspector
+   * update Tasks/Accounting/Quote pages to respect selected element
+5. **Agents**
+
+   * adjust output contracts so everything includes `elementId`
+6. **Quote PDF**
+
+   * render quote based on element order (tree traversal) and visibility rules (still served by `/api/quote-pdf`).
+
+---

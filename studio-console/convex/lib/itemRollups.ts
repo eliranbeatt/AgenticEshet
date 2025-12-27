@@ -113,6 +113,9 @@ export async function recomputeRollups(
                 case "shipping":
                     costTotals.shipping += amount;
                     break;
+                case "service":
+                    costTotals.misc += amount;
+                    break;
                 case "misc":
                     costTotals.misc += amount;
                     break;

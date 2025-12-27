@@ -78,7 +78,7 @@ export function FlowItemsPanel(props: Props) {
         <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
             <div className="p-3 border-b space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Items</div>
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Elements</div>
                 </div>
 
                 <button
@@ -87,13 +87,13 @@ export function FlowItemsPanel(props: Props) {
                     onClick={async () => {
                         const result = await createManual({
                             projectId: props.projectId,
-                            title: "Untitled item",
+                            title: "Untitled element",
                             typeKey: "general",
                         });
                         props.onSetSelectedItemIds([result.itemId]);
                     }}
                 >
-                    + Add item
+                    + Add element
                 </button>
 
                 <input
@@ -117,9 +117,9 @@ export function FlowItemsPanel(props: Props) {
                 </button>
 
                 {sidebarData === undefined ? (
-                    <div className="p-4 text-sm text-gray-500">Loading items...</div>
+                    <div className="p-4 text-sm text-gray-500">Loading elements...</div>
                 ) : items.length === 0 ? (
-                    <div className="p-4 text-sm text-gray-500">No items found.</div>
+                    <div className="p-4 text-sm text-gray-500">No elements found.</div>
                 ) : (
                     <div className="divide-y">
                         {items.map((item) => {
@@ -173,7 +173,7 @@ export function FlowItemsPanel(props: Props) {
                                                         className="text-[11px] text-blue-700 hover:underline"
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            const next = prompt("Rename item:", item.title) ?? "";
+                                                            const next = prompt("Rename element:", item.title) ?? "";
                                                             if (!next.trim() || next.trim() === item.title) return;
                                                             void renameItem({ itemId: item._id, newTitle: next.trim() });
                                                         }}
@@ -185,7 +185,7 @@ export function FlowItemsPanel(props: Props) {
                                                         className="text-[11px] text-red-700 hover:underline"
                                                         onClick={async (e) => {
                                                             e.stopPropagation();
-                                                            if (!confirm("Delete this item? This cannot be undone.")) return;
+                                                            if (!confirm("Delete this element? This cannot be undone.")) return;
                                                             if (!confirm("Confirm delete (second confirmation)") ) return;
                                                             await requestDelete({ itemId: item._id });
                                                             await confirmDelete({ itemId: item._id });
@@ -203,11 +203,11 @@ export function FlowItemsPanel(props: Props) {
                     </div>
                 )}
 
-                {/* Default Items Section */}
+                {/* Default Elements Section */}
                 {missingDefaultItems.length > 0 && !search && (
                     <div className="mt-4 pt-4 border-t border-gray-100">
                         <div className="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-                            Suggested Items
+                            Suggested Elements
                         </div>
                         {missingDefaultItems.map((def) => (
                             <div

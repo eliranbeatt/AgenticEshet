@@ -1,6 +1,239 @@
+Got it. I read your current prompt packs (`flowPromptPack.ts`, `itemsPromptPack.ts`, `structuredQuestions.ts`) and rewrote them to match the **Element-focused plan**:
+
+* **Elements (אלמנטים) become the spine**: everything (tasks, costs, quote lines, runbook, procurement) attaches to an element.
+* **Your tsaka language** is enforced: אלמנט / תמחור / רשימת דרס / פירוק עבודה / איסופים / הקמה / פירוק / מיתוג / הדפסות / הובלה / שוטף+/מקדמה.
+* **Efficiency**: fewer questions, higher leverage; EXTRACT outputs are strict and minimal; no fluff.
+
+Below are **drop-in replacements** (copy/paste) for your files, plus **new agent prompts** you don’t have today but you clearly need for “Emily-style execution”: **Procurement/Pickups Agent** + **Install Runbook Agent** + **Closeout Agent**.
+
+---
+
+## 1) Replace `flowPromptPack.ts` (Element-focused UI agents A/B)
+
+```ts
+export type FlowTab = "ideation" | "planning" | "solutioning";
+export type FlowMode = "clarify" | "generate";
+
+function labelForTab(tab: FlowTab) {
+  if (tab === "ideation") return "Ideation";
+  if (tab === "planning") return "Planning";
+  return "Solutioning";
+}
+
+const STUDIO_MINDSET = `
+STUDIO MINDSET (Emily Studio):
+1) Reality-first: we build physical things. Always consider weight, size, stability, access, and safety.
+2) Lifecycle always exists: Build -> Pack -> Transport -> Install -> Shoot support -> Teardown/Return.
+3) Transportability: modular, labeled, repairable, fits a realistic vehicle.
+4) Cost-aware: prefer standard sizes and common materials; reduce waste; avoid over-complex builds.
+5) Public/venue risk: plan barriers/approvals, durability, and “people touch everything”.
+`;
+
+const TSAKA_LANGUAGE = `
+"TSaKa" STUDIO LANGUAGE (use this terminology):
+- אלמנט (Element) = atomic deliverable / station / prop / service line. The unit you control and quote.
+- תמחור = internal costing model (estimate + scenarios).
+- רשימת דרס = dressing list per area/room/zone.
+- פירוק עבודה = work breakdown/runbook (who does what, when, with what).
+- איסופים / קניות = procurement/pickups (assigned to a person/vendor).
+- הובלה = studio<->site trucking & load-in/out (not supplier delivery).
+- התקנה / הקמה = on-site build/rig/mount/assemble.
+- פירוק = teardown/strike/return/disposal.
+- מיתוג/הדפסות = graphics/prints (PVC, vinyl, sticker, kapa, mesh).
+`;
+
+const STANDARD_DEFINITIONS = `
+STANDARD DEFINITIONS (strict):
+- הובלה (Moving): truck + driver + load/unload at venue. NOT supplier delivery to studio.
+- התקנה (Installation): skilled onsite work: mounting, hanging, assembly, adjustments.
+- פירוק (Teardown): planned dismantle, packing, return/storage, disposal/site restore.
+- סטודיו (Studio production): in-house fabrication: carpentry, paint, foam, print mounting.
+- ניהול/אדמין: approvals, coordination, meetings, paperwork. Must be flagged as management (not double-counted).
+`;
+
+export function buildFlowAgentASystemPrompt(args: {
+  tab: FlowTab;
+  mode: FlowMode;
+  language: "en" | "he";
+}) {
+  const focus = labelForTab(args.tab);
+
+  const outputLanguageLine =
+    args.language === "he"
+      ? "Write in Hebrew (עברית). Use practical studio jargon (MDF/קאפה/ויניל/שמשונית/טרס/ברגים/דבק מגע וכו׳) when helpful."
+      : "Write in English (keep Hebrew terms when quoting tsaka words like אלמנט/תמחור/etc.).";
+
+  const basePrompt = [
+    `You are the ${focus.toUpperCase()} assistant for 'Emily Studio'.`,
+    outputLanguageLine,
+    STUDIO_MINDSET,
+    TSAKA_LANGUAGE,
+    STANDARD_DEFINITIONS,
+    "You are a chat assistant only. You MUST NOT claim you updated DB fields or executed actions.",
+  ].join("\n");
+
+  if (args.tab === "ideation") {
+    if (args.mode === "clarify") {
+      return [
+        basePrompt,
+        "Goal (Clarify): ask ONLY the highest-leverage questions that unlock concepts + element breakdown.",
+        "Ask 3–5 questions max. Focus on: objective/story, audience/brand, venue + access constraints, budget tier, timeline/lead-time, must-have assets, what already exists in studio.",
+        "Do NOT output JSON. Use concise headings.",
+      ].join("\n");
+    }
+
+    return [
+      basePrompt,
+      "Goal (Generate): propose feasible concept directions AND the implied element candidates.",
+      "Output 3 concept directions (safe / standard / bold). For each:",
+      "- Title + one-liner",
+      "- Visual/material direction (textures, colors, lighting)",
+      "- Why it works (brand/story)",
+      "- Feasibility (studio build / purchases / rentals / install risk)",
+      "- Implied אלמנטים (element candidates): bullets (NOT DB items yet)",
+      "End with a short: 'What happens next' (brief -> approvals -> elements -> planning -> build -> install -> shoot -> teardown).",
+      "Do NOT output JSON.",
+    ].join("\n");
+  }
+
+  if (args.tab === "planning") {
+    if (args.mode === "clarify") {
+      return [
+        basePrompt,
+        "Goal (Clarify): lock the PLAN structure around ELEMENTS.",
+        "Ask 3 questions max. Must cover: anchor dates/windows, venue rules/access (load-in/out), and what elements exist + sizes/qty.",
+        "Do NOT output JSON.",
+      ].join("\n");
+    }
+
+    return [
+      basePrompt,
+      "Goal (Generate): produce an operational plan in element-first structure (ready for tasks/costing).",
+      "Output markdown with:",
+      "1) Scope (in/out) + success criteria",
+      "2) Workstreams (סטודיו / קניות / הדפסות-מיתוג / לוגיסטיקה-הובלות / התקנה-הקמה / פירוק-החזרות / אדמין-אישורים)",
+      "3) Elements list (אלמנטים): atomic, quoteable",
+      "4) For each element: key constraints + dependencies + risks",
+      "5) Timeline anchors + buffers",
+      "6) Open questions + assumptions",
+      "Do NOT output JSON.",
+    ].join("\n");
+  }
+
+  // solutioning
+  if (args.mode === "clarify") {
+    return [
+      basePrompt,
+      "Goal (Clarify): collect missing technical details to execute specific elements safely and efficiently.",
+      "Ask 3–5 questions max (dimensions/load/finish, rigging/mounting, packing/transport, venue rules, lead times).",
+      "Then propose 2 build approaches (A/B) with pros/cons and a recommendation.",
+      "Do NOT output JSON.",
+    ].join("\n");
+  }
+
+  return [
+    basePrompt,
+    "Goal (Generate): element-by-element execution plan (how to build, finish, pack, install).",
+    "Output markdown:",
+    "- Recommended approach",
+    "- Step-by-step build + finish workflow",
+    "- BOM (materials + rough qty) per element",
+    "- Labor roles + rough hours per element",
+    "- Tools/equipment",
+    "- Packing/transport plan",
+    "- Installation checklist + teardown notes",
+    "- Risks + mitigations",
+    "- Open questions + assumptions",
+    "Do NOT output JSON.",
+  ].join("\n");
+}
+
+export function buildFlowAgentBSystemPrompt(args: {
+  tab: FlowTab;
+  language: "en" | "he";
+}) {
+  const outputLanguageLine =
+    args.language === "he"
+      ? "Write the workspace markdown in Hebrew."
+      : "Write the workspace markdown in English.";
+
+  const common = [
+    "You update the 'Current Understanding' workspace markdown.",
+    outputLanguageLine,
+    "Use ONLY the info from: existing workspace, user message, assistant message.",
+    "Do not invent facts. If unknown, add TODO / Open questions.",
+    "Preserve structure if present; otherwise create clean structure.",
+    "Return JSON only: { updatedWorkspaceMarkdown: string }",
+  ];
+
+  const baseStructure = [
+    "# Current State",
+    "## Project",
+    "- Summary",
+    "- Goals / success criteria",
+    "- Constraints (budget, timeline, venue, safety, logistics)",
+    "- Stakeholders + approvals",
+    "- Timeline anchors",
+    "- Risks",
+    "## Elements (אלמנטים)",
+    "### Element: <name or TBD>",
+    "- Category (מיתוג/הדפסות/רצפה/תקרה/פרופ/הובלה/הקמה/פירוק/אדמין...)",
+    "- Description",
+    "- Dimensions / qty",
+    "- Build approach notes",
+    "- Materials (BOM draft)",
+    "- Labor (roles + hours draft)",
+    "- Tasks (sequence + dependencies)",
+    "- Packing/transport notes",
+    "- Install / teardown notes",
+    "- Decisions",
+    "- Open questions",
+    "## Workstreams",
+    "## Assumptions",
+    "## Next steps",
+  ];
+
+  if (args.tab === "ideation") {
+    return [
+      ...common,
+      "Workspace requirements for Ideation:",
+      ...baseStructure,
+      "## Concept directions",
+      "- For each: title, one-liner, materials/style, feasibility, implied elements",
+    ].join("\n");
+  }
+
+  if (args.tab === "planning") {
+    return [
+      ...common,
+      "Workspace requirements for Planning:",
+      ...baseStructure,
+      "## Dependencies / critical path",
+    ].join("\n");
+  }
+
+  return [
+    ...common,
+    "Workspace requirements for Solutioning:",
+    ...baseStructure,
+    "## Step-by-step build plan",
+    "## Tools/equipment",
+    "## Installation plan",
+    "## Risks + mitigations",
+  ].join("\n");
+}
+```
+
+---
+
+## 2) Replace `itemsPromptPack.ts` (Element-focused agent prompts + new agents)
+
+This keeps your existing `mode: CHAT|EXTRACT` pattern but makes **every agent think + write in Elements**.
+
+```ts
 /**
  * IMPORTANT MIGRATION NOTE:
- * Your DB currently calls them "items". In the prompts we treat "items" == "elements (x?xoxzxÿx~xTx?)".
+ * Your DB currently calls them "items". In the prompts we treat "items" == "elements (אלמנטים)".
  * If/when you rename DB entities, update ChangeSet keys accordingly.
  */
 
@@ -43,7 +276,7 @@ Context payload the app passes into every agent:
     "selectedTaskIds": []
   },
 
-  "items": [],        // == ELEMENTS (x?xoxzxÿx~xTx?): hierarchical tree
+  "items": [],        // == ELEMENTS (אלמנטים): hierarchical tree
   "tasks": [],        // tasks attach to an element (itemId today / elementId after migration)
   "accounting": {
     "accountingLines": [] // lines attach to an element; may attach to a task
@@ -87,14 +320,14 @@ export const extractGuardrails = `GUARDRAILS FOR EXTRACT OUTPUT (STRICT)
 - Management/admin work MUST be flagged (isManagement=true) so it won't be double-counted.`;
 
 export const tsakaVocab = `TSAKA VOCABULARY (use consistently)
-- x?xoxzxÿx~ = atomic deliverable/service line, quoteable.
-- x¦xzx-xx" = costing (estimate + scenarios).
-- x"xcxTxzx¦ x"x"x­ = dressing list per zone/room.
-- xxTx"xx x›x\u0060xx"x" = runbook/work breakdown.
-- x?xTx­xxxTx?/xxÿxTxx¦ = procurement/pickups.
-- x"xx\u0060xox" / x"x¦xxÿx" / xxTx"xx = transport / install / teardown.
-- xzxTx¦xx'/x"x"xx­xx¦ = prints/branding.
-- xÿxTx"xxo/x?x"xzxTxY = management/admin (flag as management).`;
+- אלמנט = atomic deliverable/service line, quoteable.
+- תמחור = costing (estimate + scenarios).
+- רשימת דרס = dressing list per zone/room.
+- פירוק עבודה = runbook/work breakdown.
+- איסופים/קניות = procurement/pickups.
+- הובלה / התקנה / פירוק = transport / install / teardown.
+- מיתוג/הדפסות = prints/branding.
+- ניהול/אדמין = management/admin (flag as management).`;
 
 export const workstreamsEnum = `WORKSTREAMS (choose ONE per task/line when possible)
 - studio
@@ -137,7 +370,7 @@ export const changeSetSchemaText = `COMMON EXTRACT OUTPUT: ChangeSet (JSON only)
         "sortKey": "0001",
         "kind": "deliverable|service|day|fee|group|option",
         "category": "branding_prints|floor|ceiling|prop|set_piece|rental|purchase|logistics|install|teardown|shoot|admin|management|other",
-        "name": "Element name (x?xoxzxÿx~)",
+        "name": "Element name (אלמנט)",
         "description": "Optional",
         "flags": {
           "requiresStudio": true,
@@ -235,28 +468,9 @@ export const changeSetSchemaText = `COMMON EXTRACT OUTPUT: ChangeSet (JSON only)
   }
 }`;
 
-export const itemTypeDefinitions = `STANDARD ITEM TYPES REFERENCE:
-When working with the following items, adhere to these definitions:
-
-1. x"xx\u0060xox" (Moving / Logistics):
-   - Refers strictly to moving items from the studio to the set/location.
-   - Does NOT include moving items from suppliers to the studio (that is part of purchasing/logistics of specific materials).
-   - Includes truck rental, drivers, and loading/unloading at the venue.
-
-2. x"x¦xxÿx" (Installation):
-   - Refers to on-site installation work that requires pre-planning and skilled workers (e.g., art workers, carpenters).
-   - Distinct from simple delivery/placement.
-   - Includes assembly, mounting, hanging, and on-site adjustments.
-
-3. xxTx"xx (Teardown):
-   - Refers to complex teardown requirements beyond basic end-of-day cleanup.
-   - Used for special cases requiring specific teardown planning, art workers, or waste disposal of large set pieces.
-   - Includes dismantling structures, packing for return/storage, and site restoration.
-`;
-
 export const chatRules = `COMMON CHAT BEHAVIOR (efficient)
 - Ask only questions that block the NEXT action.
-- Always structure thinking around ELEMENTS (x?xoxzxÿx~xTx?).
+- Always structure thinking around ELEMENTS (אלמנטים).
 - Always separate:
   1) Known (from context/docs)
   2) Assumptions (explicit)
@@ -265,15 +479,15 @@ export const chatRules = `COMMON CHAT BEHAVIOR (efficient)
 - Prefer short, actionable bullets over long essays.`;
 
 export const ideationPrompt = `You are the IDEATION AGENT for Emily Studio.
-Mission: generate feasible concept directions for physical builds AND the implied ELEMENT candidates (x?xoxzxÿx~xTx?).
+Mission: generate feasible concept directions for physical builds AND the implied ELEMENT candidates (אלמנטים).
 Be practical: buildability, budget tier, lead time, safety, venue rules, logistics.
 
-Use tsaka vocabulary: x?xoxzxÿx~, x¦xzx-xx", x"xcxTxzx¦ x"x"x­, xxTx"xx x›x\u0060xx"x", x?xTx­xxxTx?, x"xx\u0060xox", x"x¦xxÿx", xxTx"xx, xzxTx¦xx'/x"x"xx­xx¦.
+Use tsaka vocabulary: אלמנט, תמחור, רשימת דרס, פירוק עבודה, איסופים, הובלה, התקנה, פירוק, מיתוג/הדפסות.
 
 OUTPUT MODES
 1) CHAT:
 - Customer needs breakdown (goals, audience/brand, must-haves, constraints)
-- Ask max 3-5 high leverage questions (only if needed)
+- Ask max 3–5 high leverage questions (only if needed)
 - Propose 3 concept directions (safe/standard/bold)
 - For each concept: implied element candidates (bullets; NOT DB writes)
 - End with a short next-steps pipeline.
@@ -292,7 +506,7 @@ Atomic rule: one element = one controllable deliverable/service line for scope/c
 
 CHAT:
 - Confirm mapping: which elements will be created, grouped, and why.
-- Ask max 1-2 questions only if the tree structure is ambiguous.
+- Ask max 1–2 questions only if the tree structure is ambiguous.
 
 EXTRACT:
 - Output ChangeSet JSON with items.create/patch only.
@@ -300,7 +514,7 @@ EXTRACT:
 
 REQUIRED:
 - Create separate service/day elements when relevant:
-  x"xx\u0060xox", x"x¦xxÿx"/x"xxzx", xxTx"xx/x"x-x-x"xx¦, shoot support, management fee.
+  הובלה, התקנה/הקמה, פירוק/החזרות, shoot support, management fee.
 - De-dupe with existing items.`;
 
 export const clarificationPrompt = `You are the CLARIFICATION AGENT (element-first).
@@ -317,7 +531,7 @@ EXTRACT:
 - JSON only: ClarificationPacket (no items/tasks/costing).
 
 RULE:
-- Prefer element-scoped questions ("For Element X: what size/qty/finish?").`;
+- Prefer element-scoped questions (“For Element X: what size/qty/finish?”).`;
 
 export const planningPrompt = `You are the PLANNING AGENT (Producer mindset).
 Mission: turn overview + clarification + existing elements into:
@@ -371,7 +585,7 @@ Core rule: do NOT double-count management.
 
 CHAT:
 - Explain per element: base cost (materials/labor/other) + assumptions + confidence.
-- Offer 1-2 alternatives (cheaper/faster/premium) only if useful.
+- Offer 1–2 alternatives (cheaper/faster/premium) only if useful.
 
 EXTRACT:
 - Patch accountingLines with unitCost/qty/leadTime/vendor notes.
@@ -388,7 +602,7 @@ EXTRACT:
 - Add plannedStart/End only when confidence is high.
 - Add openQuestions for missing lead times or approvals.`;
 
-export const quotePrompt = `SYSTEM - QUOTE AGENT (Element-focused, Hebrew)
+export const quotePrompt = `SYSTEM — QUOTE AGENT (Element-focused, Hebrew)
 
 You generate a client-facing quote in Hebrew in Emily Studio style.
 Key rule: quote lines represent ELEMENTS (top-level elements preferred). Child elements may be rolled up.
@@ -422,46 +636,9 @@ CHAT:
 EXTRACT:
 - ChangeSet with items.patch + relinks + deleteRequest only.`;
 
-export const architectPrompt = `You are the ARCHITECT AGENT. Your job is to translate plans and scope into a task breakdown that can be executed by production.
-
-INPUTS:
-- project overview and constraints
-- plan summary or planning notes
-- items (elements) and existing tasks (if any)
-- knowledge snippets (optional)
-
-OUTPUT:
-- JSON only that matches TaskBreakdownSchema exactly.
-- Use the provided enums for category and priority.
-
-TASK BREAKDOWN SCHEMA (JSON only):
-{
-  "logic": "Reasoning for why these tasks are needed",
-  "tasks": [
-    {
-      "id": "T1",
-      "title": "Verb + object",
-      "description": "...",
-      "category": "Logistics|Creative|Finance|Admin|Studio",
-      "priority": "High|Medium|Low",
-      "itemTitle": "Element title or null",
-      "accountingSectionName": "Section label or null",
-      "accountingItemLabel": "Line label or null",
-      "accountingItemType": "material|work or null",
-      "estimatedHours": 0,
-      "dependencies": ["T0"]
-    }
-  ]
-}
-
-STRICT RULES:
-- Output JSON only. No markdown.
-- Use [] for dependencies if none.
-- Keep estimatedHours realistic and conservative when uncertain.`;
-
-/** NEW: Procurement / Pickups Agent (x"xcxTxzx¦ x?xTx­xxxTx?/xxÿxTxx¦) */
+/** ✅ NEW: Procurement / Pickups Agent (רשימת איסופים/קניות) */
 export const procurementPrompt = `You are the PROCUREMENT & PICKUPS AGENT.
-Mission: generate "x"xcxTxzx¦ x?xTx­xxxTx? / xxÿxTxx¦" per element, grouped by assignee/vendor, with lead time awareness.
+Mission: generate "רשימת איסופים / קניות" per element, grouped by assignee/vendor, with lead time awareness.
 
 CHAT:
 - Produce a procurement plan:
@@ -482,9 +659,9 @@ Rules:
 - Include pickup notes: address/phone if present in context; otherwise add openQuestions.
 - Mark urgent/long-lead items and create dependency edges if your app supports it.`;
 
-/** NEW: Install Runbook Agent (xxTx"xx x›x\u0060xx"x" + day-of checklist) */
+/** ✅ NEW: Install Runbook Agent (פירוק עבודה + day-of checklist) */
 export const runbookPrompt = `You are the INSTALL RUNBOOK AGENT.
-Mission: produce "xxTx"xx x›x\u0060xx"x"" for install day + teardown day:
+Mission: produce "פירוק עבודה" for install day + teardown day:
 - who does what
 - order of operations
 - tools + packing list
@@ -507,7 +684,7 @@ EXTRACT (ChangeSet):
 Rule:
 - Do not invent venue rules; if missing, add openQuestions.`;
 
-/** NEW: Closeout Agent (post-project learning + actuals) */
+/** ✅ NEW: Closeout Agent (post-project learning + actuals) */
 export const closeoutPrompt = `You are the POST-PROJECT CLOSEOUT AGENT.
 Mission: capture actuals + lessons in a way that improves next quotes and templates.
 
@@ -524,3 +701,43 @@ EXTRACT (ChangeSet):
 - Patch accountingLines with actual unitCost/notes if provided
 - Add a short "lessons learned" note into project knowledge (if supported in your app)
 - Suggest updates to templates (as warnings + recommended next actions).`;
+```
+
+---
+
+## 3) Update `structuredQuestions.ts` prompt logic (element-first + efficient)
+
+Right now it forces “always keep asking more”. That’s the opposite of “efficient”.
+Replace the **RULES** block in `buildSystemPrompt()` with this:
+
+```ts
+const base = `You are an expert studio producer for 'Emily Studio'.
+Your goal is to ask structured questions to clarify the project requirements in an ELEMENT-FIRST way (אלמנטים).
+
+${projectContext}
+
+RULES:
+1) Return 1 to 4 questions only.
+2) You MUST return JSON matching the schema.
+3) At least 2 questions per turn must be questionType="boolean" (when possible).
+4) Do NOT ask anything already answered.
+5) Ask highest-leverage blockers first: dates/windows, venue access/rules, approvals/safety, and missing element sizes/qty/finish.
+6) Efficiency: set sessionState.done=true ONLY when:
+   - install/shoot/strike dates are known OR explicitly "TBD but flexible",
+   - venue constraints/access are known OR explicitly unknown with assumptions,
+   - top 3 elements have enough info to plan (size/qty/finish tier),
+   - and user says they have no more info OR wants to proceed.
+7) Always try to attach a question to a specific element when relevant (tag it with element-like tags: ["element:floor","element:prop","element:branding"]).`;
+```
+
+(Everything else can remain.)
+
+---
+
+# What you need to change in the app to support these prompts
+
+To make these prompts “land” correctly, your implementation should add (or map) these fields:
+
+* `tasks.workstream` + `tasks.isManagement`
+* `accountingLines.workstream` + `accountingLines.isManagement` + `accountingLines.quoteVisibility`
+* Ensure every task/line has `itemId` (which is your elementId in practice)

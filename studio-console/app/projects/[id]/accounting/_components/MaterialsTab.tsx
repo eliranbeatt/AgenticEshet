@@ -7,8 +7,23 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { Save, Plus, Wand2, Pencil, Trash2, X, ShoppingCart } from "lucide-react";
 import { BuyingAssistantPanel } from "../../quote/_components/BuyingAssistantPanel";
 import { type ProjectAccountingData, type ProjectAccountingSection } from "./AccountingTypes";
+import { type CostingOptions } from "@/src/lib/costing";
 
-export default function MaterialsTab({ data, projectId }: { data: ProjectAccountingData, projectId: Id<"projects"> }) {
+export default function MaterialsTab({
+  data,
+  projectId,
+  selectedElementId,
+  includeManagement,
+  includeOptional,
+  respectVisibility,
+}: {
+  data: ProjectAccountingData;
+  projectId: Id<"projects">;
+  selectedElementId: Id<"projectItems"> | "unlinked" | null;
+  includeManagement: boolean;
+  includeOptional: boolean;
+  respectVisibility: boolean;
+}) {
   const addMaterialLine = useMutation(api.accounting.addMaterialLine);
   const updateMaterialLine = useMutation(api.accounting.updateMaterialLine);
   const deleteMaterialLine = useMutation(api.accounting.deleteMaterialLine);
@@ -37,9 +52,20 @@ export default function MaterialsTab({ data, projectId }: { data: ProjectAccount
     }
   };
 
-  const filteredSections = filterSection === "all" 
-    ? data.sections 
-    : data.sections.filter((s: ProjectAccountingSection) => s.section._id === filterSection);
+  const baseSections = selectedElementId
+    ? data.sections.filter((s) =>
+        selectedElementId === "unlinked"
+          ? !s.section.itemId
+          : s.section.itemId === selectedElementId
+      )
+    : data.sections;
+
+  const options: CostingOptions = { includeManagement, includeOptional, respectVisibility };
+
+  const filteredSections =
+    filterSection === "all"
+      ? baseSections
+      : baseSections.filter((s: ProjectAccountingSection) => s.section._id === filterSection);
 
   const handleAddLine = async (sectionId: Id<"sections">) => {
     await addMaterialLine({
@@ -82,7 +108,7 @@ export default function MaterialsTab({ data, projectId }: { data: ProjectAccount
                 onChange={(e) => setFilterSection(e.target.value)}
             >
                 <option value="all">All Sections</option>
-                {data.sections.map((s) => (
+                {baseSections.map((s) => (
                     <option key={s.section._id} value={s.section._id}>{s.section.name}</option>
                 ))}
             </select>
@@ -91,14 +117,22 @@ export default function MaterialsTab({ data, projectId }: { data: ProjectAccount
 
       <div className="space-y-6">
         {filteredSections.map((item) => {
-            const { section, materials } = item;
+            const { section } = item;
+            const materials = item.materials.filter((line) => {
+                if (!options.includeManagement && line.isManagement) return false;
+                if (!options.respectVisibility) return true;
+                const visibility = line.quoteVisibility ?? "include";
+                if (visibility === "exclude") return false;
+                if (visibility === "optional" && !options.includeOptional) return false;
+                return true;
+            });
             return (
                 <div key={section._id} className="border rounded-lg overflow-hidden">
                     <div className="bg-gray-50 px-4 py-2 border-b flex justify-between items-center">
                         <div>
                             <h3 className="font-medium text-gray-700">{section.name}</h3>
                             {item.item && (
-                                <div className="text-xs text-blue-600">Item: {item.item.title}</div>
+                                <div className="text-xs text-blue-600">Element: {item.item.title}</div>
                             )}
                         </div>
                         <div className="flex space-x-2">
@@ -148,6 +182,7 @@ export default function MaterialsTab({ data, projectId }: { data: ProjectAccount
                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item</th>
                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Vendor</th>
                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Procurement</th>
+                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Visibility</th>
                                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-blue-50">Plan Qty</th>
                                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-blue-50">Plan Cost</th>
                                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase bg-green-50">Act Qty</th>
@@ -303,6 +338,8 @@ function MaterialRow({
         }
     };
 
+    const visibility = line.quoteVisibility ?? "include";
+
     return (
         <>
             <tr className="hover:bg-gray-50">
@@ -356,6 +393,24 @@ function MaterialRow({
                         <option value="abroad">Order abroad</option>
                         <option value="either">Local or abroad</option>
                     </select>
+                </td>
+                <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                            visibility === "exclude"
+                                ? "border-red-200 bg-red-50 text-red-700"
+                                : visibility === "optional"
+                                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        }`}>
+                            {visibility}
+                        </span>
+                        {line.isManagement && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600">
+                                management
+                            </span>
+                        )}
+                    </div>
                 </td>
                 <td className="px-3 py-2 text-right bg-blue-50/30">
                     {isEditing ? (
@@ -466,7 +521,7 @@ function MaterialRow({
             </tr>
             {showAssistant && (
                 <tr>
-                    <td colSpan={9} className="bg-gray-50 p-0">
+                    <td colSpan={10} className="bg-gray-50 p-0">
                         <div className="p-4 border-b border-gray-200 shadow-inner">
                             <BuyingAssistantPanel materialLineId={line._id} label={line.label} />
                         </div>

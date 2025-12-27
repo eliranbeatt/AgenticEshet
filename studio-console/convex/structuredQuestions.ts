@@ -86,6 +86,28 @@ export const saveAnswers = mutation({
         userInstructions: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
+        const normalizeAnswers = (answers: any[]) => {
+            if (!Array.isArray(answers)) return [];
+            const normalized: Array<{ questionId: string; quick: string; text?: string }> = [];
+            for (const answer of answers) {
+                if (!answer || typeof answer !== "object") continue;
+                const questionId = typeof answer.questionId === "string" ? answer.questionId : "";
+                if (!questionId) continue;
+                const text = typeof answer.text === "string" ? answer.text.trim() : undefined;
+                let quick = typeof answer.quick === "string" ? answer.quick : "";
+                if (!["yes", "no", "idk", "irrelevant"].includes(quick)) {
+                    if (text && text.length > 0) {
+                        quick = "idk";
+                    } else {
+                        continue;
+                    }
+                }
+                normalized.push({ questionId, quick, text: text && text.length > 0 ? text : undefined });
+            }
+            return normalized;
+        };
+
+        const normalizedAnswers = normalizeAnswers(args.answers);
         console.log("saveAnswers called for session", args.sessionId, "turn", args.turnNumber);
         const turn = await ctx.db
             .query("structuredQuestionTurns")
@@ -99,7 +121,7 @@ export const saveAnswers = mutation({
         }
 
         await ctx.db.patch(turn._id, {
-            answers: args.answers,
+            answers: normalizedAnswers,
             userInstructions: args.userInstructions,
             answeredAt: Date.now(),
         });
@@ -143,7 +165,7 @@ export const saveAnswers = mutation({
                     id: q.id, 
                     text: q.text || q.title || q.prompt || "Question" 
                 })),
-                userAnswers: (args.answers as any[]).map((a: any) => ({ 
+                userAnswers: normalizedAnswers.map((a: any) => ({ 
                     qId: a.questionId, 
                     quick: a.quick, 
                     text: a.text 

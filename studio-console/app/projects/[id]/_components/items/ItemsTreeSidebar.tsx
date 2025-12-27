@@ -93,9 +93,9 @@ export function ItemsTreeSidebar() {
     }, [items]);
 
     const handleCreateManual = async () => {
-        const title = prompt("Item title?") ?? "";
+        const title = prompt("Element title?") ?? "";
         if (!title.trim()) return;
-        const typeKey = prompt("Item type? (e.g. build, rental, logistics)", "general") ?? "general";
+        const typeKey = prompt("Element type? (e.g. build, rental, logistics)", "general") ?? "general";
         if (!typeKey.trim()) return;
         setIsCreating(true);
         try {
@@ -143,7 +143,7 @@ export function ItemsTreeSidebar() {
                                         event.stopPropagation();
                                         if (children.length > 0) toggleExpanded(item._id);
                                     }}
-                                    aria-label={isExpanded ? "Collapse item" : "Expand item"}
+                                    aria-label={isExpanded ? "Collapse element" : "Expand element"}
                                 >
                                     {children.length > 0 ? (isExpanded ? "▾" : "▸") : "•"}
                                 </button>
@@ -166,7 +166,7 @@ export function ItemsTreeSidebar() {
                                                 className="text-[11px] text-blue-700 hover:underline"
                                                 onClick={(event) => {
                                                     event.stopPropagation();
-                                                    const next = prompt("Rename item:", item.title) ?? "";
+                                                    const next = prompt("Rename element:", item.title) ?? "";
                                                     if (!next.trim() || next.trim() === item.title) return;
                                                     void renameItem({ itemId: item._id, newTitle: next.trim() });
                                                 }}
@@ -190,7 +190,7 @@ export function ItemsTreeSidebar() {
                                                     className="text-[11px] text-gray-500 hover:underline"
                                                     onClick={(event) => {
                                                         event.stopPropagation();
-                                                        if (!confirm("Archive this item?")) return;
+                                                        if (!confirm("Archive this element?")) return;
                                                         void archiveItem({ itemId: item._id });
                                                     }}
                                                 >
@@ -214,11 +214,11 @@ export function ItemsTreeSidebar() {
     return (
         <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
             <div className="p-3 border-b">
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Items</div>
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Elements</div>
                 <div className="mt-2">
                     <input
                         className="w-full border rounded px-2 py-1 text-sm"
-                        placeholder="Search items..."
+                        placeholder="Search elements..."
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                     />
@@ -229,7 +229,7 @@ export function ItemsTreeSidebar() {
                         checked={showDraftItems}
                         onChange={(e) => setShowDraftItems(e.target.checked)}
                     />
-                    Show draft items
+                    Show draft elements
                 </label>
                 <div className="mt-2 flex flex-wrap gap-2">
                     <button
@@ -238,7 +238,7 @@ export function ItemsTreeSidebar() {
                         disabled={isCreating}
                         className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
                     >
-                        {isCreating ? "Creating..." : "New item"}
+                        {isCreating ? "Creating..." : "New element"}
                     </button>
                     {(templates ?? []).map((template) => (
                         <button
@@ -261,7 +261,7 @@ export function ItemsTreeSidebar() {
 
             <div className="flex-1 overflow-y-auto">
                 {sidebarData === undefined ? (
-                    <div className="p-4 text-sm text-gray-500">Loading items...</div>
+                    <div className="p-4 text-sm text-gray-500">Loading elements...</div>
                 ) : (
                     <div className="py-2">
                         {missingDefaultItems.length > 0 && !search && (
@@ -302,9 +302,9 @@ export function ItemsTreeSidebar() {
                             </div>
                         )}
                         {items.length === 0 && missingDefaultItems.length === 0 ? (
-                            <div className="p-4 text-sm text-gray-500">No items found.</div>
+                            <div className="p-4 text-sm text-gray-500">No elements found.</div>
                         ) : visibleIds && visibleIds.size === 0 ? (
-                            <div className="p-4 text-sm text-gray-500">No items found.</div>
+                            <div className="p-4 text-sm text-gray-500">No elements found.</div>
                         ) : (
                             renderTree(null, 0)
                         )}

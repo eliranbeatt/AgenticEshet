@@ -3,8 +3,17 @@ import { query, mutation } from "./_generated/server";
 import { TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
 
 export const listByProject = query({
-    args: { projectId: v.id("projects") },
+    args: { projectId: v.id("projects"), itemId: v.optional(v.id("projectItems")) },
     handler: async (ctx, args) => {
+        if (args.itemId) {
+            return await ctx.db
+                .query("tasks")
+                .withIndex("by_project_item", (q) =>
+                    q.eq("projectId", args.projectId).eq("itemId", args.itemId)
+                )
+                .collect();
+        }
+
         return await ctx.db
             .query("tasks")
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
@@ -64,6 +73,8 @@ export const createTask = mutation({
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
         itemId: v.optional(v.id("projectItems")),
         itemSubtaskId: v.optional(v.string()),
+        workstream: v.optional(v.string()),
+        isManagement: v.optional(v.boolean()),
         source: v.optional(v.union(v.literal("user"), v.literal("agent"))),
         // Gantt fields
         estimatedDuration: v.optional(v.number()), // in milliseconds
@@ -99,6 +110,8 @@ export const createTask = mutation({
             accountingLineId: args.accountingLineId,
             itemId: args.itemId,
             itemSubtaskId: args.itemSubtaskId,
+            workstream: args.workstream,
+            isManagement: args.isManagement,
             source: args.source ?? "user",
             taskNumber,
             estimatedDuration: args.estimatedDuration,
@@ -148,6 +161,8 @@ export const updateTask = mutation({
         accountingLineId: v.optional(v.union(v.id("materialLines"), v.id("workLines"))),
         itemId: v.optional(v.id("projectItems")),
         itemSubtaskId: v.optional(v.string()),
+        workstream: v.optional(v.string()),
+        isManagement: v.optional(v.boolean()),
 
         // Gantt fields
         startDate: v.optional(v.number()),

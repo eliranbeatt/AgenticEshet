@@ -574,7 +574,7 @@ function TaskCard({
                 </span>
                 {itemLabel && (
                     <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
-                        Item: {itemLabel}
+                        Element: {itemLabel}
                     </span>
                 )}
             </div>
@@ -598,7 +598,7 @@ function TaskCard({
                     onChange={(value) => onUpdate({ taskId: task._id, priority: value as Doc<"tasks">["priority"] })}
                 />
                 <InlineSelect
-                    label="Item"
+                    label="Element"
                     value={task.itemId ?? ""}
                     options={itemLinkOptions}
                     includeUnassigned
@@ -625,7 +625,7 @@ function TaskCard({
                     }
                 />
                 <InlineSelect
-                    label="Item"
+                    label="Element"
                     value={itemValue}
                     options={itemOptions}
                     includeUnassigned
@@ -773,7 +773,7 @@ function TaskControlsBar({
                         options={[
                             { label: "None", value: "none" },
                             { label: "Section", value: "section" },
-                            { label: "Item", value: "item" },
+                            { label: "Element", value: "item" },
                             { label: "Priority", value: "priority" },
                             { label: "Category", value: "category" },
                             { label: "Status", value: "status" },

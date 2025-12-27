@@ -51,7 +51,11 @@ export const listByProject = query({
             v.literal("accounting"),
             v.literal("tasks"),
             v.literal("item_edit"),
-            v.literal("convert")
+            v.literal("convert"),
+            v.literal("element_edit"),
+            v.literal("procurement"),
+            v.literal("runbook"),
+            v.literal("closeout")
         )),
         status: v.optional(v.union(v.literal("pending"), v.literal("approved"), v.literal("rejected"))),
     },
@@ -113,6 +117,7 @@ export const create = mutation({
             phase: changeSet.phase,
             agentName: changeSet.agentName,
             runId: undefined,
+            ideaSelectionId: undefined,
             status: "pending",
             createdAt: now,
             title: changeSet.summary,
@@ -223,6 +228,18 @@ export const create = mutation({
         }
 
         return { changeSetId };
+    },
+});
+
+export const setIdeaSelection = mutation({
+    args: {
+        changeSetId: v.id("itemChangeSets"),
+        ideaSelectionId: v.id("ideaSelections"),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.changeSetId, {
+            ideaSelectionId: args.ideaSelectionId,
+        });
     },
 });
 
@@ -386,6 +403,8 @@ export const apply = mutation({
                 parentTaskTempId?: string | null;
                 title: string;
                 description?: string;
+                workstream?: string;
+                isManagement?: boolean;
                 durationHours: number;
                 status: Doc<"tasks">["status"];
                 tags: string[];
@@ -404,6 +423,8 @@ export const apply = mutation({
                 parentTaskId: parentTaskId ?? undefined,
                 title: payload.title,
                 description: payload.description,
+                workstream: payload.workstream,
+                isManagement: payload.isManagement,
                 status: payload.status ?? "todo",
                 category: "Studio",
                 priority: "Medium",
@@ -437,6 +458,9 @@ export const apply = mutation({
                 lineType: string;
                 title: string;
                 notes?: string;
+                workstream?: string;
+                isManagement?: boolean;
+                quoteVisibility?: string;
                 quantity?: number;
                 unit?: string;
                 unitCost?: number;
@@ -458,6 +482,9 @@ export const apply = mutation({
                 lineType: payload.lineType as Doc<"accountingLines">["lineType"],
                 title: payload.title,
                 notes: payload.notes,
+                workstream: payload.workstream,
+                isManagement: payload.isManagement,
+                quoteVisibility: payload.quoteVisibility as Doc<"accountingLines">["quoteVisibility"],
                 quantity: payload.quantity,
                 unit: payload.unit,
                 unitCost: payload.unitCost,

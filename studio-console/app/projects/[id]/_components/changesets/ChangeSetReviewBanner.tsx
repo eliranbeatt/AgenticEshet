@@ -5,7 +5,17 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 
-type Phase = "planning" | "solutioning" | "accounting" | "tasks" | "item_edit" | "convert";
+type Phase =
+    | "planning"
+    | "solutioning"
+    | "accounting"
+    | "tasks"
+    | "item_edit"
+    | "convert"
+    | "element_edit"
+    | "procurement"
+    | "runbook"
+    | "closeout";
 
 export function ChangeSetReviewBanner({
     projectId,
@@ -118,7 +128,7 @@ export function ChangeSetReviewBanner({
                                         </div>
 
                                         <div className="grid gap-3 sm:grid-cols-2 text-sm">
-                                            <InfoCard label="Items" value={String(active.counts?.items ?? 0)} />
+                                            <InfoCard label="Elements" value={String(active.counts?.items ?? 0)} />
                                             <InfoCard label="Tasks" value={String(active.counts?.tasks ?? 0)} />
                                             <InfoCard label="Accounting" value={String(active.counts?.accountingLines ?? 0)} />
                                             <InfoCard label="Dependencies" value={String(active.counts?.dependencies ?? 0)} />

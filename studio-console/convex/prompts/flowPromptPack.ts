@@ -18,24 +18,24 @@ STUDIO MINDSET (Emily Studio):
 
 const TSAKA_LANGUAGE = `
 "TSaKa" STUDIO LANGUAGE (use this terminology):
-- x?xoxzxÿx~ (Element) = atomic deliverable / station / prop / service line. The unit you control and quote.
-- x¦xzx-xx" = internal costing model (estimate + scenarios).
-- x"xcxTxzx¦ x"x"x­ = dressing list per area/room/zone.
-- xxTx"xx x›x\u0060xx"x" = work breakdown/runbook (who does what, when, with what).
-- x?xTx­xxxTx? / xxÿxTxx¦ = procurement/pickups (assigned to a person/vendor).
-- x"xx\u0060xox" = studio<->site trucking & load-in/out (not supplier delivery).
-- x"x¦xxÿx" / x"xxzx" = on-site build/rig/mount/assemble.
-- xxTx"xx = teardown/strike/return/disposal.
-- xzxTx¦xx'/x"x"xx­xx¦ = graphics/prints (PVC, vinyl, sticker, kapa, mesh).
+- אלמנט (Element) = atomic deliverable / station / prop / service line. The unit you control and quote.
+- תמחור = internal costing model (estimate + scenarios).
+- רשימת הלבשה = dressing list per area/room/zone.
+- ראנבוק = work breakdown/runbook (who does what, when, with what).
+- רכש/איסופים = procurement/pickups (assigned to a person/vendor).
+- ????? = studio<->site trucking & load-in/out (not supplier delivery).
+- התקנה / הרכבה = on-site build/rig/mount/assemble.
+- ????? = teardown/strike/return/disposal.
+- גרפיקות/דפוס = graphics/prints (PVC, vinyl, sticker, kapa, mesh).
 `;
 
 const STANDARD_DEFINITIONS = `
 STANDARD DEFINITIONS (strict):
-- x"xx\u0060xox" (Moving): truck + driver + load/unload at venue. NOT supplier delivery to studio.
-- x"x¦xxÿx" (Installation): skilled onsite work: mounting, hanging, assembly, adjustments.
-- xxTx"xx (Teardown): planned dismantle, packing, return/storage, disposal/site restore.
-- x­x~xx"xTx (Studio production): in-house fabrication: carpentry, paint, foam, print mounting.
-- xÿxTx"xxo/x?x"xzxTxY: approvals, coordination, meetings, paperwork. Must be flagged as management (not double-counted).
+- ????? (Moving): truck + driver + load/unload at venue. NOT supplier delivery to studio.
+- התקנה (Installation): skilled onsite work: mounting, hanging, assembly, adjustments.
+- ????? (Teardown): planned dismantle, packing, return/storage, disposal/site restore.
+- ?????? ?????? (Studio production): in-house fabrication: carpentry, paint, foam, print mounting.
+- ניהול/אדמין: approvals, coordination, meetings, paperwork. Must be flagged as management (not double-counted).
 `;
 
 export function buildFlowAgentASystemPrompt(args: {
@@ -47,8 +47,8 @@ export function buildFlowAgentASystemPrompt(args: {
 
     const outputLanguageLine =
         args.language === "he"
-            ? `Write in Hebrew (x›x\u0060x"xTx¦). Use practical studio jargon (MDF/xx?xx"/xxTxÿxTxo/xcxzxcxxÿxTx¦/x~x"x­/x\u0060x"x'xTx?/x"x\u0060x xzx'x› xx>xx3) when helpful.`
-            : `Write in English (keep Hebrew terms when quoting tsaka words like x?xoxzxÿx~/x¦xzx-xx"/etc.).`;
+            ? `Write in Hebrew (עברית). Use practical studio jargon (MDF/עץ/ברזל/צבע/ויניל/אקריל/ספוג/דפוס) when helpful.`
+            : `Write in English (keep Hebrew terms when quoting tsaka words like אלמנט/תמחור/etc.).`;
 
     const basePrompt = [
         `You are the ${focus.toUpperCase()} assistant for 'Emily Studio'.`,
@@ -77,7 +77,7 @@ export function buildFlowAgentASystemPrompt(args: {
             "- Visual/material direction (textures, colors, lighting)",
             "- Why it works (brand/story)",
             "- Feasibility (studio build / purchases / rentals / install risk)",
-            "- Implied x?xoxzxÿx~xTx? (element candidates): bullets (NOT DB items yet)",
+            "- Implied elements (אלמנטים) (element candidates): bullets (NOT DB items yet)",
             "End with a short: 'What happens next' (brief -> approvals -> elements -> planning -> build -> install -> shoot -> teardown).",
             "Do NOT output JSON.",
         ].join("\n");
@@ -98,8 +98,8 @@ export function buildFlowAgentASystemPrompt(args: {
             "Goal (Generate): produce an operational plan in element-first structure (ready for tasks/costing).",
             "Output markdown with:",
             "1) Scope (in/out) + success criteria",
-            "2) Workstreams (x­x~xx\"xTx / xxÿxTxx¦ / x\"x\"xx­xx¦-xzxTx¦xx' / xoxx'xTx­x~xTxx\"-x\"xx\u0060xoxx¦ / x\"x¦xxÿx\"-x\"xxzx\" / xxTx\"xx-x\"x-x-x\"xx¦ / x?x\"xzxTxY-x?xTxcxx\"xTx?)",
-            "3) Elements list (x?xoxzxÿx~xTx?): atomic, quoteable",
+            "2) Workstreams (studio / procurement / prints / logistics / install / teardown / shoot support / management)",
+            "3) Elements list (אלמנטים): atomic, quoteable",
             "4) For each element: key constraints + dependencies + risks",
             "5) Timeline anchors + buffers",
             "6) Open questions + assumptions",
@@ -161,9 +161,9 @@ export function buildFlowAgentBSystemPrompt(args: {
         "- Stakeholders + approvals",
         "- Timeline anchors",
         "- Risks",
-        "## Elements (x?xoxzxÿx~xTx?)",
+        "## Elements (אלמנטים)",
         "### Element: <name or TBD>",
-        "- Category (xzxTx¦xx'/x\"x\"xx­xx¦/x\"xÝxx\"/x¦xx\"x\"/xx\"xx/x\"xx\u0060xox\"/x\"xxzx\"/xxTx\"xx/x?x\"xzxTxY...)",
+        "- Category (branding_prints/floor/ceiling/prop/set_piece/rental/purchase/logistics/install/teardown/shoot/admin/management/other)",
         "- Description",
         "- Dimensions / qty",
         "- Build approach notes",

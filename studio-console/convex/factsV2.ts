@@ -18,7 +18,7 @@ const FactEvidenceSchema = z.object({
 const FactAtomSchema = z.object({
     scopeType: z.enum(["project", "item"]).optional(),
     scope: z.enum(["project", "item"]).optional(),
-    itemId: z.string().optional(),
+    itemId: z.string().nullable().optional(),
     factTextHe: z.string(),
     category: z.string(),
     importance: z.number(),
@@ -458,13 +458,13 @@ export const processExtractedFacts = internalMutation({
                     };
                 })
                 .filter(Boolean) as Array<{
-                turnBundleId: Id<"turnBundles">;
-                quoteHe: string;
-                startChar: number;
-                endChar: number;
-                sourceSection: string;
-                sourceKind: "user" | "doc" | "agentOutput";
-            }>;
+                    turnBundleId: Id<"turnBundles">;
+                    quoteHe: string;
+                    startChar: number;
+                    endChar: number;
+                    sourceSection: string;
+                    sourceKind: "user" | "doc" | "agentOutput";
+                }>;
 
             const effectiveSourceTier =
                 sourceTier === "user_evidence" && verifiedEvidence.length === 0 ? "hypothesis" : sourceTier;
@@ -477,8 +477,8 @@ export const processExtractedFacts = internalMutation({
                         ? "accepted"
                         : "proposed";
 
-            let scopeType = fact.scopeType;
-            let itemId = (fact.itemId as Id<"projectItems"> | undefined) ?? null;
+            let scopeType = fact.scopeType ?? "project";
+            let itemId = (fact.itemId as Id<"projectItems"> | null | undefined) ?? null;
             let missingItemIssue: { candidates: Array<{ id: Id<"projectItems">; name: string; score: number }> } | null = null;
 
             if (!itemId) {

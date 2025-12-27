@@ -1,6 +1,6 @@
 /**
  * IMPORTANT MIGRATION NOTE:
- * Your DB currently calls them "items". In the prompts we treat "items" == "elements (x?xoxzxÿx~xTx?)".
+ * Your DB currently calls them "items". In the prompts we treat "items" == "elements (אלמנטים)".
  * If/when you rename DB entities, update ChangeSet keys accordingly.
  */
 
@@ -43,7 +43,7 @@ Context payload the app passes into every agent:
     "selectedTaskIds": []
   },
 
-  "items": [],        // == ELEMENTS (x?xoxzxÿx~xTx?): hierarchical tree
+  "items": [],        // == ELEMENTS (אלמנטים): hierarchical tree
   "tasks": [],        // tasks attach to an element (itemId today / elementId after migration)
   "accounting": {
     "accountingLines": [] // lines attach to an element; may attach to a task
@@ -87,14 +87,14 @@ export const extractGuardrails = `GUARDRAILS FOR EXTRACT OUTPUT (STRICT)
 - Management/admin work MUST be flagged (isManagement=true) so it won't be double-counted.`;
 
 export const tsakaVocab = `TSAKA VOCABULARY (use consistently)
-- x?xoxzxÿx~ = atomic deliverable/service line, quoteable.
-- x¦xzx-xx" = costing (estimate + scenarios).
-- x"xcxTxzx¦ x"x"x­ = dressing list per zone/room.
-- xxTx"xx x›x\u0060xx"x" = runbook/work breakdown.
-- x?xTx­xxxTx?/xxÿxTxx¦ = procurement/pickups.
-- x"xx\u0060xox" / x"x¦xxÿx" / xxTx"xx = transport / install / teardown.
-- xzxTx¦xx'/x"x"xx­xx¦ = prints/branding.
-- xÿxTx"xxo/x?x"xzxTxY = management/admin (flag as management).`;
+- אלמנט = atomic deliverable/service line, quoteable.
+- תמחור = costing (estimate + scenarios).
+- רשימת הלבשה = dressing list per zone/room.
+- ראנבוק = runbook/work breakdown.
+- רכש/איסופים = procurement/pickups.
+- הובלה / התקנה / פירוק = transport / install / teardown.
+- גרפיקות/דפוס = prints/branding.
+- ניהול/אדמין = management/admin (flag as management).`;
 
 export const workstreamsEnum = `WORKSTREAMS (choose ONE per task/line when possible)
 - studio
@@ -137,7 +137,7 @@ export const changeSetSchemaText = `COMMON EXTRACT OUTPUT: ChangeSet (JSON only)
         "sortKey": "0001",
         "kind": "deliverable|service|day|fee|group|option",
         "category": "branding_prints|floor|ceiling|prop|set_piece|rental|purchase|logistics|install|teardown|shoot|admin|management|other",
-        "name": "Element name (x?xoxzxÿx~)",
+        "name": "Element name (אלמנט)",
         "description": "Optional",
         "flags": {
           "requiresStudio": true,
@@ -238,17 +238,17 @@ export const changeSetSchemaText = `COMMON EXTRACT OUTPUT: ChangeSet (JSON only)
 export const itemTypeDefinitions = `STANDARD ITEM TYPES REFERENCE:
 When working with the following items, adhere to these definitions:
 
-1. x"xx\u0060xox" (Moving / Logistics):
+1. ????? (Moving / Logistics):
    - Refers strictly to moving items from the studio to the set/location.
    - Does NOT include moving items from suppliers to the studio (that is part of purchasing/logistics of specific materials).
    - Includes truck rental, drivers, and loading/unloading at the venue.
 
-2. x"x¦xxÿx" (Installation):
+2. התקנה (Installation):
    - Refers to on-site installation work that requires pre-planning and skilled workers (e.g., art workers, carpenters).
    - Distinct from simple delivery/placement.
    - Includes assembly, mounting, hanging, and on-site adjustments.
 
-3. xxTx"xx (Teardown):
+3. ????? (Teardown):
    - Refers to complex teardown requirements beyond basic end-of-day cleanup.
    - Used for special cases requiring specific teardown planning, art workers, or waste disposal of large set pieces.
    - Includes dismantling structures, packing for return/storage, and site restoration.
@@ -256,7 +256,7 @@ When working with the following items, adhere to these definitions:
 
 export const chatRules = `COMMON CHAT BEHAVIOR (efficient)
 - Ask only questions that block the NEXT action.
-- Always structure thinking around ELEMENTS (x?xoxzxÿx~xTx?).
+- Always structure thinking around ELEMENTS (אלמנטים).
 - Always separate:
   1) Known (from context/docs)
   2) Assumptions (explicit)
@@ -265,10 +265,10 @@ export const chatRules = `COMMON CHAT BEHAVIOR (efficient)
 - Prefer short, actionable bullets over long essays.`;
 
 export const ideationPrompt = `You are the IDEATION AGENT for Emily Studio.
-Mission: generate feasible concept directions for physical builds AND the implied ELEMENT candidates (x?xoxzxÿx~xTx?).
+Mission: generate feasible concept directions for physical builds AND the implied ELEMENT candidates (אלמנטים).
 Be practical: buildability, budget tier, lead time, safety, venue rules, logistics.
 
-Use tsaka vocabulary: x?xoxzxÿx~, x¦xzx-xx", x"xcxTxzx¦ x"x"x­, xxTx"xx x›x\u0060xx"x", x?xTx­xxxTx?, x"xx\u0060xox", x"x¦xxÿx", xxTx"xx, xzxTx¦xx'/x"x"xx­xx¦.
+Use tsaka vocabulary: אלמנט, תמחור, רשימת הלבשה, ראנבוק, רכש/איסופים, הובלה, התקנה, פירוק, גרפיקות/דפוס.
 
 OUTPUT MODES
 1) CHAT:
@@ -300,7 +300,7 @@ EXTRACT:
 
 REQUIRED:
 - Create separate service/day elements when relevant:
-  x"xx\u0060xox", x"x¦xxÿx"/x"xxzx", xxTx"xx/x"x-x-x"xx¦, shoot support, management fee.
+  הובלה, התקנה/הרכבה, פירוק/החזרה, shoot support, management fee.
 - De-dupe with existing items.`;
 
 export const clarificationPrompt = `You are the CLARIFICATION AGENT (element-first).
@@ -459,9 +459,9 @@ STRICT RULES:
 - Use [] for dependencies if none.
 - Keep estimatedHours realistic and conservative when uncertain.`;
 
-/** NEW: Procurement / Pickups Agent (x"xcxTxzx¦ x?xTx­xxxTx?/xxÿxTxx¦) */
+/** NEW: Procurement / Pickups Agent (רשימת רכש/איסופים) */
 export const procurementPrompt = `You are the PROCUREMENT & PICKUPS AGENT.
-Mission: generate "x"xcxTxzx¦ x?xTx­xxxTx? / xxÿxTxx¦" per element, grouped by assignee/vendor, with lead time awareness.
+Mission: generate "רשימת רכש/איסופים" per element, grouped by assignee/vendor, with lead time awareness.
 
 CHAT:
 - Produce a procurement plan:
@@ -482,9 +482,9 @@ Rules:
 - Include pickup notes: address/phone if present in context; otherwise add openQuestions.
 - Mark urgent/long-lead items and create dependency edges if your app supports it.`;
 
-/** NEW: Install Runbook Agent (xxTx"xx x›x\u0060xx"x" + day-of checklist) */
+/** NEW: Install Runbook Agent (ראנבוק התקנה + day-of checklist) */
 export const runbookPrompt = `You are the INSTALL RUNBOOK AGENT.
-Mission: produce "xxTx"xx x›x\u0060xx"x"" for install day + teardown day:
+Mission: produce "ראנבוק" for install day + teardown day:
 - who does what
 - order of operations
 - tools + packing list

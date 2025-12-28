@@ -1,4 +1,4 @@
-import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { z } from "zod";
 import { callChatWithSchema, embedText } from "./lib/openai";
@@ -1040,6 +1040,103 @@ export const rejectFact = mutation({
     args: { factId: v.id("factAtoms") },
     handler: async (ctx, args) => {
         await ctx.db.patch(args.factId, { status: "rejected", updatedAt: Date.now() });
+    },
+});
+
+export const updateFactTextInternal = internalMutation({
+    args: { factId: v.id("factAtoms"), factTextHe: v.string() },
+    handler: async (ctx, args) => {
+        const fact = await ctx.db.get(args.factId);
+        if (!fact) throw new Error("Fact not found");
+        const factTextHe = args.factTextHe.trim();
+        if (!factTextHe) throw new Error("Fact text is required");
+
+        const exactHash = await sha256([
+            fact.projectId,
+            fact.scopeType,
+            fact.itemId ?? "null",
+            fact.key ?? "",
+            factTextHe.toLowerCase(),
+        ].join("|"));
+
+        await ctx.db.patch(args.factId, {
+            factTextHe,
+            dedupe: { ...fact.dedupe, exactHash },
+            updatedAt: Date.now(),
+        });
+
+        const embeddings = await ctx.db
+            .query("factEmbeddings")
+            .withIndex("by_project_fact", (q) => q.eq("projectId", fact.projectId).eq("factId", fact._id))
+            .collect();
+        for (const embedding of embeddings) {
+            await ctx.db.delete(embedding._id);
+        }
+
+        return { projectId: fact.projectId, factTextHe };
+    },
+});
+
+export const updateFactText = action({
+    args: { factId: v.id("factAtoms"), factTextHe: v.string() },
+    handler: async (ctx, args) => {
+        const { projectId, factTextHe } = await ctx.runMutation(internal.factsV2.updateFactTextInternal, {
+            factId: args.factId,
+            factTextHe: args.factTextHe,
+        });
+        const embedding = await embedText(factTextHe);
+        await ctx.runMutation(internal.factsV2.insertEmbedding, {
+            projectId,
+            factId: args.factId,
+            vector: embedding,
+            model: "text-embedding-3-large",
+        });
+        return { ok: true };
+    },
+});
+
+export const deleteFact = mutation({
+    args: { factId: v.id("factAtoms") },
+    handler: async (ctx, args) => {
+        const fact = await ctx.db.get(args.factId);
+        if (!fact) throw new Error("Fact not found");
+
+        const embeddings = await ctx.db
+            .query("factEmbeddings")
+            .withIndex("by_project_fact", (q) => q.eq("projectId", fact.projectId).eq("factId", fact._id))
+            .collect();
+        for (const embedding of embeddings) {
+            await ctx.db.delete(embedding._id);
+        }
+
+        const issues = await ctx.db
+            .query("factIssues")
+            .withIndex("by_fact", (q) => q.eq("factId", fact._id))
+            .collect();
+        for (const issue of issues) {
+            await ctx.db.delete(issue._id);
+        }
+
+        if (fact.groupId) {
+            const group = await ctx.db.get(fact.groupId);
+            if (group) {
+                const memberFactIds = (group.memberFactIds ?? []).filter((id) => id !== fact._id);
+                if (memberFactIds.length === 0) {
+                    await ctx.db.delete(group._id);
+                } else {
+                    const canonicalFactId =
+                        group.canonicalFactId === fact._id ? memberFactIds[0] : group.canonicalFactId;
+                    await ctx.db.patch(group._id, {
+                        canonicalFactId,
+                        memberFactIds,
+                        updatedAt: Date.now(),
+                    });
+                }
+            }
+        }
+
+        await ctx.db.delete(args.factId);
+        return { ok: true };
     },
 });
 

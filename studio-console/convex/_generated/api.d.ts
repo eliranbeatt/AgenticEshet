@@ -21,6 +21,7 @@ import type * as agents_deepResearch from "../agents/deepResearch.js";
 import type * as agents_estimator from "../agents/estimator.js";
 import type * as agents_flow from "../agents/flow.js";
 import type * as agents_ideation from "../agents/ideation.js";
+import type * as agents_itemPopulator from "../agents/itemPopulator.js";
 import type * as agents_planning from "../agents/planning.js";
 import type * as agents_quote from "../agents/quote.js";
 import type * as agents_solutioning from "../agents/solutioning.js";
@@ -119,6 +120,7 @@ declare const fullApi: ApiFromModules<{
   "agents/estimator": typeof agents_estimator;
   "agents/flow": typeof agents_flow;
   "agents/ideation": typeof agents_ideation;
+  "agents/itemPopulator": typeof agents_itemPopulator;
   "agents/planning": typeof agents_planning;
   "agents/quote": typeof agents_quote;
   "agents/solutioning": typeof agents_solutioning;

@@ -110,26 +110,26 @@ export function buildFlowAgentASystemPrompt(args: {
     if (args.mode === "clarify") {
         return [
             basePrompt,
-            "Goal (Clarify): collect missing technical details to execute specific elements safely and efficiently.",
-            "Ask 3-5 questions max (dimensions/load/finish, rigging/mounting, packing/transport, venue rules, lead times).",
-            "Then propose 2 build approaches (A/B) with pros/cons and a recommendation.",
+            "Goal (Clarify): collect missing technical details to execute specific elements.",
+            "Ask 3 questions max focused on: dimensions, materials, joinery, finish, and structural requirements.",
+            "Avoid asking about contracts, logistics, or moving unless it directly dictates the build method.",
+            "Then propose 2 build approaches (A/B) with pros/cons.",
             "Do NOT output JSON.",
         ].join("\n");
     }
 
     return [
         basePrompt,
-        "Goal (Generate): element-by-element execution plan (how to build, finish, pack, install).",
+        "Goal (Generate): element-by-element physical execution plan (how to build/fabricate).",
         "Output markdown:",
-        "- Recommended approach",
-        "- Step-by-step build + finish workflow",
-        "- BOM (materials + rough qty) per element",
-        "- Labor roles + rough hours per element",
-        "- Tools/equipment",
-        "- Packing/transport plan",
-        "- Installation checklist + teardown notes",
-        "- Risks + mitigations",
-        "- Open questions + assumptions",
+        "- Recommended technical solution (materials, joinery, structure)",
+        "- Step-by-step fabrication guide",
+        "- BOM (materials + rough qty + dims)",
+        "- Labor roles + hours",
+        "- Tools needed",
+        "- Brief packing/install notes (only if critical)",
+        "Do not offer generic advice ('make it lighter', 'check safety') without a specific solution.",
+        "Focus on HOW to build it, not project management logistics.",
         "Do NOT output JSON.",
     ].join("\n");
 }

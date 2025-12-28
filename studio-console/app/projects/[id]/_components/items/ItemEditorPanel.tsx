@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery, useAction } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import { createEmptyItemSpec, ItemSpecV2 } from "../../../../../lib/items";
@@ -13,6 +13,34 @@ import { ItemRevisionBanner } from "./ItemRevisionBanner";
 import { ImageGeneratorPanel } from "../images/ImageGeneratorPanel";
 import { ImagePicker } from "../images/ImagePicker";
 import { ItemDetailDrawer } from "./ItemDetailDrawer";
+
+function formatFactValue(value: unknown) {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        return String(value);
+    }
+    if (typeof value === "object") {
+        if ("value" in value && "unit" in value) {
+            const inner = value as { value?: number | string; unit?: string };
+            return `${inner.value ?? ""} ${inner.unit ?? ""}`.trim();
+        }
+        if ("min" in value || "max" in value) {
+            const inner = value as { min?: number | string; max?: number | string };
+            const min = inner.min ?? "";
+            const max = inner.max ?? "";
+            return `${min}-${max}`.replace(/^-/, "").replace(/-$/, "");
+        }
+        if ("iso" in value) {
+            const inner = value as { iso?: string };
+            return inner.iso ?? "";
+        }
+    }
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
+}
 
 function parseLines(value: string) {
     return value
@@ -64,11 +92,14 @@ export function ItemEditorPanel() {
         api.items.getItem,
         selectedItemId ? { itemId: selectedItemId } : "skip",
     );
+    const allFacts = useQuery(api.factsV2.listFacts, { projectId });
     const upsertRevision = useMutation(api.items.upsertRevision);
+    const populateFromFacts = useAction(api.agents.itemPopulator.populate);
 
     const [specDraft, setSpecDraft] = useState<ItemSpecV2 | null>(null);
     const [changeReason, setChangeReason] = useState("");
     const [isSaving, setIsSaving] = useState(false);
+    const [isPopulating, setIsPopulating] = useState(false);
     const [showDetails, setShowDetails] = useState(false);
 
     const { item, draftRevision, approvedRevision } = useMemo(() => {
@@ -81,6 +112,15 @@ export function ItemEditorPanel() {
         const approved = findApprovedRevision(revisions, item.approvedRevisionId);
         return { item, draftRevision: draft, approvedRevision: approved };
     }, [itemData, tabScope]);
+
+    const itemFacts = useMemo(() => {
+        if (!allFacts || !selectedItemId) return [];
+        return allFacts.filter(
+            (fact) =>
+                fact.itemId === selectedItemId &&
+                (fact.status === "accepted" || fact.status === "proposed"),
+        );
+    }, [allFacts, selectedItemId]);
 
     useEffect(() => {
         if (!item) {
@@ -122,6 +162,22 @@ export function ItemEditorPanel() {
 
     const updateSpec = (next: ItemSpecV2) => setSpecDraft(next);
 
+    const applyFactsToAssumptions = () => {
+        if (!specDraft) return;
+        const existing = new Set(specDraft.state.assumptions.map((entry) => entry.trim()));
+        const additions = itemFacts
+            .map((fact) => fact.factTextHe.trim())
+            .filter((text) => text && !existing.has(text));
+        if (additions.length === 0) return;
+        updateSpec({
+            ...specDraft,
+            state: {
+                ...specDraft.state,
+                assumptions: [...specDraft.state.assumptions, ...additions],
+            },
+        });
+    };
+
     const saveRevision = async () => {
         if (!tabScope) return;
         setIsSaving(true);
@@ -134,6 +190,22 @@ export function ItemEditorPanel() {
             });
         } finally {
             setIsSaving(false);
+        }
+    };
+
+    const handlePopulate = async () => {
+        if (!selectedItemId) return;
+        setIsPopulating(true);
+        try {
+            await populateFromFacts({
+                itemId: selectedItemId,
+                revisionId: draftRevision?._id
+            });
+        } catch (e) {
+            console.error("Failed to populate:", e);
+            alert("Failed to populate from facts");
+        } finally {
+            setIsPopulating(false);
         }
     };
 
@@ -157,6 +229,14 @@ export function ItemEditorPanel() {
                     </button>
                     <button
                         type="button"
+                        className="text-sm px-3 py-2 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 flex items-center gap-1"
+                        onClick={handlePopulate}
+                        disabled={isPopulating}
+                    >
+                        {isPopulating ? "✨ Populating..." : "✨ Populate from Facts"}
+                    </button>
+                    <button
+                        type="button"
                         className="text-sm px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
                         disabled={!tabScope || isSaving}
                         onClick={saveRevision}
@@ -174,6 +254,41 @@ export function ItemEditorPanel() {
                     summaryMarkdown={draftRevision.summaryMarkdown}
                 />
             )}
+
+            <SectionTitle title="Linked facts" />
+            <div className="space-y-2">
+                {itemFacts.length === 0 ? (
+                    <div className="text-sm text-gray-500">No facts linked to this element yet.</div>
+                ) : (
+                    <div className="space-y-2">
+                        <ul className="space-y-1 text-xs text-gray-700 list-disc pl-4">
+                            {itemFacts.map((fact) => (
+                                <li key={fact._id}>
+                                    <div className="font-medium text-gray-800">{fact.factTextHe}</div>
+                                    {fact.key && (
+                                        <div className="text-[10px] text-gray-500">
+                                            {fact.key}
+                                            {fact.value !== undefined ? `: ${formatFactValue(fact.value)}` : ""}
+                                        </div>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                                onClick={applyFactsToAssumptions}
+                            >
+                                Apply to assumptions
+                            </button>
+                            <div className="text-[10px] text-gray-500">
+                                Adds linked facts into the Assumptions field below.
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
 
             <SectionTitle title="Identity" />
             <div className="grid gap-3 md:grid-cols-2">

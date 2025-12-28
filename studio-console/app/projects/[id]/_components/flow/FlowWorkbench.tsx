@@ -45,6 +45,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
 
     const ensureWorkspace = useMutation(api.flowWorkspaces.ensure);
     const saveWorkspaceText = useMutation(api.flowWorkspaces.saveText);
+    const submitCurrentStateText = useMutation(api.currentState.submitCurrentStateText);
     const ensureThread = useMutation(api.chat.ensureThread);
     const sendFlowTurn = useAction(api.agents.flow.send);
     const generateUploadUrl = useMutation(api.assets.generateUploadUrl);
@@ -67,10 +68,16 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     }, [scopeType, selectedAllProject, selectedItemIds]);
 
     const workspace = useQuery(api.flowWorkspaces.get, { projectId, tab, scopeKey });
+    const derivedState = useQuery(api.currentState.getDerived, {
+        projectId,
+        scopeType,
+        scopeItemIds: selectedAllProject ? undefined : selectedItemIds,
+    });
 
     const [workspaceId, setWorkspaceId] = useState<Id<"flowWorkspaces"> | null>(null);
     const [textDraft, setTextDraft] = useState("");
     const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+    const [isSubmittingState, setIsSubmittingState] = useState(false);
     const [hasRemoteUpdate, setHasRemoteUpdate] = useState(false);
     const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts" | "ideas">("state");
 
@@ -101,6 +108,13 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
         setTextDraft(workspace.text ?? "");
         setSaveStatus("idle");
     }, [scopeKey, workspace]);
+
+    useEffect(() => {
+        if (!derivedState?.markdown) return;
+        if ((workspace?.text ?? "").trim()) return;
+        if (textDraft.trim()) return;
+        setTextDraft(derivedState.markdown);
+    }, [derivedState?.markdown, textDraft, workspace?.text]);
 
     useEffect(() => {
         if (!workspace) return;
@@ -172,11 +186,20 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
         setSaveStatus("idle");
     };
 
-    const derivedState = useQuery(api.currentState.getDerived, {
-        projectId,
-        scopeType,
-        scopeItemIds: selectedAllProject ? undefined : selectedItemIds,
-    });
+    const handleSubmitCurrentState = async (text: string) => {
+        if (!text.trim()) return;
+        setIsSubmittingState(true);
+        try {
+            await submitCurrentStateText({
+                projectId,
+                scopeType,
+                scopeItemIds: selectedAllProject ? undefined : selectedItemIds,
+                text,
+            });
+        } finally {
+            setIsSubmittingState(false);
+        }
+    };
 
 
     useEffect(() => {
@@ -365,9 +388,10 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                         <div className="flex-1 min-h-0 relative">
                             {rightPanelTab === "state" ? (
                                 <CurrentStatePanel
-                                    derivedMarkdown={derivedState?.markdown ?? ""}
                                     text={textDraft}
                                     onChange={setTextDraft}
+                                    onSubmit={handleSubmitCurrentState}
+                                    isSubmitting={isSubmittingState}
                                     saveStatus={saveStatus}
                                     updatedAt={workspace?.updatedAt}
                                     hasRemoteUpdate={hasRemoteUpdate}

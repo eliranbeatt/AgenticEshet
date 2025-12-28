@@ -1,6 +1,7 @@
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { buildDerivedCurrentState } from "./lib/currentState";
+import { api, internal } from "./_generated/api";
 
 const PROPOSED_CONTEXT_THRESHOLD = 0.85;
 
@@ -198,5 +199,58 @@ export const getDerived = query({
         });
 
         return { markdown };
+    },
+});
+
+function resolveBundleStage(projectStage?: string | null): "ideation" | "planning" | "solutioning" {
+    switch (projectStage) {
+        case "ideation":
+            return "ideation";
+        case "planning":
+            return "planning";
+        case "production":
+        case "done":
+            return "solutioning";
+        default:
+            return "ideation";
+    }
+}
+
+export const submitCurrentStateText = mutation({
+    args: {
+        projectId: v.id("projects"),
+        scopeType: scopeTypeValidator,
+        scopeItemIds: v.optional(v.array(v.id("projectItems"))),
+        text: v.string(),
+    },
+    handler: async (ctx, args) => {
+        const project = await ctx.db.get(args.projectId);
+        if (!project) throw new Error("Project not found");
+
+        const itemRefs = await ctx.runQuery(internal.items.getItemRefs, {
+            projectId: args.projectId,
+        });
+
+        const scopeType = args.scopeType ?? "allProject";
+        const scope =
+            scopeType === "allProject"
+                ? { type: "project" as const }
+                : scopeType === "singleItem"
+                    ? { type: "item" as const, itemIds: args.scopeItemIds }
+                    : { type: "multiItem" as const, itemIds: args.scopeItemIds };
+
+        await ctx.runMutation(internal.turnBundles.createFromTurn, {
+            projectId: args.projectId,
+            stage: resolveBundleStage(project.stage),
+            scope,
+            source: {
+                type: "generation",
+                sourceIds: [`current_state:${Date.now()}`],
+            },
+            itemRefs,
+            freeChat: args.text,
+        });
+
+        return { ok: true };
     },
 });

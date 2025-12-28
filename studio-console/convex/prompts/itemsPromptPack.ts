@@ -332,12 +332,13 @@ CHAT must include:
 EXTRACT:
 - ChangeSet JSON:
   - items.patch/create as needed
-  - tasks.create under each element
+  - tasks.create for EACH element (must use itemRef.itemId for existing items)
   - minimal obvious dependencies only
 
 RULES:
 - Tasks must have workstream and isManagement when relevant.
-- Keep tasks mid-grain (not too granular yet).`;
+- Keep tasks mid-grain (not too granular yet).
+- LINK EVERY TASK to an element via itemRef.`;
 
 export const solutioningPrompt = `You are the SOLUTIONING AGENT (Master fabricator + producer).
 Mission: per element, generate executable method + BOM + labor sketch and write structured accounting lines.

@@ -1,14 +1,12 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
-import { useState } from "react";
-
 type SaveStatus = "idle" | "saving" | "saved";
 
 type CurrentStatePanelProps = {
-    derivedMarkdown: string;
     text: string;
     onChange: (next: string) => void;
+    onSubmit: (text: string) => void;
+    isSubmitting: boolean;
     saveStatus: SaveStatus;
     updatedAt?: number;
     hasRemoteUpdate: boolean;
@@ -21,16 +19,15 @@ function formatTimestamp(value?: number) {
 }
 
 export function CurrentStatePanel({
-    derivedMarkdown,
     text,
     onChange,
+    onSubmit,
+    isSubmitting,
     saveStatus,
     updatedAt,
     hasRemoteUpdate,
     onApplyRemote,
 }: CurrentStatePanelProps) {
-    const [viewMode, setViewMode] = useState<"edit" | "preview">("edit");
-
     return (
         <div className="flex flex-col h-full bg-white">
             <div className="p-3 border-b bg-gray-50">
@@ -41,29 +38,17 @@ export function CurrentStatePanel({
                             {saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved" : "Idle"}
                         </span>
                         <span className="text-gray-400">Last: {formatTimestamp(updatedAt)}</span>
+                        <button
+                            type="button"
+                            onClick={() => onSubmit(text)}
+                            disabled={isSubmitting || text.trim().length === 0}
+                            className="px-2 py-1 rounded uppercase bg-blue-600 text-white disabled:opacity-50"
+                        >
+                            {isSubmitting ? "Updating..." : "Update Facts"}
+                        </button>
                     </div>
                 </div>
                 <div className="mt-2 flex items-center gap-2">
-                    <div className="flex items-center bg-white rounded border p-1 gap-1">
-                        <button
-                            type="button"
-                            onClick={() => setViewMode("edit")}
-                            className={`px-2 py-1 text-[10px] rounded font-semibold uppercase tracking-wide ${
-                                viewMode === "edit" ? "bg-blue-600 text-white" : "text-gray-600 hover:text-gray-900"
-                            }`}
-                        >
-                            Edit
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setViewMode("preview")}
-                            className={`px-2 py-1 text-[10px] rounded font-semibold uppercase tracking-wide ${
-                                viewMode === "preview" ? "bg-blue-600 text-white" : "text-gray-600 hover:text-gray-900"
-                            }`}
-                        >
-                            Preview
-                        </button>
-                    </div>
                     {hasRemoteUpdate && (
                         <button
                             type="button"
@@ -79,29 +64,14 @@ export function CurrentStatePanel({
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 <div>
                     <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                        Derived View (Facts + Elements)
+                        Current Knowledge (Editable)
                     </div>
-                    <div className="prose prose-sm max-w-none bg-gray-50 border rounded p-3">
-                        <ReactMarkdown>{derivedMarkdown || "No derived state yet."}</ReactMarkdown>
-                    </div>
-                </div>
-
-                <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                        Manual Notes
-                    </div>
-                    {viewMode === "edit" ? (
-                        <textarea
-                            className="w-full min-h-[240px] border rounded p-3 text-xs font-mono text-gray-800 resize-none"
-                            value={text}
-                            onChange={(event) => onChange(event.target.value)}
-                            placeholder="Add manual notes or decisions here. This section is never auto-edited."
-                        />
-                    ) : (
-                        <div className="prose prose-sm max-w-none">
-                            <ReactMarkdown>{text || "No manual notes yet."}</ReactMarkdown>
-                        </div>
-                    )}
+                    <textarea
+                        className="w-full min-h-[320px] border rounded p-3 text-xs font-mono text-gray-800 resize-none"
+                        value={text}
+                        onChange={(event) => onChange(event.target.value)}
+                        placeholder="Edit, add, or delete current knowledge here. Click 'Update Facts' to re-extract."
+                    />
                 </div>
             </div>
         </div>

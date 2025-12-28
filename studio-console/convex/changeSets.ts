@@ -17,29 +17,33 @@ function buildSearchText(args: { name?: string; description?: string; category?:
 }
 
 function resolveItemRef(
-    ref: { itemId?: string | null; itemTempId?: string | null },
+    ref: { itemId?: string | null; itemTempId?: string | null } | undefined,
     tempItemMap: Map<string, Id<"projectItems">>,
 ) {
+    if (!ref) return undefined;
     if (ref.itemId) return ref.itemId as Id<"projectItems">;
     if (ref.itemTempId) {
         const resolved = tempItemMap.get(ref.itemTempId);
+        // if (!resolved) throw new Error(`Missing item for tempId ${ref.itemTempId}`); 
+        // Allow returning undefined if not found? No, should be strict if ref provided.
         if (!resolved) throw new Error(`Missing item for tempId ${ref.itemTempId}`);
         return resolved;
     }
-    throw new Error("Invalid itemRef");
+    return undefined;
 }
 
 function resolveTaskRef(
-    ref: { taskId?: string | null; taskTempId?: string | null },
+    ref: { taskId?: string | null; taskTempId?: string | null } | undefined,
     tempTaskMap: Map<string, Id<"tasks">>,
 ) {
+    if (!ref) return undefined;
     if (ref.taskId) return ref.taskId as Id<"tasks">;
     if (ref.taskTempId) {
         const resolved = tempTaskMap.get(ref.taskTempId);
         if (!resolved) throw new Error(`Missing task for tempId ${ref.taskTempId}`);
         return resolved;
     }
-    throw new Error("Invalid taskRef");
+    return undefined;
 }
 
 export const listByProject = query({
@@ -111,6 +115,7 @@ export const create = mutation({
         const taskOps = changeSet.tasks.create.length + changeSet.tasks.patch.length;
         const accountingOps = changeSet.accountingLines.create.length + changeSet.accountingLines.patch.length;
         const dependencyOps = changeSet.tasks.dependencies.length;
+        const materialOps = (changeSet.materialLines?.create.length ?? 0) + (changeSet.materialLines?.patch.length ?? 0) + (changeSet.materialLines?.deleteRequest.length ?? 0);
 
         const changeSetId = await ctx.db.insert("itemChangeSets", {
             projectId: changeSet.projectId as Id<"projects">,
@@ -129,6 +134,7 @@ export const create = mutation({
                 tasks: taskOps,
                 accountingLines: accountingOps,
                 dependencies: dependencyOps,
+                materialLines: materialOps,
             },
         });
 
@@ -225,6 +231,42 @@ export const create = mutation({
                 payloadJson: serializePayload(payload),
                 createdAt: now,
             });
+        }
+
+        if (changeSet.materialLines) {
+            for (const payload of changeSet.materialLines.create) {
+                await ctx.db.insert("itemChangeSetOps", {
+                    projectId: changeSet.projectId as Id<"projects">,
+                    changeSetId,
+                    entityType: "materialLine",
+                    opType: "create",
+                    tempId: payload.tempId,
+                    payloadJson: serializePayload(payload),
+                    createdAt: now,
+                });
+            }
+            for (const payload of changeSet.materialLines.patch) {
+                await ctx.db.insert("itemChangeSetOps", {
+                    projectId: changeSet.projectId as Id<"projects">,
+                    changeSetId,
+                    entityType: "materialLine",
+                    opType: "patch",
+                    targetId: payload.lineId,
+                    payloadJson: serializePayload(payload),
+                    createdAt: now,
+                });
+            }
+            for (const payload of changeSet.materialLines.deleteRequest) {
+                await ctx.db.insert("itemChangeSetOps", {
+                    projectId: changeSet.projectId as Id<"projects">,
+                    changeSetId,
+                    entityType: "materialLine",
+                    opType: "delete",
+                    targetId: payload.lineId,
+                    payloadJson: serializePayload(payload),
+                    createdAt: now,
+                });
+            }
         }
 
         return { changeSetId };
@@ -433,6 +475,7 @@ export const apply = mutation({
                 plannedEnd: payload.plannedEnd === null ? undefined : payload.plannedEnd,
                 tags: payload.tags,
                 source: "agent",
+                origin: { source: "ai" },
                 createdAt: now,
                 updatedAt: now,
             });
@@ -477,7 +520,7 @@ export const apply = mutation({
 
             await ctx.db.insert("accountingLines", {
                 projectId: changeSet.projectId,
-                itemId,
+                itemId: itemId as Id<"projectItems">, // Force cast as itemId is mandatory for accountingLines? Schema says v.id("projectItems")
                 taskId,
                 lineType: payload.lineType as Doc<"accountingLines">["lineType"],
                 title: payload.title,
@@ -508,6 +551,80 @@ export const apply = mutation({
             });
         }
 
+        // Material Lines Logic
+        const materialCreateOps = ops.filter((op) => op.entityType === "materialLine" && op.opType === "create");
+        let defaultSectionId: Id<"sections"> | undefined;
+
+        if (materialCreateOps.length > 0) {
+            // Check for existing section or create one
+            const firstSection = await ctx.db.query("sections")
+                .withIndex("by_project", q => q.eq("projectId", changeSet.projectId))
+                .first();
+
+            if (firstSection) {
+                defaultSectionId = firstSection._id;
+            } else {
+                defaultSectionId = await ctx.db.insert("sections", {
+                    projectId: changeSet.projectId,
+                    group: "Logistics",
+                    name: "General",
+                    sortOrder: 0,
+                    pricingMode: "estimated"
+                });
+            }
+        }
+
+        for (const op of materialCreateOps) {
+            const payload = JSON.parse(op.payloadJson) as {
+                tempId: string;
+                itemRef?: { itemId?: string | null; itemTempId?: string | null };
+                taskRef?: { taskId?: string | null; taskTempId?: string | null };
+                category: string;
+                label: string;
+                description?: string;
+                unit: string;
+                plannedQuantity: number;
+                plannedUnitCost: number;
+                procurement?: string;
+                supplierName?: string;
+            };
+
+            const itemId = resolveItemRef(payload.itemRef, tempItemMap);
+            const taskId = resolveTaskRef(payload.taskRef, tempTaskMap);
+
+            await ctx.db.insert("materialLines", {
+                projectId: changeSet.projectId,
+                sectionId: defaultSectionId!, // Guaranteed by block above
+                itemId,
+                taskId,
+                category: payload.category,
+                label: payload.label,
+                description: payload.description,
+                unit: payload.unit,
+                plannedQuantity: payload.plannedQuantity,
+                plannedUnitCost: payload.plannedUnitCost,
+                status: "planned",
+                vendorName: payload.supplierName,
+                procurement: payload.procurement as any,
+                origin: { source: "ai" },
+            });
+        }
+
+        const materialPatchOps = ops.filter((op) => op.entityType === "materialLine" && op.opType === "patch");
+        for (const op of materialPatchOps) {
+            const payload = JSON.parse(op.payloadJson) as { lineId: string; patch: Record<string, unknown> };
+            await ctx.db.patch(payload.lineId as Id<"materialLines">, {
+                ...payload.patch,
+                // updatedAt: now, // field not in materialLines schema? It is optional.
+            });
+        }
+
+        const materialDeleteOps = ops.filter((op) => op.entityType === "materialLine" && op.opType === "delete");
+        for (const op of materialDeleteOps) {
+            const payload = JSON.parse(op.payloadJson) as { lineId: string };
+            await ctx.db.delete(payload.lineId as Id<"materialLines">);
+        }
+
         const dependencyOps = ops.filter((op) => op.entityType === "dependency");
         for (const op of dependencyOps) {
             const payload = JSON.parse(op.payloadJson) as {
@@ -519,11 +636,11 @@ export const apply = mutation({
             const fromTaskId = resolveTaskRef(payload.fromTaskRef, tempTaskMap);
             const toTaskId = resolveTaskRef(payload.toTaskRef, tempTaskMap);
 
-            const targetTask = await ctx.db.get(toTaskId);
+            const targetTask = await ctx.db.get(toTaskId!); // resolveTaskRef returns undefined if null? 
             if (!targetTask) continue;
             const dependencies = targetTask.dependencies ?? [];
-            if (!dependencies.includes(fromTaskId)) {
-                await ctx.db.patch(toTaskId, {
+            if (fromTaskId && !dependencies.includes(fromTaskId)) {
+                await ctx.db.patch(toTaskId!, {
                     dependencies: [...dependencies, fromTaskId],
                     updatedAt: now,
                 });

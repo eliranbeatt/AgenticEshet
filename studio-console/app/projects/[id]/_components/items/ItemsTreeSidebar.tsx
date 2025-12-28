@@ -26,7 +26,7 @@ export function ItemsTreeSidebar() {
         includeTab: tabScope,
         includeDrafts: showDraftItems,
     });
-    const templates = useQuery(api.items.listTemplates, {}) as Array<Doc<"itemTemplates">> | undefined;
+    const templates = useQuery(api.items.listTemplates, {}) as any;
 
     const createManual = useMutation(api.items.createManual);
     const createFromTemplate = useMutation(api.items.createFromTemplate);
@@ -240,20 +240,20 @@ export function ItemsTreeSidebar() {
                     >
                         {isCreating ? "Creating..." : "New element"}
                     </button>
-                    {(templates ?? []).map((template) => (
+                    {(templates ?? []).map((template: any) => (
                         <button
                             key={template._id}
                             type="button"
                             onClick={async () => {
                                 const result = await createFromTemplate({
                                     projectId,
-                                    templateKey: template.key,
+                                    templateId: template.templateId,
                                 });
                                 setSelectedItemId(result.itemId);
                             }}
                             className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
                         >
-                            {template.label}
+                            {template.name}
                         </button>
                     ))}
                 </div>
@@ -314,4 +314,3 @@ export function ItemsTreeSidebar() {
         </div>
     );
 }
-

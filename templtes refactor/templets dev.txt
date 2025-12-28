@@ -1,0 +1,423 @@
+Below is the **dev plan** for the redesign: **Structured Core + Templates + ChangeSet Inbox + deterministic apply + minimal LLM**.
+(English plan, Hebrew terms in template names/tasks where relevant.)
+
+---
+
+# 1) Goals & non-goals
+
+## Goals
+
+* **Structured Core is the only source of truth**:
+
+  * `ProjectBrief` + `ItemsTree` (items, tasks, materials, labor, risks, notes, memory bullets).
+* **Templates** define the “standard process” per work type (tasks, roles, dependencies, default materials).
+* **No “regenerate everything”**:
+
+  * Create once from template, then apply **deltas** (patch ops) only.
+* **LLM never writes canonical data directly**:
+
+  * LLM outputs **ChangeSets** into an Inbox; user approves; apply is deterministic.
+* Support **free text** + **Memory bullets** + **Risk register** at project and item level.
+* Default labor:
+
+  * `איש ארט` daily rate default **800 NIS/day**, editable per project/settings.
+* Default pricing policy (all from costs):
+
+  * **15% overhead**, **10% risk**, **30% profit** → default multiplier **1.55x**.
+
+## Non-goals (for MVP)
+
+* Perfect auto-linking of every legacy accounting line to items.
+* Full automatic cost estimation by web search (keep optional later).
+
+---
+
+# 2) Core data model (Structured Core)
+
+## 2.1 ProjectBrief (1 per project)
+
+Fields (minimum):
+
+* `projectId`
+* `name`, `clientName`, `locationText`
+* `dates`: `{start?, end?, installDay?, shootDay?, teardownDay?}`
+* `projectFlags`: booleans (studioBuild, prints, transport, install, rental, event, etc.)
+* `constraints[]`, `preferences[]`, `assumptions[]` (structured bullet objects)
+* `risks[]` (risk register; see below)
+* `memoryBullets[]` (short curated bullets for model context)
+* `freeNotes` (markdown)
+
+### Risk object (project-level and item-level)
+
+* `id`, `title`
+* `severity`: 1–5
+* `likelihood`: 1–5
+* `mitigation` (text)
+* `ownerRole` (optional)
+
+## 2.2 ItemsTree
+
+**Items represent mainly deliverables** (per user), and **days are items**.
+
+Minimal item fields:
+
+* `itemId`, `projectId`
+* `title` (Hebrew)
+* `kind`: `"deliverable" | "day" | "service"`
+* `templateRef`: `{templateId, version}`
+* `status`: `"draft" | "approved" | "done" | "archived"`
+* `descriptionClient` (quote-facing text)
+* `descriptionInternal` (workshop text)
+* `notes` (free text)
+* `memoryBullets[]`
+* `risks[]`
+* `dependsOnItemIds[]`, `relatedItemIds[]`
+* `childrenItemIds[]` (optional)
+
+## 2.3 Tasks (canonical, under item)
+
+* `taskId`, `itemId`
+* `title` (Hebrew)
+* `category`:
+
+  * `"סטודיו" | "רכש" | "הובלה" | "התקנה" | "אדמין" | "עיצוב" | "ספקי משנה"`
+* `role`:
+
+  * `"איש ארט" | "מעצב גרפי" | "סט דראסר" | "עובד התקנה" | "בית דפוס" | "נגריה" | "חשמלאי" | ..."`
+* `effortDays` (number; supports 0.25/0.5/etc.)
+* `dependenciesTaskIds[]`
+* `schedule` (optional): `{start?, end?}`
+* `costingPolicy`:
+
+  * `includeInAccounting: boolean`
+  * `includeInQuote: boolean`
+  * `reason?: string`
+
+### Management day items (explicit decision)
+
+Create a `day` item template **"יום ניהול"**:
+
+* tasks with `includeInAccounting=false` and `includeInQuote=false`
+* still visible in Tasks/Gantt.
+
+## 2.4 Materials & Labor lines (linked to item/task)
+
+To fix “materials generated but not placed correctly”, enforce linkage:
+
+**MaterialLine**
+
+* `materialLineId`
+* `itemId` (required)
+* `taskId` (optional)
+* `name`, `spec`, `qty`, `unit`
+* `vendorRole?` (optional)
+* `costEstimate`, `costActual`
+* `clientPriceOverride?`
+* `notes`
+
+**WorkLine** (optional if you compute labor from tasks; see section 6)
+
+* `workLineId`
+* `itemId`, `taskId?`
+* `role`, `days`
+* `ratePerDay`
+* `cost = days * ratePerDay`
+* `clientPriceOverride?`
+
+---
+
+# 3) Template system (Settings-driven, versioned)
+
+## 3.1 TemplateDefinition (versioned)
+
+A template is a recipe that expands into:
+
+* required/optional fields
+* tasks (with default roles/effort/category/dependencies)
+* optional materials placeholders
+* companion item rules
+* quote pattern
+
+### TemplateDefinition shape
+
+```json
+{
+  "templateId": "prints_beita_dfus",
+  "version": 1,
+  "name": "הדפסות בבית דפוס",
+  "appliesToKind": "deliverable",
+  "fields": [
+    { "key": "printType", "label": "סוג הדפסה", "type": "text", "required": true },
+    { "key": "size", "label": "מידות", "type": "text", "required": true },
+    { "key": "qty", "label": "כמות", "type": "number", "required": true },
+    { "key": "hasFiles", "label": "קבצים מוכנים?", "type": "boolean", "required": true },
+    { "key": "includeDesign", "label": "כולל עיצוב (אופציה)", "type": "boolean", "required": false, "default": false }
+  ],
+  "tasks": [
+    {
+      "title": "בדיקת קבצים גרפיים/הכנה לדפוס",
+      "category": "עיצוב",
+      "role": "מעצב גרפי",
+      "effortDays": 0.5,
+      "condition": { "field": "includeDesign", "equals": true }
+    },
+    {
+      "title": "סגירת מפרט מול בית דפוס",
+      "category": "ספקי משנה",
+      "role": "בית דפוס",
+      "effortDays": 0.25
+    },
+    {
+      "title": "איסוף/קבלה + בדיקת איכות",
+      "category": "רכש",
+      "role": "איש ארט",
+      "effortDays": 0.5
+    },
+    {
+      "title": "אריזה/הכנה להובלה",
+      "category": "סטודיו",
+      "role": "איש ארט",
+      "effortDays": 0.25
+    }
+  ],
+  "materials": [
+    { "name": "הדפסה (שירות)", "qty": 1, "unit": "יחידה", "defaultVendorRole": "בית דפוס" }
+  ],
+  "companionRules": [
+    { "type": "suggestItem", "templateId": "transport_day", "when": "always" },
+    { "type": "suggestItem", "templateId": "install_day", "when": "projectFlag:onSiteSetup" }
+  ],
+  "quotePattern": "הפקת הדפסות בבית דפוס לפי מפרט"
+}
+```
+
+## 3.2 RoleCatalog + rates (editable)
+
+Global defaults in Settings, overridable per project:
+
+* `איש ארט` default **800/day**
+* other roles get defaults (you can set them now or leave blank → require user input)
+
+```json
+{
+  "roles": [
+    { "name": "איש ארט", "defaultRatePerDay": 800 },
+    { "name": "מעצב גרפי", "defaultRatePerDay": 900 },
+    { "name": "סט דראסר", "defaultRatePerDay": 850 },
+    { "name": "עובד התקנה", "defaultRatePerDay": 850 },
+    { "name": "בית דפוס", "defaultRatePerDay": 0 },
+    { "name": "נגריה", "defaultRatePerDay": 0 },
+    { "name": "חשמלאי", "defaultRatePerDay": 0 }
+  ]
+}
+```
+
+## 3.3 Template library V1 (your list)
+
+Create templates (Hebrew names):
+
+* **בניה של אלמנט בסטודיו**
+* **דרסינג - השכרת פרופס וארט**
+* **הובלה** (Day)
+* **התקנה** (Day)
+* **יום צילום** (Day)
+* **פירוק** (Day)
+* **רצפת PVC**
+* **הדפסות בבית דפוס** (+ optional **עיצוב**)
+* **ספקי משנה**
+* **אירוע**
+* **מיצג**
+  Plus internal day templates:
+* **יום ניהול** (excluded from accounting/quote)
+* optionally **יום הקמה** if you want as day item.
+
+---
+
+# 4) Workflow: create → suggest → approve → apply (no regen)
+
+## 4.1 Event history
+
+Every user input (chat, upload, note) is stored as raw “Event”.
+No extraction needed to “save knowledge”.
+
+## 4.2 ChangeSet Inbox (LLM output only)
+
+LLM generates ChangeSets:
+
+* propose new items with template + fields
+* propose missing required fields
+* propose memory bullets and risks
+* propose edits to existing items
+
+### ChangeSet schema
+
+```json
+{
+  "changeSetId": "cs_123",
+  "projectId": "p_1",
+  "title": "Add item: רצפת PVC + Days",
+  "confidence": 0.78,
+  "missingFields": [
+    { "scope": "item", "tempKey": "pvc_floor", "fieldKey": "size", "question": "מה מידות/שטח רצפת ה-PVC?" }
+  ],
+  "ops": [
+    { "op": "addItemFromTemplate", "templateId": "pvc_floor", "fields": { "qty": 1 } },
+    { "op": "suggestItemFromTemplate", "templateId": "install_day" },
+    { "op": "suggestItemFromTemplate", "templateId": "teardown_day" },
+    { "op": "addMemoryBullet", "scope": "project", "text": "רצפת PVC דורשת התקנה ופירוק באותו אתר" },
+    { "op": "addRisk", "scope": "item", "itemTempKey": "pvc_floor", "risk": { "title": "אי התאמת מידות בשטח", "severity": 3, "likelihood": 3, "mitigation": "מדידה כפולה לפני חיתוך" } }
+  ]
+}
+```
+
+## 4.3 Apply is deterministic
+
+Rules:
+
+* If `missingFields` exist → cannot apply until resolved.
+* `addItemFromTemplate` expands once:
+
+  * creates item
+  * creates tasks/material placeholders
+  * sets default costingPolicy
+* Later edits are patch ops, not regen.
+
+---
+
+# 5) Pricing & accounting policy (defaults + override)
+
+## 5.1 Default project margins (from costs)
+
+* overhead = **15%**
+* risk = **10%**
+* profit = **30%**
+  All “from costs” → default multiplier = **1 + 0.15 + 0.10 + 0.30 = 1.55**
+
+Store in `ProjectPricingPolicy`:
+
+* `overheadPct`, `riskPct`, `profitPct`
+* `roundingPolicy` (optional: nearest 10/50)
+* `currency = ILS`
+
+## 5.2 Cost computation (per item)
+
+* `materialCost = sum(materialLines.costActual ?? costEstimate ?? 0)`
+* `laborCost`:
+
+  * Option A (recommended): compute from tasks:
+
+    * sum(task.effortDays * roleRatePerDay) where `includeInAccounting=true`
+  * Option B: store explicit WorkLines and sum them
+* `baseCost = materialCost + laborCost + externalVendorCosts`
+* `clientPriceDefault = baseCost * 1.55`
+* Overrides:
+
+  * item-level `clientPriceOverride` (absolute)
+  * line-level override for special cases
+
+## 5.3 Management items
+
+* management day item exists for planning/schedule
+* all tasks set `includeInAccounting=false` and `includeInQuote=false`
+* still appears in Gantt.
+
+---
+
+# 6) UI changes (minimal but key)
+
+## 6.1 Create Item flow
+
+* “+ Add Item”
+
+  * choose template
+  * fill required fields (inline)
+  * creates item expanded from template
+* Item sidebar shows:
+
+  * template name + version
+  * quick actions: add day item, duplicate, archive
+
+## 6.2 Settings → Templates
+
+* list templates + versions
+* create/edit draft → publish version
+* “test template” (creates dummy item preview)
+* import/export JSON
+
+## 6.3 Settings → Roles & Rates
+
+* RoleCatalog editor
+* default `איש ארט = 800`
+* per-project override page in project settings
+
+## 6.4 Inbox
+
+* show ChangeSets with:
+
+  * missing fields questions (editable)
+  * ops list
+  * apply selected / apply all
+
+---
+
+# 7) LLM usage (kept small and safe)
+
+## 7.1 Suggestion generator (batched)
+
+Trigger options:
+
+* manual button: “Analyze last N inputs”
+* on upload complete
+* on “Generate suggestions” in Planning tab
+
+Output: ChangeSets only.
+
+Prompt constraints:
+
+* Hebrew output
+* use English only for words user used
+* prefer templates from the V1 library
+* never delete items; propose archive only
+* always attach ops to either `project` or a specific `item` (or `itemTempKey` for new)
+
+## 7.2 No more “Plan markdown → schema parsing”
+
+The Plan text becomes a view/notes; canonical is Structured Core.
+
+---
+
+# 8) Migration plan (low risk)
+
+## Phase 1 (parallel run)
+
+* Add new tables:
+
+  * `templateDefinitions`, `roleCatalog`, `projectPricingPolicy`
+  * `projectBrief`, `items`, `tasks`, `materialLines` (or adapt existing with new fields)
+  * `changeSets` (reusing inbox table if exists)
+* Keep old flows working.
+
+## Phase 2 (import existing projects)
+
+* map old `projectItems` → new `items`
+* map old `tasks` → new `tasks` linked to itemId
+* map accounting lines → link to items where possible; otherwise keep unlinked (still visible)
+* store old plan markdown in `legacyPlanText`
+
+## Phase 3 (switch tabs)
+
+* Accounting/Tasks/Quote read from Structured Core first
+* old generator endpoints become “suggestion creators” into Inbox, not direct writers
+
+---
+
+# 9) Dev acceptance criteria (MVP)
+
+1. User can create an item using template **בניה של אלמנט בסטודיו**, and it expands to tasks.
+2. User can create **Day items** (הובלה/התקנה/יום צילום/פירוק/יום ניהול).
+3. Default labor cost uses `איש ארט 800/day` editable in settings.
+4. Item client price defaults to `baseCost * 1.55`, with override.
+5. LLM suggestion produces a ChangeSet and nothing is written until Apply.
+6. Materials and tasks are always linked to the correct item; no “lost materials”.
+7. Management day exists but is excluded from accounting/quote by policy.
+

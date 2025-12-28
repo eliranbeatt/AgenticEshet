@@ -38,21 +38,6 @@ export const getItemRefs = internalQuery({
     },
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // --------------------------------------------------------------------------
 // Queries
 // --------------------------------------------------------------------------
@@ -312,9 +297,21 @@ export const listRevisions = query({
 export const listTemplates = query({
     args: {},
     handler: async (ctx) => {
-        const templates = await ctx.db.query("itemTemplates").collect();
-        templates.sort((a, b) => a.sortOrder - b.sortOrder);
-        return templates;
+        const templates = await ctx.db.query("templateDefinitions")
+            .withIndex("by_status", q => q.eq("status", "published"))
+            .collect();
+
+        const latest = new Map();
+        for (const t of templates) {
+            const existing = latest.get(t.templateId);
+            if (!existing || t.version > existing.version) {
+                latest.set(t.templateId, t);
+            }
+        }
+
+        const result = Array.from(latest.values());
+        result.sort((a: any, b: any) => a.name.localeCompare(b.name));
+        return result;
     },
 });
 
@@ -368,50 +365,116 @@ export const createManual = mutation({
 });
 
 export const createFromTemplate = mutation({
-    args: { projectId: v.id("projects"), templateKey: v.string() },
+    args: { projectId: v.id("projects"), templateId: v.string(), version: v.optional(v.number()) },
     handler: async (ctx, args) => {
-        const template = await ctx.db
-            .query("itemTemplates")
-            .filter((q) => q.eq(q.field("key"), args.templateKey))
-            .unique();
+        let template;
+        if (args.version) {
+            template = await ctx.db.query("templateDefinitions")
+                .withIndex("by_templateId_version", q => q.eq("templateId", args.templateId).eq("version", args.version))
+                .first();
+        } else {
+            const templates = await ctx.db.query("templateDefinitions")
+                .withIndex("by_templateId_version", q => q.eq("templateId", args.templateId))
+                .collect();
+            template = templates.sort((a: any, b: any) => b.version - a.version)[0];
+        }
 
         if (!template) throw new Error("Template not found");
 
         const now = Date.now();
-        const spec = parseItemSpec(template.defaultData);
+        const title = template.name;
+        const typeKey = template.templateId;
+        const description = template.quotePattern || template.name;
 
         const itemId = await ctx.db.insert("projectItems", {
             projectId: args.projectId,
             parentItemId: null,
             sortKey: String(now),
-            title: spec.identity.title,
-            typeKey: template.typeKey,
-            name: spec.identity.title,
-            category: template.typeKey,
-            kind: "deliverable",
-            description: spec.identity.description,
+            title,
+            name: title,
+            kind: template.appliesToKind,
+            category: "template",
+            typeKey,
+            description,
             searchText: buildSearchText({
-                name: spec.identity.title,
-                description: spec.identity.description,
-                typeKey: template.typeKey,
+                name: title,
+                description,
+                typeKey
             }),
             status: "draft",
-            createdFrom: { source: "manual", sourceId: template.key },
+            createdFrom: { source: "manual", sourceId: template.templateId },
             latestRevisionNumber: 1,
             createdAt: now,
             updatedAt: now,
         });
 
+        const spec = buildBaseItemSpec(title, typeKey, description);
         const revisionId = await ctx.db.insert("itemRevisions", {
             projectId: args.projectId,
             itemId,
-            tabScope: "ideation",
+            tabScope: "planning",
             state: "proposed",
             revisionNumber: 1,
             data: spec,
             createdBy: { kind: "user" },
             createdAt: now,
         });
+
+        if (template.tasks) {
+            for (const t of template.tasks) {
+                await ctx.db.insert("tasks", {
+                    projectId: args.projectId,
+                    itemId,
+                    title: t.title,
+                    category: t.category as any,
+                    status: "todo",
+                    priority: "Medium",
+                    tags: ["template"],
+                    description: `Role: ${t.role}, Effort: ${t.role ? t.role + " " : ""}${t.effortDays}d`,
+                    origin: {
+                        source: "template",
+                        templateId: template.templateId,
+                        version: template.version,
+                    },
+                    createdAt: now,
+                    updatedAt: now,
+                });
+            }
+        }
+
+        if (template.materials && template.materials.length > 0) {
+            let section = await ctx.db.query("sections").withIndex("by_project", q => q.eq("projectId", args.projectId)).first();
+            if (!section) {
+                const sectionId = await ctx.db.insert("sections", {
+                    projectId: args.projectId,
+                    group: "Logistics",
+                    name: "General",
+                    sortOrder: 0,
+                    pricingMode: "estimated"
+                });
+                section = await ctx.db.get(sectionId);
+            }
+            if (section) {
+                for (const m of template.materials) {
+                    await ctx.db.insert("materialLines", {
+                        projectId: args.projectId,
+                        sectionId: section._id,
+                        itemId,
+                        category: "Materials",
+                        label: m.name,
+                        unit: m.unit || "unit",
+                        plannedQuantity: m.qty || 1,
+                        plannedUnitCost: 0,
+                        status: "planned",
+                        origin: {
+                            source: "template",
+                            templateId: template.templateId,
+                            version: template.version
+                        }
+                    });
+                }
+            }
+        }
 
         return { itemId, revisionId };
     },
@@ -959,11 +1022,11 @@ export const applySpec = mutation({
             latestRevisionNumber: revisionNumber,
             status: "approved",
         });
-        
+
         // Sync projections
         const revision = await ctx.db.get(revisionId);
         if (revision) {
-             await syncItemProjections(ctx, {
+            await syncItemProjections(ctx, {
                 item: { ...item, title: spec.identity.title, typeKey: spec.identity.typeKey },
                 revision,
                 spec,

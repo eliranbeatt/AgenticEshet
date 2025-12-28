@@ -1,0 +1,636 @@
+Got it. Below is a **dev-grade, expanded implementation plan**: phases, backend + UI changes, schema/migrations, deterministic apply, and how we transition from the current flow (plan markdown + generators) into **Structured Core + Templates + Inbox ChangeSets** without breaking production.
+
+I’ll assume you’re still on **Convex** + your current tabs (Planning/Accounting/Tasks/Quotes) and that you already have an “Inbox” concept and existing tables for tasks/accounting/quotes.
+
+---
+
+# 0) Target architecture (after refactor)
+
+## Canonical (Structured Core)
+
+* **ProjectBrief**: constraints/preferences/assumptions, risks, memory bullets, free notes, dates, project flags.
+* **Items**: deliverables + day items. Each item holds internal/client descriptions, notes, risks, memory bullets, and links.
+* **Tasks**: linked to items (and optionally day items). Includes category, role, effortDays, costingPolicy.
+* **Materials/Services**: linked to items (and optionally tasks).
+
+## Derived projections (read-models)
+
+* **Accounting view**: rollups computed from material lines + labor cost from tasks/work lines.
+* **Tasks/Gantt view**: read tasks + day items + dependencies.
+* **Quote**: deterministic sums + template quote patterns + optional LLM “polish”.
+
+## LLM role
+
+* LLM produces **ChangeSets** only (Inbox).
+* User approves → backend applies deterministically (no direct writes from LLM).
+
+---
+
+# 1) Data model: tables + key fields + indexes
+
+## 1.1 Templates & Settings
+
+### `templateDefinitions`
+
+One doc per **template version**.
+
+* `templateId` (string stable)
+* `version` (number)
+* `name` (Hebrew) e.g., `"הדפסות בבית דפוס"`
+* `appliesToKind`: `"deliverable" | "day" | "service"`
+* `fields[]`: `{key,label,type,required,default?}`
+* `tasks[]`: `{templateTaskId,title,category,role,effortDays,condition?}`
+* `materials[]`: `{templateMaterialId,name,spec?,qty?,unit?,defaultVendorRole?}`
+* `companionRules[]`: (see §3)
+* `quotePattern` (Hebrew sentence template)
+* `createdAt`, `createdBy`, `status: draft/published`
+
+**Indexes**
+
+* by `templateId`
+* by `templateId+version`
+* by `status`
+
+### `roleCatalog`
+
+Global default rates.
+
+* `roleName` (Hebrew)
+* `defaultRatePerDay` (number)
+* `isInternalRole` (bool) (איש ארט etc.)
+* `isVendorRole` (bool) (בית דפוס etc.)
+
+Index: `roleName`
+
+### `projectPricingPolicy`
+
+Per project overrides.
+
+* `projectId`
+* `overheadPct` default 0.15
+* `riskPct` default 0.10
+* `profitPct` default 0.30
+* `currency` = `"ILS"`
+* `roundingPolicy` optional
+
+Index: `projectId`
+
+### `projectRoleRates` (optional but recommended)
+
+Per project rate override per role.
+
+* `projectId`
+* `roleName`
+* `ratePerDay` (default from roleCatalog; override stored here)
+
+Index: `projectId+roleName`
+
+---
+
+## 1.2 Structured Core
+
+### `projectBrief`
+
+* `projectId`
+* `name`, `clientName`, `locationText`
+* `dates` object
+* `projectFlags` object
+* `constraints[]`, `preferences[]`, `assumptions[]` (each: `{id,text,source?,createdAt}`)
+* `risks[]` (risk objects)
+* `memoryBullets[]` (each `{id,text,createdAt,source?}`)
+* `freeNotes` (markdown)
+
+Index: `projectId`
+
+### `items`
+
+* `projectId`
+* `title` (Hebrew)
+* `kind`: deliverable/day/service
+* `templateRef`: `{templateId, version}`
+* `templateInputs` (object keyed by template field keys)
+* `status`: draft/approved/done/archived
+* `descriptionClient`
+* `descriptionInternal`
+* `notes`
+* `risks[]`
+* `memoryBullets[]`
+* `dependsOnItemIds[]`
+* `relatedItemIds[]`
+* `parentItemId?` (if you want hierarchy)
+
+Indexes:
+
+* `projectId`
+* `projectId+status`
+* `projectId+kind`
+* `parentItemId`
+
+### `tasks`
+
+* `projectId`
+* `itemId`
+* `title` (Hebrew)
+* `category` (Hebrew enum)
+* `roleName` (Hebrew)
+* `effortDays` (number supports 0.25/0.5)
+* `dependenciesTaskIds[]`
+* `dependenciesItemIds[]` (optional convenience)
+* `costingPolicy`: `{includeInAccounting, includeInQuote, reason?}`
+* `origin` metadata:
+  `{source: "template"|"user"|"ai", templateId?, version?, templateTaskId?}`
+
+Indexes:
+
+* `projectId`
+* `itemId`
+* `projectId+category`
+* `projectId+roleName`
+
+### `materialLines`
+
+* `projectId`
+* `itemId` (required)
+* `taskId?`
+* `name`
+* `spec?`
+* `qty?`, `unit?`
+* `vendorRoleName?` (e.g., בית דפוס)
+* `costEstimate?`, `costActual?`
+* `clientPriceOverride?`
+* `origin`: `{source, templateId?, version?, templateMaterialId?}`
+
+Indexes:
+
+* `projectId`
+* `itemId`
+* `taskId`
+
+> You can keep your existing accounting tables if they exist, but the key change is: **every line must link to itemId**.
+
+---
+
+## 1.3 Inbox / ChangeSets
+
+### `changeSets` (or reuse existing `inboxItems` with `type="ChangeSet"`)
+
+* `projectId`
+* `title`, `reason`, `confidence`
+* `status`: pending/applied/rejected
+* `missingFields[]` questions
+* `ops[]` operations (see §2)
+* `createdAt`, `createdBy`, `sourceEventIds[]` (optional)
+* `applyResult` (audit log: created ids, warnings)
+
+Indexes:
+
+* `projectId+status`
+* `createdAt`
+
+### `projectEvents` (optional but valuable)
+
+Raw history.
+
+* `projectId`
+* `type`: userMessage/fileUpload/note/agentOutput
+* `payload` (raw text / file metadata / etc.)
+* `createdAt`
+
+Index: `projectId+createdAt`
+
+---
+
+# 2) ChangeSet operations + deterministic apply
+
+## 2.1 Ops enum (MVP)
+
+Each op must be **idempotent** and **addressable**.
+
+* `addItemFromTemplate`
+
+  * `tempKey` (local reference within ChangeSet)
+  * `templateId`, `version?` (or “latest published”)
+  * `title?` (optional override)
+  * `templateInputs` (partial allowed if missingFields exists)
+* `updateItem`
+
+  * `itemId`
+  * `patch` (title, descriptions, notes, status, links, templateInputs)
+* `archiveItem` (never hard delete)
+* `addTask`
+
+  * `itemId` (or `itemRef: tempKey`)
+  * task fields
+* `updateTask`, `deleteTask` (soft delete)
+* `addMaterialLine`
+
+  * `itemId`/`itemRef`
+  * line fields
+* `updateMaterialLine`
+* `addRisk` / `updateRisk`
+
+  * `scope: "project" | "item"`
+* `addMemoryBullet` / `updateMemoryBullet`
+
+  * `scope: "project" | "item"`
+
+## 2.2 Apply algorithm (transactional)
+
+Implement `applyChangeSet(projectId, changeSetId)` as a **Convex mutation** with strict validation.
+
+Steps:
+
+1. Load ChangeSet; verify `status=pending`.
+2. Validate required template fields:
+
+   * For each `addItemFromTemplate`, if missing required field and not provided → block apply (return missingFields).
+3. Resolve item references:
+
+   * Create items first, maintain map: `tempKey -> newItemId`.
+4. Expand templates deterministically:
+
+   * Create tasks/material lines from template definitions.
+   * Add `origin` metadata on each generated node (`templateTaskId`, `templateMaterialId`).
+5. Apply all remaining ops in order.
+6. Run post-apply checks:
+
+   * Ensure every materialLine has `itemId`.
+   * Ensure effortDays ≥ 0.
+   * Validate roleName exists or allow free-form but warn.
+7. Mark ChangeSet as `applied` with `applyResult` audit log.
+
+**Critical guardrail:** apply must **never** rewrite existing unrelated tasks/materials. Only create/update what’s referenced.
+
+---
+
+# 3) Templates: companion rules + “days are items”
+
+You said:
+
+* deliverables are primary items.
+* if installation is big/complex → separate item.
+* **days should be items** (הובלה, התקנה, יום צילום, פירוק, יום ניהול).
+
+So templates need rules that **suggest** day items, not silently create them unless configured.
+
+## 3.1 Companion rule types (MVP)
+
+* `suggestItem(templateId, when)`
+* `autoAddItem(templateId, when)` (use sparingly; better to suggest)
+* `ifLargeInstallationSeparateItem` (heuristic trigger → suggestion)
+
+**when conditions examples**
+
+* `always`
+* `projectFlag:onSiteSetup`
+* `templateField:includeInstall=true`
+* `effortDaysTotal>=1.0` (estimated)
+
+## 3.2 “Printing includes design as option”
+
+In template tasks, add conditional tasks:
+
+* “בדיקת קבצים/הכנה לדפוס” for design only when `includeDesign=true`.
+
+---
+
+# 4) Pricing & accounting integration (costs → 1.55x default)
+
+## 4.1 Default policy
+
+Store per project:
+
+* overhead 15%, risk 10%, profit 30% (all from costs)
+* multiplier = 1.55
+
+## 4.2 Labor cost model (recommended)
+
+Compute labor from tasks (no separate workLines needed in MVP):
+
+* LaborCost(item) = Σ(task.effortDays * ratePerDay(role)) where `includeInAccounting=true`
+* Rates:
+
+  * default from roleCatalog
+  * project override via projectRoleRates
+  * `איש ארט = 800/day` default
+
+## 4.3 Item price
+
+* baseCost = materialCost + laborCost
+* clientPriceDefault = baseCost * 1.55
+* allow overrides:
+
+  * item-level `clientPriceOverride`
+  * line-level overrides (rare)
+
+## 4.4 Management day item
+
+Template: `"יום ניהול"`
+
+* tasks use `includeInAccounting=false`, `includeInQuote=false`
+* still scheduled / visible.
+
+---
+
+# 5) UI changes (by tab + new Settings)
+
+## 5.1 Planning tab becomes “Core Editor”
+
+Replace “Plan Markdown as source of truth” with:
+
+1. **Project Brief panel**
+
+   * constraints/preferences/assumptions
+   * risks register
+   * memory bullets + free notes
+2. **Items tree panel**
+
+   * list items grouped by kind (deliverables/days)
+   * expandable: tasks + materials + pricing summary
+3. **Inbox panel**
+
+   * pending ChangeSets
+   * resolve missing fields inline
+   * apply selected / apply all
+
+Keep your chat window, but its “output” should be **suggestions** not direct generation.
+
+## 5.2 Item detail UI (right drawer)
+
+Tabs:
+
+* Overview (title, descriptions, status, links)
+* Template (template + inputs; missing required highlighted)
+* Tasks (edit effort, role, category, dependencies)
+* Materials/Services (lines)
+* Pricing (cost breakdown, multiplier, overrides)
+* Notes/Risks/Memory
+
+## 5.3 Settings
+
+New pages:
+
+* Templates library (create/edit/publish/version/test)
+* Roles & rates
+* Pricing defaults
+* Optional import/export JSON for templates
+
+## 5.4 Accounting tab
+
+* No more “Generate from Plan” as primary.
+* Accounting shows rollups by:
+
+  * Item
+  * Category (materials vs labor)
+  * Optional “sections” (if you keep them)
+* Filters:
+
+  * hide management (already excluded by policy)
+  * show missing costs
+
+## 5.5 Tasks/Gantt tab
+
+* View day items prominently (since days are items)
+* Show tasks under items
+* Dependencies editing tool
+
+## 5.6 Quotes tab
+
+* Wizard-first:
+
+  * select items/days
+  * use deterministic sums
+  * render quote markdown from template quotePattern + descriptionClient
+* LLM optional “tone polishing” on final markdown only (no numbers changes)
+
+---
+
+# 6) Backend changes (endpoints/actions/mutations)
+
+## 6.1 New/updated mutations
+
+* `templates.createDraft`, `templates.publishVersion`, `templates.updateDraft`
+* `roles.setDefaultRate`, `projects.setRoleRateOverride`
+* `projectBrief.upsert`, `projectBrief.addMemoryBullet`, `projectBrief.addRisk`
+* `items.createFromTemplate` (internal helper)
+* `items.update`, `items.archive`
+* `tasks.create/update/delete`
+* `materialLines.create/update/delete`
+* `changeSets.apply` (core)
+* `pricing.computeRollups` (can be query-side computed or cached)
+
+## 6.2 New actions (LLM)
+
+* `suggestions.generateChangeSets(projectId, scope)`
+
+  * reads recent events/chat/uploads + current structured core summary
+  * produces ChangeSets
+* `suggestions.classifyTemplate` (optional helper)
+* `quote.polishMarkdown` (optional)
+
+**Important:** actions can fail safely; no direct DB writes except creating ChangeSet records.
+
+---
+
+# 7) Migration plan (safe, incremental)
+
+You currently have:
+
+* plan markdown as “source of truth”
+* generators for accounting/tasks/items from plan
+* facts engine extracting atom facts on every turn
+
+We migrate without breaking:
+
+## Phase M0 — Add schema without changing behavior
+
+* Add new tables: `projectBrief`, `templateDefinitions`, `roleCatalog`, `projectPricingPolicy`, `projectRoleRates`, `changeSets`, `projectEvents`.
+* Add new fields to existing tables:
+
+  * tasks: `itemId` required (if not already)
+  * materialLines/workLines: add `itemId`, `taskId?`, `origin`
+* No UI change yet.
+
+## Phase M1 — Seed templates + roles + pricing defaults
+
+* Seed the 11 templates + day templates (הובלה/התקנה/יום צילום/פירוק/יום ניהול)
+* Seed role catalog:
+
+  * איש ארט=800
+  * others default placeholders (or set reasonable defaults)
+* Seed pricing policy defaults per project (1.55x)
+
+## Phase M2 — Introduce ItemsTree as canonical for *new items only*
+
+* Add “Add Item” from template (new UI)
+* These new items write into `items/tasks/materialLines`.
+* Accounting/Tasks tabs can still show old data alongside new.
+
+## Phase M3 — Bridge existing data (import)
+
+For each project:
+
+1. Create `projectBrief`:
+
+   * move key constraints from existing facts/plan if easy; else start empty + attach legacy plan text to `freeNotes`.
+2. Convert existing `projectItems` → new `items`:
+
+   * copy titles, descriptions, status
+   * set `templateRef=null` (legacy) or best-effort infer template based on type
+3. Link tasks:
+
+   * ensure each task has `itemId`
+4. Link material lines:
+
+   * if current accounting lines exist without itemId, do best-effort mapping:
+
+     * by existing references (item name in description)
+     * by section name + heuristics
+   * anything unmapped stays `itemId=null` but visible under “Unassigned Costs” until user assigns.
+
+**Deliverable:** after M3, you have one unified ItemsTree for old + new.
+
+## Phase M4 — Inbox + ChangeSet apply becomes primary for AI
+
+* Replace “generate items/tasks/accounting from plan” actions with:
+
+  * “Generate suggestions” → creates ChangeSets
+  * user applies
+* Keep old endpoints but hide behind “Legacy tools” toggle until stable.
+
+## Phase M5 — Deprecate plan-as-truth + facts engine auto-extraction
+
+* Keep raw chat/events for history.
+* Stop auto fact extraction per message (or switch to low-frequency batch).
+* Plan markdown becomes “Notes” only (freeNotes/memory bullets).
+
+---
+
+# 8) Dev phases (deliverables + acceptance criteria)
+
+## Phase 1 — Foundations (Structured Core + Settings)
+
+**Deliverables**
+
+* Tables + indexes
+* role catalog + project rate overrides
+* pricing policy (1.55 multiplier)
+* templates CRUD + publish/version/test
+
+**Acceptance**
+
+* Can create/publish a template and preview expansion.
+* Rate for איש ארט defaults to 800 and is editable per project.
+
+## Phase 2 — Items Tree MVP (manual, deterministic)
+
+**Deliverables**
+
+* Items UI + item drawer
+* Create item from template → expands tasks/material lines
+* Day items templates working (הובלה/התקנה/יום צילום/פירוק/יום ניהול)
+
+**Acceptance**
+
+* Creating “בניה של אלמנט בסטודיו” suggests/creates companion day items (as suggestions).
+* Days are items in UI and can be scheduled.
+
+## Phase 3 — Pricing rollups + Accounting view
+
+**Deliverables**
+
+* labor cost computed from tasks * rates
+* material cost from lines
+* item totals + project totals
+* show management excluded by policy
+
+**Acceptance**
+
+* BaseCost + ClientPrice computed correctly with 15/10/30.
+* Override works at item level.
+
+## Phase 4 — Inbox ChangeSets + deterministic apply
+
+**Deliverables**
+
+* ChangeSet schema + apply mutation
+* missing fields gating
+* audit logs
+
+**Acceptance**
+
+* Apply creates items/tasks/materials with correct `itemId`.
+* No unrelated data is overwritten.
+
+## Phase 5 — LLM suggestions (batch)
+
+**Deliverables**
+
+* “Generate suggestions” action creating ChangeSets
+* template classification
+* memory bullets + risks suggestions
+
+**Acceptance**
+
+* Suggestions never directly modify core.
+* Hebrew-first output with minimal English.
+
+## Phase 6 — Quote wizard from core
+
+**Deliverables**
+
+* deterministic quote builder
+* uses descriptionClient + quotePattern
+* optional LLM polish (no price edits)
+
+**Acceptance**
+
+* Quote totals match accounting.
+* Formatting stable, predictable.
+
+## Phase 7 — Migration + deprecation
+
+**Deliverables**
+
+* importer for legacy projects
+* legacy plan stored in brief notes
+* stop using plan parsing pipeline
+
+**Acceptance**
+
+* Old projects open with items tree populated.
+* Users can manually assign “unassigned lines”.
+
+---
+
+# 9) Implementation details that prevent “future pain”
+
+## 9.1 Origin metadata (critical for non-regeneration)
+
+Every generated task/material line stores:
+
+* `origin.source="template"`
+* `origin.templateTaskId` / `origin.templateMaterialId`
+
+So if you later change template version, you can:
+
+* suggest upgrades via ChangeSet
+* apply deltas safely without wiping user edits
+
+## 9.2 Dedupe keys
+
+* Each ChangeSet op has `opId`
+* Store applied opIds in applyResult
+* If apply retried → idempotent
+
+## 9.3 Validation
+
+* required template fields must be filled before item can be “approved”
+* every material line must have itemId
+* management tasks excluded from accounting/quote by policy
+
+## 9.4 Performance
+
+* Rollups can be computed on read (query) at first.
+* Later add cached rollup table updated on mutations if needed.
+

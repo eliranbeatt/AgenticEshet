@@ -115,3 +115,127 @@ export const seedSkillsPublic = mutation({
         }
     },
 });
+
+export const seedRefactorData = mutation({
+    handler: async (ctx) => {
+        // 1. Seed Role Catalog
+        const roles = [
+            { roleName: "איש ארט", defaultRatePerDay: 800, isInternalRole: true, isVendorRole: false },
+            { roleName: "מעצב גרפי", defaultRatePerDay: 900, isInternalRole: true, isVendorRole: false },
+            { roleName: "סט דראסר", defaultRatePerDay: 850, isInternalRole: true, isVendorRole: false },
+            { roleName: "עובד התקנה", defaultRatePerDay: 850, isInternalRole: true, isVendorRole: false },
+            { roleName: "בית דפוס", defaultRatePerDay: 0, isInternalRole: false, isVendorRole: true },
+            { roleName: "נגריה", defaultRatePerDay: 0, isInternalRole: false, isVendorRole: true },
+            { roleName: "חשמלאי", defaultRatePerDay: 0, isInternalRole: false, isVendorRole: true },
+        ];
+
+        for (const role of roles) {
+            const existing = await ctx.db.query("roleCatalog").withIndex("by_roleName", q => q.eq("roleName", role.roleName)).first();
+            if (!existing) {
+                await ctx.db.insert("roleCatalog", role);
+            } else {
+                await ctx.db.patch(existing._id, role);
+            }
+        }
+
+        // 2. Seed Templates (V1 Library)
+        // Helper to construct template object
+        const createTemplate = (
+            id: string,
+            name: string,
+            kind: "deliverable" | "day" | "service",
+            quotePattern: string,
+            tasks: any[],
+            materials: any[] = [],
+            companionRules: any[] = []
+        ) => ({
+            templateId: id,
+            version: 1,
+            name,
+            appliesToKind: kind,
+            quotePattern,
+            fields: [], // Simplified for seed
+            tasks,
+            materials,
+            companionRules,
+            status: "published" as const,
+            createdAt: Date.now()
+        });
+
+        const templates = [
+            // Day Items
+            createTemplate("transport_day", "הובלה", "day", "שירותי הובלה לאתר ובחזרה", [
+                { title: "תיאום הובלה", category: "אדמין", role: "איש ארט", effortDays: 0.1 }
+            ]),
+            createTemplate("install_day", "התקנה", "day", "יום התקנה באתר", [
+                { title: "הקמה והתקנה בשטח", category: "התקנה", role: "עובד התקנה", effortDays: 1 }
+            ]),
+            createTemplate("shoot_day", "יום צילום", "day", "ליווי יום צילום", [
+                { title: "נוכחות ביום צילום", category: "סטודיו", role: "איש ארט", effortDays: 1 }
+            ]),
+            createTemplate("teardown_day", "פירוק", "day", "פירוק וקיפול ציוד מהאתר", [
+                { title: "פירוק והחזרה למחסן", category: "התקנה", role: "עובד התקנה", effortDays: 0.5 }
+            ]),
+            createTemplate("management_day", "יום ניהול", "day", "ניהול והפקה", [
+                { title: "ניהול פרויקט", category: "אדמין", role: "איש ארט", effortDays: 1 }
+            ]), // Note: Excluded logic is policy-based, not template-based
+
+            // Deliverables
+            createTemplate("studio_build", "בניה של אלמנט בסטודיו", "deliverable", "ייצור ובניית אלמנט ייחודי בסטודיו", [
+                { title: "תכנון ושרטוט", category: "עיצוב", role: "איש ארט", effortDays: 0.25 },
+                { title: "רכש חומרים", category: "רכש", role: "איש ארט", effortDays: 0.25 },
+                { title: "בנייה בסטודיו", category: "סטודיו", role: "איש ארט", effortDays: 1 }
+            ], [
+                { name: "חומרי גלם (עץ/זכוכית/פרזול)", defaultVendorRole: "נגריה" }
+            ]),
+
+            createTemplate("dressing", "דרסינג - השכרת פרופס וארט", "deliverable", "השכרה וליקוט אביזרים ופרופס", [
+                { title: "חיפוש וליקוט ספקים", category: "רכש", role: "סט דראסר", effortDays: 0.5 },
+                { title: "איסוף והחזרה", category: "רכש", role: "סט דראסר", effortDays: 0.25 }
+            ], [
+                { name: "השכרת ציוד/פרופס", defaultVendorRole: "ספקי משנה" }
+            ]),
+
+            createTemplate("pvc_floor", "רצפת PVC", "deliverable", "אספקה והתקנת רצפת PVC", [
+                { title: "הזמנה וחיתוך", category: "רכש", role: "איש ארט", effortDays: 0.25 }
+            ], [
+                { name: "יריעת PVC", unit: "מ״ר" }
+            ], [
+                { type: "suggestItem", templateId: "install_day", when: "always" }
+            ]),
+
+            createTemplate("print_house", "הדפסות בבית דפוס", "deliverable", "הפקת דפוס לפי מפרט", [
+                { title: "בדיקת קבצים גרפיים", category: "עיצוב", role: "מעצב גרפי", effortDays: 0.5 }, // conditional logic handled in UI/Expansion
+                { title: "סגירת מפרט מול דפוס", category: "ספקי משנה", role: "איש ארט", effortDays: 0.25 },
+                { title: "איסוף ובקרת איכות", category: "רכש", role: "איש ארט", effortDays: 0.5 }
+            ], [
+                { name: "הדפסה (שירות)", defaultVendorRole: "בית דפוס" }
+            ]),
+
+            createTemplate("subcontractor", "ספקי משנה", "service", "תיאום וניהול ספק משנה", [
+                { title: "תיאום מול ספק", category: "אדמין", role: "איש ארט", effortDays: 0.25 }
+            ]),
+
+            createTemplate("event_production", "אירוע", "deliverable", "הפקת אירוע מלא", [
+                { title: "הקמה בשטח", category: "התקנה", role: "עובד התקנה", effortDays: 1 }
+            ]),
+
+            createTemplate("exhibit", "מיצג", "deliverable", "הקמת מיצג אומנותי", [
+                { title: "תכנון המיצג", category: "עיצוב", role: "איש ארט", effortDays: 1 },
+                { title: "הקמה", category: "סטודיו", role: "איש ארט", effortDays: 1 }
+            ])
+        ];
+
+        for (const template of templates) {
+            const existing = await ctx.db.query("templateDefinitions")
+                .withIndex("by_templateId_version", q => q.eq("templateId", template.templateId).eq("version", 1))
+                .first();
+
+            if (!existing) {
+                await ctx.db.insert("templateDefinitions", template);
+            } else {
+                await ctx.db.patch(existing._id, template);
+            }
+        }
+    }
+});

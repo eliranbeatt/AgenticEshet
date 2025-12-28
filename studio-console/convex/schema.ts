@@ -1,17 +1,141 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
-import { 
-  evidenceSchema, 
-  factValueSchema, 
-  factStatusSchema, 
-  factSourceKindSchema, 
-  factScopeTypeSchema,
-  factParseRunStatusSchema,
-  factParseRunStatsSchema
+import {
+    evidenceSchema,
+    factValueSchema,
+    factStatusSchema,
+    factSourceKindSchema,
+    factScopeTypeSchema,
+    factParseRunStatusSchema,
+    factParseRunStatsSchema
 } from "./lib/facts/schemas";
 
 export default defineSchema({
+    // --- TEMPLATES REFACTOR TABLES ---
+
+    // 0.1 Templates (Versioned recipes)
+    templateDefinitions: defineTable({
+        templateId: v.string(), // Stable ID e.g. "print_beita"
+        version: v.number(),
+        name: v.string(),
+        appliesToKind: v.union(v.literal("deliverable"), v.literal("day"), v.literal("service")),
+        fields: v.array(v.object({
+            key: v.string(),
+            label: v.string(),
+            type: v.union(v.literal("text"), v.literal("number"), v.literal("boolean")),
+            required: v.boolean(),
+            default: v.optional(v.any()), // serialized
+        })),
+        tasks: v.array(v.object({
+            title: v.string(),
+            category: v.string(),
+            role: v.string(),
+            effortDays: v.number(),
+            condition: v.optional(v.object({ field: v.string(), equals: v.any() })),
+            // ... other task defaults can be added here
+        })),
+        materials: v.array(v.object({
+            name: v.string(), // placeholder name
+            spec: v.optional(v.string()),
+            qty: v.optional(v.number()),
+            unit: v.optional(v.string()),
+            defaultVendorRole: v.optional(v.string())
+        })),
+        companionRules: v.optional(v.array(v.object({
+            type: v.union(v.literal("suggestItem"), v.literal("autoAddItem")),
+            templateId: v.string(),
+            when: v.string() // simple rule string e.g. "always", "projectFlag:onSiteSetup"
+        }))),
+        quotePattern: v.optional(v.string()), // Hebrew pattern
+        status: v.union(v.literal("draft"), v.literal("published")),
+        createdAt: v.number(),
+        createdBy: v.optional(v.string()),
+    }).index("by_templateId_version", ["templateId", "version"])
+        .index("by_status", ["status"]),
+
+    // 0.2 Role Catalog (Global Defaults)
+    roleCatalog: defineTable({
+        roleName: v.string(),
+        defaultRatePerDay: v.number(),
+        isInternalRole: v.boolean(),
+        isVendorRole: v.boolean(),
+    }).index("by_roleName", ["roleName"]),
+
+    // 0.3 Project Pricing Policy (Overrides)
+    projectPricingPolicy: defineTable({
+        projectId: v.id("projects"),
+        overheadPct: v.number(), // 0.15
+        riskPct: v.number(),     // 0.10
+        profitPct: v.number(),   // 0.30
+        currency: v.string(),    // "ILS"
+        roundingPolicy: v.optional(v.string()),
+    }).index("by_project", ["projectId"]),
+
+    // 0.4 Project Role Rates (Overrides)
+    projectRoleRates: defineTable({
+        projectId: v.id("projects"),
+        roleName: v.string(),
+        ratePerDay: v.number(),
+    }).index("by_project_role", ["projectId", "roleName"]),
+
+    // 0.5 Project Brief (Extracted strict fields)
+    projectBrief: defineTable({
+        projectId: v.id("projects"),
+        name: v.string(),
+        clientName: v.optional(v.string()),
+        locationText: v.optional(v.string()),
+        dates: v.optional(v.object({
+            start: v.optional(v.string()),
+            end: v.optional(v.string()),
+            installDay: v.optional(v.string()),
+            shootDay: v.optional(v.string()),
+            teardownDay: v.optional(v.string()),
+        })),
+        projectFlags: v.optional(v.object({
+            studioBuild: v.optional(v.boolean()),
+            prints: v.optional(v.boolean()),
+            transport: v.optional(v.boolean()),
+            install: v.optional(v.boolean()),
+            rental: v.optional(v.boolean()),
+            event: v.optional(v.boolean()),
+        })),
+        constraints: v.optional(v.array(v.object({
+            id: v.string(),
+            text: v.string(),
+            source: v.optional(v.string()),
+            createdAt: v.number(),
+        }))),
+        preferences: v.optional(v.array(v.object({
+            id: v.string(),
+            text: v.string(),
+            source: v.optional(v.string()),
+            createdAt: v.number(),
+        }))),
+        assumptions: v.optional(v.array(v.object({
+            id: v.string(),
+            text: v.string(),
+            source: v.optional(v.string()),
+            createdAt: v.number(),
+        }))),
+        risks: v.optional(v.array(v.object({
+            id: v.string(),
+            title: v.string(),
+            severity: v.number(), // 1-5
+            likelihood: v.number(), // 1-5
+            mitigation: v.optional(v.string()),
+            ownerRole: v.optional(v.string()),
+        }))),
+        memoryBullets: v.optional(v.array(v.object({
+            id: v.string(),
+            text: v.string(),
+            createdAt: v.number(),
+            source: v.optional(v.string()),
+        }))),
+        freeNotes: v.optional(v.string()), // markdown
+    }).index("by_project", ["projectId"]),
+
+    // 1. PROJECTS: Core entity
     // 1. PROJECTS: Core entity
     projects: defineTable({
         name: v.string(),
@@ -435,6 +559,7 @@ export default defineSchema({
             tasks: v.optional(v.number()),
             accountingLines: v.optional(v.number()),
             dependencies: v.optional(v.number()),
+            materialLines: v.optional(v.number()),
         })),
     })
         .index("by_project_phase_status", ["projectId", "phase", "status"])
@@ -447,7 +572,8 @@ export default defineSchema({
             v.literal("item"),
             v.literal("task"),
             v.literal("accountingLine"),
-            v.literal("dependency")
+            v.literal("dependency"),
+            v.literal("materialLine")
         ),
         opType: v.union(
             v.literal("create"),
@@ -581,6 +707,12 @@ export default defineSchema({
         solutionPlanJson: v.optional(v.string()), // JSON string for structured plan
         lastUpdatedBy: v.optional(v.string()),
         updatedAt: v.optional(v.number()),
+        origin: v.optional(v.object({
+            source: v.union(v.literal("template"), v.literal("user"), v.literal("ai")),
+            templateId: v.optional(v.string()),
+            version: v.optional(v.number()),
+            templateMaterialId: v.optional(v.string())
+        })),
     })
         .index("by_section", ["sectionId"])
         .index("by_project", ["projectId"])
@@ -788,6 +920,12 @@ export default defineSchema({
         // AI metadata
         source: v.union(v.literal("user"), v.literal("agent")),
         confidenceScore: v.optional(v.number()),
+        origin: v.optional(v.object({
+            source: v.union(v.literal("template"), v.literal("user"), v.literal("ai")),
+            templateId: v.optional(v.string()),
+            version: v.optional(v.number()),
+            templateTaskId: v.optional(v.string())
+        })),
         // Timestamps
         createdAt: v.optional(v.number()),
         updatedAt: v.number(),
@@ -1390,8 +1528,8 @@ export default defineSchema({
         createdAt: v.number(),
         answeredAt: v.optional(v.number()),
     })
-    .index("by_session_turn", ["sessionId", "turnNumber"])
-    .index("by_project_stage_recent", ["projectId", "stage", "createdAt"]),
+        .index("by_session_turn", ["sessionId", "turnNumber"])
+        .index("by_project_stage_recent", ["projectId", "stage", "createdAt"]),
 
     // --- FACTS PIPELINE ---
 
@@ -1410,8 +1548,8 @@ export default defineSchema({
         bundleHash: v.string(), // sha256
         createdAt: v.number(),
     })
-    .index("by_project_createdAt", ["projectId", "createdAt"])
-    .index("by_hash", ["bundleHash"]),
+        .index("by_project_createdAt", ["projectId", "createdAt"])
+        .index("by_hash", ["bundleHash"]),
 
     factParseRuns: defineTable({
         projectId: v.id("projects"),
@@ -1423,8 +1561,8 @@ export default defineSchema({
         stats: v.optional(factParseRunStatsSchema),
         error: v.optional(v.object({ message: v.string(), raw: v.optional(v.string()) })),
     })
-    .index("by_bundle", ["turnBundleId"])
-    .index("by_project_createdAt", ["projectId", "startedAt"]),
+        .index("by_bundle", ["turnBundleId"])
+        .index("by_project_createdAt", ["projectId", "startedAt"]),
 
     facts: defineTable({
         projectId: v.id("projects"),
@@ -1442,9 +1580,9 @@ export default defineSchema({
         createdAt: v.number(),
         supersedesFactId: v.optional(v.id("facts")),
     })
-    .index("by_scope_key", ["projectId", "scopeType", "itemId", "key"])
-    .index("by_project_status", ["projectId", "status"])
-    .index("by_item", ["projectId", "itemId"]),
+        .index("by_scope_key", ["projectId", "scopeType", "itemId", "key"])
+        .index("by_project_status", ["projectId", "status"])
+        .index("by_item", ["projectId", "itemId"]),
 
     factExtractionRuns: defineTable({
         projectId: v.id("projects"),
@@ -1475,8 +1613,8 @@ export default defineSchema({
         error: v.optional(v.object({ message: v.string(), raw: v.optional(v.string()) })),
         createdAt: v.number(),
     })
-    .index("by_bundle", ["turnBundleId"])
-    .index("by_project_createdAt", ["projectId", "createdAt"]),
+        .index("by_bundle", ["turnBundleId"])
+        .index("by_project_createdAt", ["projectId", "createdAt"]),
 
     factAtoms: defineTable({
         projectId: v.id("projects"),
@@ -1520,10 +1658,10 @@ export default defineSchema({
         createdAt: v.number(),
         updatedAt: v.number(),
     })
-    .index("by_project_scope_status", ["projectId", "scopeType", "itemId", "status"])
-    .index("by_exactHash", ["projectId", "dedupe.exactHash"])
-    .index("by_group", ["projectId", "groupId"])
-    .index("by_project_item", ["projectId", "itemId"]),
+        .index("by_project_scope_status", ["projectId", "scopeType", "itemId", "status"])
+        .index("by_exactHash", ["projectId", "dedupe.exactHash"])
+        .index("by_group", ["projectId", "groupId"])
+        .index("by_project_item", ["projectId", "itemId"]),
 
     factGroups: defineTable({
         projectId: v.id("projects"),
@@ -1536,8 +1674,8 @@ export default defineSchema({
         createdAt: v.number(),
         updatedAt: v.number(),
     })
-    .index("by_project_scope", ["projectId", "scopeType", "itemId"])
-    .index("by_canonical", ["canonicalFactId"]),
+        .index("by_project_scope", ["projectId", "scopeType", "itemId"])
+        .index("by_canonical", ["canonicalFactId"]),
 
     factIssues: defineTable({
         projectId: v.id("projects"),
@@ -1556,9 +1694,9 @@ export default defineSchema({
         resolvedByUserId: v.optional(v.string()),
         resolvedAt: v.optional(v.number()),
     })
-    .index("by_project_status", ["projectId", "status"])
-    .index("by_fact", ["factId"])
-    .index("by_type_status", ["type", "status"]),
+        .index("by_project_status", ["projectId", "status"])
+        .index("by_fact", ["factId"])
+        .index("by_type_status", ["type", "status"]),
 
     factEmbeddings: defineTable({
         projectId: v.id("projects"),
@@ -1567,12 +1705,12 @@ export default defineSchema({
         model: v.string(),
         createdAt: v.number(),
     })
-    .index("by_project_fact", ["projectId", "factId"])
-    .vectorIndex("by_embedding", {
-        vectorField: "vector",
-        dimensions: 1536,
-        filterFields: ["projectId"],
-    }),
+        .index("by_project_fact", ["projectId", "factId"])
+        .vectorIndex("by_embedding", {
+            vectorField: "vector",
+            dimensions: 1536,
+            filterFields: ["projectId"],
+        }),
 
     knowledgeBlocks: defineTable({
         projectId: v.id("projects"),
@@ -1585,5 +1723,5 @@ export default defineSchema({
         updatedAt: v.number(),
         updatedBy: v.object({ type: v.union(v.literal("system"), v.literal("user"), v.literal("agent")), refId: v.optional(v.string()) }),
     })
-    .index("by_scope_block", ["projectId", "scopeType", "itemId", "blockKey"]),
+        .index("by_scope_block", ["projectId", "scopeType", "itemId", "blockKey"]),
 });

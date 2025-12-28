@@ -83,6 +83,7 @@ import type * as lib_textChunker from "../lib/textChunker.js";
 import type * as lib_zodSchemas from "../lib/zodSchemas.js";
 import type * as management from "../management.js";
 import type * as migrations from "../migrations.js";
+import type * as migrators from "../migrators.js";
 import type * as prices from "../prices.js";
 import type * as projects from "../projects.js";
 import type * as prompts_flowPromptPack from "../prompts/flowPromptPack.js";
@@ -182,6 +183,7 @@ declare const fullApi: ApiFromModules<{
   "lib/zodSchemas": typeof lib_zodSchemas;
   management: typeof management;
   migrations: typeof migrations;
+  migrators: typeof migrators;
   prices: typeof prices;
   projects: typeof projects;
   "prompts/flowPromptPack": typeof prompts_flowPromptPack;

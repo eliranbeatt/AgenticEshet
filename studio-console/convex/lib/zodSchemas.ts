@@ -493,6 +493,40 @@ const AccountingLinePatchSchema = z.object({
     }).strict(),
 }).strict();
 
+const MaterialLineCreateSchema = z.object({
+    tempId: z.string().min(1),
+    itemRef: ItemRefSchema.optional(),
+    taskRef: TaskRefSchema.optional(),
+    category: z.string(),
+    label: z.string().min(1),
+    description: z.string().optional(),
+    unit: z.string().default("unit"),
+    plannedQuantity: z.number().min(0),
+    plannedUnitCost: z.number().min(0),
+    procurement: z.enum(["in_stock", "local", "abroad", "either"]).optional(),
+    supplierName: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+}).strict();
+
+const MaterialLinePatchSchema = z.object({
+    lineId: z.string().min(1),
+    patch: z.object({
+        label: z.string().optional(),
+        description: z.string().optional(),
+        category: z.string().optional(),
+        plannedQuantity: z.number().min(0).optional(),
+        plannedUnitCost: z.number().min(0).optional(),
+        supplierName: z.string().optional(),
+        status: z.string().optional(),
+    }).strict(),
+}).strict();
+
+const MaterialLineDeleteRequestSchema = z.object({
+    lineId: z.string().min(1),
+    reason: z.string(),
+    requiresDoubleConfirm: z.literal(true),
+}).strict();
+
 export const ChangeSetSchema = z.object({
     type: z.literal("ChangeSet"),
     projectId: z.string().min(1),
@@ -527,6 +561,11 @@ export const ChangeSetSchema = z.object({
         create: z.array(AccountingLineCreateSchema),
         patch: z.array(AccountingLinePatchSchema),
     }).strict(),
+    materialLines: z.object({
+        create: z.array(MaterialLineCreateSchema),
+        patch: z.array(MaterialLinePatchSchema),
+        deleteRequest: z.array(MaterialLineDeleteRequestSchema),
+    }).strict().optional(),
     uiHints: z.object({
         focusItemIds: z.array(z.string()),
         expandItemIds: z.array(z.string()),

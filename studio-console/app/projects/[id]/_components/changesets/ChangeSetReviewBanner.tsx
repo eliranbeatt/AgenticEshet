@@ -130,6 +130,7 @@ export function ChangeSetReviewBanner({
                                         <div className="grid gap-3 sm:grid-cols-2 text-sm">
                                             <InfoCard label="Elements" value={String(active.counts?.items ?? 0)} />
                                             <InfoCard label="Tasks" value={String(active.counts?.tasks ?? 0)} />
+                                            <InfoCard label="Materials" value={String(active.counts?.materialLines ?? 0)} />
                                             <InfoCard label="Accounting" value={String(active.counts?.accountingLines ?? 0)} />
                                             <InfoCard label="Dependencies" value={String(active.counts?.dependencies ?? 0)} />
                                         </div>

@@ -27,6 +27,7 @@ import type * as agents_quote from "../agents/quote.js";
 import type * as agents_solutioning from "../agents/solutioning.js";
 import type * as agents_solutioningV2 from "../agents/solutioningV2.js";
 import type * as agents_structuredQuestions from "../agents/structuredQuestions.js";
+import type * as agents_suggestions from "../agents/suggestions.js";
 import type * as agents_taskEditor from "../agents/taskEditor.js";
 import type * as agents_taskRefiner from "../agents/taskRefiner.js";
 import type * as assets from "../assets.js";
@@ -127,6 +128,7 @@ declare const fullApi: ApiFromModules<{
   "agents/solutioning": typeof agents_solutioning;
   "agents/solutioningV2": typeof agents_solutioningV2;
   "agents/structuredQuestions": typeof agents_structuredQuestions;
+  "agents/suggestions": typeof agents_suggestions;
   "agents/taskEditor": typeof agents_taskEditor;
   "agents/taskRefiner": typeof agents_taskRefiner;
   assets: typeof assets;

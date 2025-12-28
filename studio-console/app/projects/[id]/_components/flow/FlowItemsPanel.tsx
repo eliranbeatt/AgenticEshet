@@ -21,13 +21,16 @@ export function FlowItemsPanel(props: Props) {
         includeDrafts: true,
     });
 
+    const templates = useQuery(api.items.listTemplates);
     const createManual = useMutation(api.items.createManual);
+    const createFromTemplate = useMutation(api.items.createFromTemplate);
     const renameItem = useMutation(api.items.renameItem);
     const requestDelete = useMutation(api.items.requestDelete);
     const confirmDelete = useMutation(api.items.confirmDelete);
 
     const [search, setSearch] = useState("");
     const [isCreating, setIsCreating] = useState(false);
+    const [selectedTemplateId, setSelectedTemplateId] = useState("");
 
     const allItems = useMemo(() => (sidebarData?.items ?? []) as Array<Doc<"projectItems">>, [sidebarData?.items]);
     const items = useMemo(() => {
@@ -74,6 +77,32 @@ export function FlowItemsPanel(props: Props) {
         props.onSetSelectedItemIds(Array.from(next) as Array<Id<"projectItems">>);
     };
 
+    const handleCreate = async () => {
+        if (isCreating) return;
+        setIsCreating(true);
+        try {
+            let result;
+            if (selectedTemplateId) {
+                result = await createFromTemplate({
+                    projectId: props.projectId,
+                    templateId: selectedTemplateId,
+                });
+            } else {
+                result = await createManual({
+                    projectId: props.projectId,
+                    title: "Untitled element",
+                    typeKey: "general",
+                });
+            }
+            props.onSetSelectedItemIds([result.itemId]);
+            setSelectedTemplateId(""); // Reset
+        } catch (e) {
+            alert("Failed to create: " + e);
+        } finally {
+            setIsCreating(false);
+        }
+    };
+
     return (
         <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
             <div className="p-3 border-b space-y-2">
@@ -81,20 +110,28 @@ export function FlowItemsPanel(props: Props) {
                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Elements</div>
                 </div>
 
-                <button
-                    type="button"
-                    className="w-full text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-                    onClick={async () => {
-                        const result = await createManual({
-                            projectId: props.projectId,
-                            title: "Untitled element",
-                            typeKey: "general",
-                        });
-                        props.onSetSelectedItemIds([result.itemId]);
-                    }}
-                >
-                    + Add element
-                </button>
+                <div className="flex gap-2">
+                    <select 
+                        className="flex-1 border rounded px-2 py-1 text-xs bg-white text-gray-700"
+                        value={selectedTemplateId}
+                        onChange={(e) => setSelectedTemplateId(e.target.value)}
+                    >
+                        <option value="">Empty (Manual)</option>
+                        {templates?.map(t => (
+                            <option key={t.templateId} value={t.templateId}>
+                                {t.name} (v{t.version})
+                            </option>
+                        ))}
+                    </select>
+                    <button
+                        type="button"
+                        className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                        onClick={handleCreate}
+                        disabled={isCreating}
+                    >
+                        {isCreating ? "..." : "+ Add"}
+                    </button>
+                </div>
 
                 <input
                     className="w-full border rounded px-2 py-1 text-sm"

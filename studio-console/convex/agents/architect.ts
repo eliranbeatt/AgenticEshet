@@ -76,7 +76,7 @@ export const getContext: ReturnType<typeof internalQuery> = internalQuery({
     },
 });
 
-export const saveTasks = internalMutation({
+export const createChangeSet = internalMutation({
     args: {
         projectId: v.id("projects"),
         tasks: v.array(v.object({
@@ -96,145 +96,13 @@ export const saveTasks = internalMutation({
     },
     handler: async (ctx, args) => {
         const project = await ctx.db.get(args.projectId);
-        const tasks = args.tasks.map((t) => ({
-            ...t,
-            accountingSectionName: t.accountingSectionName ?? undefined,
-            accountingItemLabel: t.accountingItemLabel ?? undefined,
-            accountingItemType: t.accountingItemType ?? undefined,
-            estimatedDuration: t.estimatedHours ? t.estimatedHours * 60 * 60 * 1000 : undefined,
-            questName: t.questName ?? undefined,
-        }));
 
-        const existingTasks = await ctx.db
-            .query("tasks")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-            .collect();
-
-        const existingQuests = await ctx.db
-            .query("quests")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-            .collect();
-
-        const questMap = new Map<string, Id<"quests">>();
-        for (const q of existingQuests) {
-            questMap.set(q.title.trim().toLowerCase(), q._id);
+        // Helper functions for matching
+        function normalizeKey(value: string) {
+            return value.trim().toLowerCase();
         }
 
-        let maxTaskNumber = 0;
-        for (const t of existingTasks) {
-            if (t.taskNumber && t.taskNumber > maxTaskNumber) maxTaskNumber = t.taskNumber;
-        }
-        let currentTaskNumber = maxTaskNumber;
-
-        const existingByTitle = new Map<string, { id: Id<"tasks">; source: string }>(
-            existingTasks.map((task) => [task.title.trim().toLowerCase(), { id: task._id, source: task.source }])
-        );
-
-        const sections = await ctx.db
-            .query("sections")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-            .collect();
-
-        const materialLines = await ctx.db
-            .query("materialLines")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-            .collect();
-
-        const workLines = await ctx.db
-            .query("workLines")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-            .collect();
-
-        const items: Doc<"projectItems">[] = [];
-        for (const status of ["draft", "approved", "archived"] as const) {
-            const batch = await ctx.db
-                .query("projectItems")
-                .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", status))
-                .collect();
-            items.push(...batch);
-        }
-
-        const normalizeKey = (value: string) => value.trim().toLowerCase();
-
-        const sectionNameCounts = new Map<string, number>();
-        for (const section of sections) {
-            const nameKey = normalizeKey(section.name);
-            sectionNameCounts.set(nameKey, (sectionNameCounts.get(nameKey) ?? 0) + 1);
-        }
-
-        const sectionLookup = new Map<string, Id<"sections">>();
-        const sectionNameLookupUnique = new Map<string, Id<"sections">>();
-        for (const section of sections) {
-            const display = `[${section.group}] ${section.name}`;
-            sectionLookup.set(normalizeKey(display), section._id);
-            const nameKey = normalizeKey(section.name);
-            if ((sectionNameCounts.get(nameKey) ?? 0) === 1) {
-                sectionNameLookupUnique.set(nameKey, section._id);
-            }
-        }
-
-        const materialsBySection = new Map<Id<"sections">, Map<string, Id<"materialLines">>>();
-        for (const line of materialLines) {
-            const sectionId = line.sectionId as Id<"sections">;
-            if (!materialsBySection.has(sectionId)) materialsBySection.set(sectionId, new Map());
-            materialsBySection.get(sectionId)!.set(normalizeKey(line.label), line._id);
-        }
-
-        const workBySection = new Map<Id<"sections">, Map<string, Id<"workLines">>>();
-        for (const line of workLines) {
-            const sectionId = line.sectionId as Id<"sections">;
-            if (!workBySection.has(sectionId)) workBySection.set(sectionId, new Map());
-            workBySection.get(sectionId)!.set(normalizeKey(line.role), line._id);
-        }
-
-        const itemTitleCounts = new Map<string, number>();
-        for (const item of items) {
-            const key = normalizeKey(item.title);
-            itemTitleCounts.set(key, (itemTitleCounts.get(key) ?? 0) + 1);
-        }
-
-        const itemTitleLookupUnique = new Map<string, Id<"projectItems">>();
-        for (const item of items) {
-            const key = normalizeKey(item.title);
-            if ((itemTitleCounts.get(key) ?? 0) === 1) {
-                itemTitleLookupUnique.set(key, item._id);
-            }
-        }
-
-        const resolveSectionId = (raw?: string) => {
-            if (!raw) return undefined;
-            const key = normalizeKey(raw);
-            let match = sectionLookup.get(key) ?? sectionNameLookupUnique.get(key);
-
-            if (!match) {
-                // Fuzzy fallback: check if raw is contained in any section label or vice versa
-                // e.g. "paint" matches "[Studio Elements] Paint"
-                for (const [sKey, sId] of sectionLookup.entries()) {
-                    if (sKey.includes(key) || key.includes(sKey)) {
-                        match = sId;
-                        break;
-                    }
-                }
-            }
-            return match;
-        };
-
-        const resolveItemId = (raw?: string) => {
-            if (!raw) return undefined;
-            const key = normalizeKey(raw);
-            let match = itemTitleLookupUnique.get(key);
-            if (!match) {
-                for (const [titleKey, itemId] of itemTitleLookupUnique.entries()) {
-                    if (titleKey.includes(key) || key.includes(titleKey)) {
-                        match = itemId;
-                        break;
-                    }
-                }
-            }
-            return match;
-        };
-
-        const normalizeTempTaskId = (raw: string | undefined) => {
+        function normalizeTempTaskId(raw: string | undefined): string | null {
             if (!raw) return null;
             const trimmed = raw.trim();
             if (!trimmed) return null;
@@ -253,169 +121,196 @@ export const saveTasks = internalMutation({
             if (embedded) return `T${Number(embedded[1])}`;
 
             return upper;
-        };
-
-        const tempIdToDbId = new Map<string, Id<"tasks">>();
-
-        for (let i = 0; i < tasks.length; i++) {
-            const t = tasks[i];
-            const normalizedTitle = t.title.trim().toLowerCase();
-            const sectionId = resolveSectionId(t.accountingSectionName);
-            const itemId = resolveItemId(t.itemTitle ?? undefined);
-
-            let accountingLineType: "material" | "work" | undefined;
-            let accountingLineId: Id<"materialLines"> | Id<"workLines"> | undefined;
-            if (sectionId && t.accountingItemType && t.accountingItemLabel) {
-                const itemKey = normalizeKey(t.accountingItemLabel);
-                if (t.accountingItemType === "material") {
-                    accountingLineId = materialsBySection.get(sectionId)?.get(itemKey);
-                    accountingLineType = accountingLineId ? "material" : undefined;
-                } else if (t.accountingItemType === "work") {
-                    accountingLineId = workBySection.get(sectionId)?.get(itemKey);
-                    accountingLineType = accountingLineId ? "work" : undefined;
-                }
-            }
-
-            let questId: Id<"quests"> | undefined;
-            if (t.questName) {
-                const key = t.questName.trim().toLowerCase();
-                if (questMap.has(key)) {
-                    questId = questMap.get(key);
-                } else {
-                    questId = await ctx.db.insert("quests", {
-                        projectId: args.projectId,
-                        title: t.questName,
-                        description: "Generated by Architect Agent",
-                        status: "active",
-                        createdAt: Date.now(),
-                    });
-                    questMap.set(key, questId);
-                }
-            }
-
-            const existingTask = existingByTitle.get(normalizedTitle);
-            let taskId: Id<"tasks">;
-
-            if (existingTask && existingTask.source === "agent") {
-                taskId = existingTask.id;
-                const patch: Partial<Doc<"tasks">> = {
-                    description: t.description,
-                    category: t.category,
-                    priority: t.priority,
-                    accountingSectionId: sectionId,
-                    accountingLineType,
-                    accountingLineId,
-                    estimatedDuration: t.estimatedDuration,
-                    questId,
-                };
-                if (itemId) {
-                    patch.itemId = itemId;
-                }
-                await ctx.db.patch(taskId, {
-                    ...patch,
-                    updatedAt: Date.now(),
-                });
-                if (!existingTasks.find(et => et._id === taskId)?.taskNumber) {
-                    currentTaskNumber++;
-                    await ctx.db.patch(taskId, { taskNumber: currentTaskNumber });
-                }
-            } else if (!existingTask) {
-                currentTaskNumber++;
-                taskId = await ctx.db.insert("tasks", {
-                    projectId: args.projectId,
-                    title: t.title,
-                    description: t.description,
-                    category: t.category,
-                    priority: t.priority,
-                    itemId,
-                    accountingLineId,
-                    status: "todo",
-                    source: "agent",
-                    taskNumber: currentTaskNumber,
-                    estimatedDuration: t.estimatedDuration,
-                    questId,
-                    createdAt: Date.now(),
-                    updatedAt: Date.now(),
-                });
-                existingByTitle.set(normalizedTitle, { id: taskId, source: "agent" });
-            } else {
-                taskId = existingTask.id;
-            }
-
-            const normalizedTempId = normalizeTempTaskId(t.id);
-            if (normalizedTempId) tempIdToDbId.set(normalizedTempId, taskId);
-            if (t.id) tempIdToDbId.set(t.id.trim(), taskId);
         }
 
-        for (let i = 0; i < tasks.length; i++) {
-            const t = tasks[i];
-            let currentDbId: Id<"tasks"> | undefined;
-            if (t.id) {
-                currentDbId =
-                    tempIdToDbId.get(normalizeTempTaskId(t.id) ?? t.id.trim()) ??
-                    tempIdToDbId.get(t.id.trim());
-            }
-            // Fallback (though schema requires ID)
-            if (!currentDbId) {
-                // Try to find it by re-resolving title if needed, or skip
-                const existing = existingByTitle.get(t.title.trim().toLowerCase());
-                if (existing) currentDbId = existing.id;
-            }
+        const tasks = args.tasks.map((t) => ({
+            ...t,
+            accountingSectionName: t.accountingSectionName ?? undefined,
+            accountingItemLabel: t.accountingItemLabel ?? undefined,
+            accountingItemType: t.accountingItemType ?? undefined,
+            estimatedDuration: t.estimatedHours ? t.estimatedHours * 60 * 60 * 1000 : undefined,
+            questName: t.questName ?? undefined,
+        }));
 
-            if (!currentDbId) continue;
-
-            const depIds: Id<"tasks">[] = [];
-            const desiredDependencies = t.dependencies ?? [];
-            for (const depStringIdRaw of desiredDependencies) {
-                const depStringId = depStringIdRaw.trim();
-                if (!depStringId) continue;
-
-                const candidates = [
-                    depStringId,
-                    depStringId.toUpperCase(),
-                    normalizeTempTaskId(depStringId),
-                ].filter((c): c is string => Boolean(c));
-
-                let depDbId: Id<"tasks"> | undefined;
-                for (const candidate of candidates) {
-                    depDbId = tempIdToDbId.get(candidate);
-                    if (depDbId) break;
-                }
-
-                // Fallback: if ID invalid, try matching by Title
-                // (handles cases where LLM mistakenly uses Title as dependency ID)
-                if (!depDbId) {
-                    const existing = existingByTitle.get(depStringId.toLowerCase());
-                    if (existing) depDbId = existing.id;
-                }
-
-                if (depDbId && depDbId !== currentDbId && !depIds.includes(depDbId)) depIds.push(depDbId);
-            }
-
-            await ctx.db.patch(currentDbId, { dependencies: depIds });
-        }
-
-        const taskSnapshot = await ctx.db
+        const existingTasks = await ctx.db
             .query("tasks")
             .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
             .collect();
 
-        const taskText = taskSnapshot
-            .map((task) => `- ${task.title} [${task.status}] (${task.category}/${task.priority}) ${task.description || ""}`)
-            .join("\n");
+        const existingByTitle = new Map<string, { id: Id<"tasks">; source: string }>(
+            existingTasks.map((task) => [task.title.trim().toLowerCase(), { id: task._id, source: task.source }])
+        );
 
-        // Ingest task snapshot into knowledge base using public API
-        await ctx.runAction(api.knowledge.ingestArtifact, {
+        const sections = await ctx.db
+            .query("sections")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+
+        // Section & Item Resolution
+        const sectionLookup = new Map<string, Id<"sections">>();
+        for (const section of sections) {
+            const display = `[${section.group}] ${section.name}`;
+            sectionLookup.set(normalizeKey(display), section._id);
+            sectionLookup.set(normalizeKey(section.name), section._id);
+        }
+
+        // Item Resolution
+        const items = new Map<string, Id<"projectItems">>();
+        const projectItems = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", "approved"))
+            .collect();
+        for (const item of projectItems) {
+            items.set(normalizeKey(item.title), item._id);
+        }
+
+        const resolveSectionId = (raw?: string) => {
+            if (!raw) return undefined;
+            const key = normalizeKey(raw);
+            let match = sectionLookup.get(key);
+            if (!match) {
+                for (const [sKey, sId] of sectionLookup.entries()) {
+                    if (sKey.includes(key) || key.includes(sKey)) {
+                        match = sId;
+                        break;
+                    }
+                }
+            }
+            return match;
+        };
+
+        const resolveItemId = (raw?: string) => {
+            if (!raw) return undefined;
+            const key = normalizeKey(raw);
+            let match = items.get(key);
+            if (!match) {
+                for (const [iKey, iId] of items.entries()) {
+                    if (iKey.includes(key) || key.includes(iKey)) {
+                        match = iId;
+                        break;
+                    }
+                }
+            }
+            return match;
+        };
+
+        const taskOps: any[] = [];
+        const dependencyOps: any[] = [];
+
+        // Create ChangeSet
+        const changeSetId = await ctx.db.insert("itemChangeSets", {
             projectId: args.projectId,
-            sourceType: "task",
-            sourceRefId: `tasks-${Date.now()}`,
-            title: `Task Snapshot ${new Date().toISOString()}`,
-            text: taskText,
-            summary: `Updated ${args.tasks.length} tasks from architect agent.`,
-            tags: ["tasks", "architect"],
-            topics: [],
             phase: "planning",
-            clientName: project?.clientName,
+            agentName: "architect",
+            status: "pending",
+            title: `Architect Task Generation ${new Date().toISOString()}`,
+            createdAt: Date.now(),
+        });
+
+        const tempIdToRef = new Map<string, string>(); // tempId -> tempId (identity for now)
+
+        for (const t of tasks) {
+            const normalizedTitle = t.title.trim().toLowerCase();
+            const sectionId = resolveSectionId(t.accountingSectionName);
+            const itemId = resolveItemId(t.itemTitle ?? undefined);
+            const normalizedTempId = normalizeTempTaskId(t.id) ?? `T-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+            // Map t.id to this normalizedTempId for dependency resolution
+            if (t.id) tempIdToRef.set(t.id.trim(), normalizedTempId);
+            if (normalizedTempId) tempIdToRef.set(normalizedTempId, normalizedTempId);
+
+            const existingTask = existingByTitle.get(normalizedTitle);
+
+            const tags = ["agent-architect"];
+            if (t.questName) tags.push(`Quest:${t.questName}`);
+
+            const payload = {
+                tempId: normalizedTempId,
+                itemRef: { itemId: itemId ?? null, itemTempId: null },
+                title: t.title,
+                description: t.description,
+                status: "todo",
+                category: t.category,
+                priority: t.priority,
+                tags,
+                durationHours: t.estimatedHours,
+                // Extra fields for logic not strictly in ChangeSet schema but might be needed
+                // accountingSectionId: sectionId, 
+                // We'll need to rely on the applier to handle these if we add them to schema or packed usage
+            };
+
+            if (existingTask) {
+                // Patch
+                taskOps.push({
+                    projectId: args.projectId,
+                    changeSetId,
+                    entityType: "task",
+                    opType: "patch",
+                    targetId: existingTask.id,
+                    payloadJson: JSON.stringify({
+                        taskId: existingTask.id,
+                        patch: {
+                            description: t.description,
+                            category: t.category,
+                            priority: t.priority,
+                            durationHours: t.estimatedHours,
+                            tags
+                        }
+                    }),
+                    createdAt: Date.now(),
+                });
+            } else {
+                // Create
+                taskOps.push({
+                    projectId: args.projectId,
+                    changeSetId,
+                    entityType: "task",
+                    opType: "create",
+                    tempId: normalizedTempId,
+                    payloadJson: JSON.stringify(payload),
+                    createdAt: Date.now(),
+                });
+            }
+        }
+
+        // Dependencies
+        for (const t of tasks) {
+            const normalizedTempId = tempIdToRef.get(t.id.trim());
+            if (!normalizedTempId) continue;
+
+            for (const depRaw of t.dependencies) {
+                const depTempId = tempIdToRef.get(depRaw.trim()) || normalizeTempTaskId(depRaw);
+                // If it maps to a tempId in this set, link it
+                if (depTempId) {
+                    dependencyOps.push({
+                        projectId: args.projectId,
+                        changeSetId,
+                        entityType: "dependency",
+                        opType: "create",
+                        payloadJson: JSON.stringify({
+                            fromTaskRef: { taskTempId: depTempId },
+                            toTaskRef: { taskTempId: normalizedTempId },
+                            type: "finish_to_start",
+                            lagHours: 0
+                        }),
+                        createdAt: Date.now(),
+                    });
+                } else {
+                    // Try to match existing task by title? 
+                    // For now, simpler to just skip if not found in batch or explicit ID
+                }
+            }
+        }
+
+        for (const op of taskOps) await ctx.db.insert("itemChangeSetOps", op);
+        for (const op of dependencyOps) await ctx.db.insert("itemChangeSetOps", op);
+
+        // Update changeset counts
+        await ctx.db.patch(changeSetId, {
+            counts: {
+                tasks: taskOps.length,
+                dependencies: dependencyOps.length
+            }
         });
     },
 });
@@ -627,7 +522,7 @@ When relevant, set accountingSectionName to one of the Accounting Sections above
                 });
             }
 
-            await ctx.runMutation(internal.agents.architect.saveTasks, {
+            await ctx.runMutation(internal.agents.architect.createChangeSet, {
                 projectId: args.projectId,
                 tasks: normalizedTasks,
             });

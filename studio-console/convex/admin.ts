@@ -68,3 +68,101 @@ export const deleteEnrichmentProfile = mutation({
         await ctx.db.delete(args.profileId);
     },
 });
+
+// --- Templates Management ---
+
+export const listTemplates = query({
+    args: {},
+    handler: async (ctx) => {
+        return await ctx.db.query("templateDefinitions").order("desc").collect();
+    },
+});
+
+export const saveTemplate = mutation({
+    args: {
+        id: v.optional(v.id("templateDefinitions")),
+        templateId: v.string(),
+        version: v.number(),
+        name: v.string(),
+        appliesToKind: v.union(v.literal("deliverable"), v.literal("day"), v.literal("service")),
+        fields: v.array(v.object({
+            key: v.string(),
+            label: v.string(),
+            type: v.union(v.literal("text"), v.literal("number"), v.literal("boolean")),
+            required: v.boolean(),
+            default: v.optional(v.any()),
+        })),
+        tasks: v.array(v.object({
+            title: v.string(),
+            category: v.string(),
+            role: v.string(),
+            effortDays: v.number(),
+            condition: v.optional(v.object({ field: v.string(), equals: v.any() })),
+        })),
+        materials: v.array(v.object({
+            name: v.string(),
+            spec: v.optional(v.string()),
+            qty: v.optional(v.number()),
+            unit: v.optional(v.string()),
+            defaultVendorRole: v.optional(v.string())
+        })),
+        companionRules: v.optional(v.array(v.object({
+            type: v.union(v.literal("suggestItem"), v.literal("autoAddItem")),
+            templateId: v.string(),
+            when: v.string()
+        }))),
+        quotePattern: v.optional(v.string()),
+        status: v.union(v.literal("draft"), v.literal("published")),
+    },
+    handler: async (ctx, args) => {
+        const { id, ...data } = args;
+        const now = Date.now();
+        if (id) {
+            await ctx.db.patch(id, data);
+            return id;
+        }
+        return await ctx.db.insert("templateDefinitions", { ...data, createdAt: now });
+    },
+});
+
+export const deleteTemplate = mutation({
+    args: { id: v.id("templateDefinitions") },
+    handler: async (ctx, args) => {
+        await ctx.db.delete(args.id);
+    },
+});
+
+// --- Roles Management ---
+
+export const listRoles = query({
+    args: {},
+    handler: async (ctx) => {
+        return await ctx.db.query("roleCatalog").collect();
+    },
+});
+
+export const saveRole = mutation({
+    args: {
+        id: v.optional(v.id("roleCatalog")),
+        roleName: v.string(),
+        defaultRatePerDay: v.number(),
+        isInternalRole: v.boolean(),
+        isVendorRole: v.boolean(),
+    },
+    handler: async (ctx, args) => {
+        const { id, ...data } = args;
+        if (id) {
+            await ctx.db.patch(id, data);
+            return id;
+        }
+        return await ctx.db.insert("roleCatalog", data);
+    },
+});
+
+export const deleteRole = mutation({
+    args: { id: v.id("roleCatalog") },
+    handler: async (ctx, args) => {
+        await ctx.db.delete(args.id);
+    },
+});
+

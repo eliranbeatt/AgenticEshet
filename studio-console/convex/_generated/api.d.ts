@@ -79,6 +79,7 @@ import type * as lib_itemRollups from "../lib/itemRollups.js";
 import type * as lib_knowledgeBlocks_patch from "../lib/knowledgeBlocks/patch.js";
 import type * as lib_openai from "../lib/openai.js";
 import type * as lib_openaiImages from "../lib/openaiImages.js";
+import type * as lib_pricing from "../lib/pricing.js";
 import type * as lib_projects from "../lib/projects.js";
 import type * as lib_rateLimit from "../lib/rateLimit.js";
 import type * as lib_textChunker from "../lib/textChunker.js";
@@ -101,6 +102,8 @@ import type * as structuredQuestions from "../structuredQuestions.js";
 import type * as tasks from "../tasks.js";
 import type * as trelloSync from "../trelloSync.js";
 import type * as turnBundles from "../turnBundles.js";
+import type * as verify_fix from "../verify_fix.js";
+import type * as verify_fix_mutation from "../verify_fix_mutation.js";
 import type * as whatsapp from "../whatsapp.js";
 
 import type {
@@ -181,6 +184,7 @@ declare const fullApi: ApiFromModules<{
   "lib/knowledgeBlocks/patch": typeof lib_knowledgeBlocks_patch;
   "lib/openai": typeof lib_openai;
   "lib/openaiImages": typeof lib_openaiImages;
+  "lib/pricing": typeof lib_pricing;
   "lib/projects": typeof lib_projects;
   "lib/rateLimit": typeof lib_rateLimit;
   "lib/textChunker": typeof lib_textChunker;
@@ -203,6 +207,8 @@ declare const fullApi: ApiFromModules<{
   tasks: typeof tasks;
   trelloSync: typeof trelloSync;
   turnBundles: typeof turnBundles;
+  verify_fix: typeof verify_fix;
+  verify_fix_mutation: typeof verify_fix_mutation;
   whatsapp: typeof whatsapp;
 }>;
 

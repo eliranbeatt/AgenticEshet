@@ -1,0 +1,80 @@
+# Gap Analysis & Remediation Plan - AgenticEshet Refactor
+Date: 2025-12-28
+Status: Partial Implementation / Mixed Architecture
+
+After reviewing the code, schema, and plans (`templets dev.txt`, `templets full.txt`), here is the detailed analysis of what is implemented versus what is missing.
+
+## 1. High-Level Status
+The **database schema** is mostly ready (Phase M0), but the **application logic and UI** are significantly lagging. You currently have a "split brain" system where the backend supports the new structures (`templateDefinitions`, `itemChangeSets`), but the frontend and core logic (rollups, inbox) are still largely operating on legacy patterns or missing entirely.
+
+## 2. Detailed Gap Analysis
+
+### A. Template System (Critical)
+*   **Schema:** `templateDefinitions` and `roleCatalog` tables exist.
+*   **Logic:** 
+    *   `items.ts:createFromTemplate` is implemented but **incomplete**. It expands tasks and materials but **ignores** `companionRules` (e.g., "suggestItem").
+*   **UI:** **Completely Missing.**
+    *   `app/admin/items/page.tsx` is only for running migration scripts.
+    *   There is **no interface** to create, edit, version, or publish templates.
+    *   There is **no interface** to manage the `roleCatalog` (rates).
+    *   **Impact:** Users cannot define the "standard process" the plan relies on.
+
+### B. Pricing & Accounting Logic
+*   **Schema:** `projectPricingPolicy` and `projectRoleRates` tables exist.
+*   **Logic (Rollups):** `convex/lib/itemRollups.ts` is **legacy-bound**.
+    *   **Gap:** It sums `workLines` (manual entries). It does **NOT** implement the planned "Labor Cost = Task Effort * Role Rate" logic.
+    *   **Gap:** It calculates raw costs but does **NOT** apply the `projectPricingPolicy` (1.55x default) to generate `clientPrice` or `sellPrice`.
+*   **Impact:** The "automatic estimation" feature is non-functional. Changing a role's rate won't update project costs.
+
+### C. Inbox & ChangeSets (Disconnected)
+*   **Schema:** `itemChangeSets` and `itemChangeSetOps` exist and look correct.
+*   **Backend:** 
+    *   `convex/changeSets.ts` implements `create` and `apply` logic properly (including ops for items/tasks).
+    *   `convex/agents/suggestions.ts` exists and writes to `itemChangeSets`.
+*   **Frontend:** **Legacy.**
+    *   `app/projects/[id]/inbox/page.tsx` reads from the old `inboxItems` table.
+    *   It expects `suggestions.tasksDraft` (simple arrays) instead of the new `itemChangeSets` (ops, confidence, missingFields).
+    *   **Impact:** The AI agent generates new-style suggestions, but the UI cannot display or apply them.
+
+### D. Migration Utilities
+*   **Status:** Partially implemented.
+*   `app/admin/items/page.tsx` provides buttons for `backfillFromAccounting` and `linkTasksToItems`, which aligns with Phase M3.
+
+---
+
+## 3. Remediation Plan (Immediate Actions)
+
+To get back on track with `templets full.txt`, execute these steps in order:
+
+### Step 1: Fix the Core Logic (Backend)
+1.  **Update `createFromTemplate` (`convex/items.ts`):**
+    *   Implement `companionRules` logic (at least creating `suggestion` ChangeSets for companion items).
+2.  **Update Rollups (`convex/lib/itemRollups.ts`):**
+    *   Implement "Option A": Iterate tasks, look up role rate (from `projectRoleRates` or `roleCatalog`), and add to `laborCost`.
+    *   Implement Pricing Policy: Fetch `projectPricingPolicy`, calculate `sellPrice = cost * (1 + overhead + risk + profit)`.
+
+### Step 2: Build the Missing Admin UI
+1.  **Create `app/admin/templates`:**
+    *   List `templateDefinitions`.
+    *   Editor for fields, tasks, materials, and rules.
+2.  **Create `app/admin/roles`:**
+    *   Editor for `roleCatalog` (default rates).
+
+### Step 3: Unify the Inbox (Frontend)
+1.  **Refactor `app/projects/[id]/inbox`:**
+    *   Switch query from `api.inbox.list` to `api.changeSets.listByProject`.
+    *   Create a new `<ChangeSetCard />` component that renders `ops` (e.g., "Create Item 'Print'", "Add Task 'Design'").
+    *   Wire the "Apply" button to `api.changeSets.apply`.
+
+### Step 4: Verify End-to-End
+1.  Create a template in the new Admin UI.
+2.  Use "Suggestions" to generate a ChangeSet based on that template.
+3.  View ChangeSet in the new Inbox UI.
+4.  Apply it -> Check Items Tree.
+5.  Check Accounting -> Verify labor cost is derived from tasks * rate.
+
+## 4. Summary of Missing Files/Modules
+*   `app/admin/templates/page.tsx` (New)
+*   `app/admin/roles/page.tsx` (New)
+*   `app/projects/[id]/inbox/_components/ChangeSetCard.tsx` (New)
+*   `convex/lib/pricing.ts` (Recommended: centralized pricing logic helper)

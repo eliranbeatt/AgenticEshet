@@ -218,10 +218,22 @@ export const populate = action({
         // 3. We exclude deprecated/rejected facts (listFacts might return them, let's allow the query to handle it if possible, but listFacts returns all.
         //    Actually listFacts returns sorted facts. We should filter by status "accepted" or "proposed" (high confidence)
 
-        const relevantFacts = allFacts.filter(f =>
-            (f.status === "accepted" || (f.status === "proposed" && f.confidence > 0.8)) &&
-            (f.scopeType === "project" || f.itemId === args.itemId)
-        );
+        const relevantFacts = allFacts.filter(f => {
+            const isHighConfidence = (f.status === "accepted" || (f.status === "proposed" && f.confidence > 0.8));
+            if (!isHighConfidence) return false;
+
+            if (f.scopeType === "project") return true;
+            if (f.itemId === args.itemId) return true;
+
+            // Include unlinked item facts that might match
+            if (f.scopeType === "item" && !f.itemId) {
+                // Simple token match
+                const factTokens = f.factTextHe.toLowerCase().split(/\s+/);
+                const titleTokens = item.title.toLowerCase().split(/\s+/);
+                return titleTokens.some(t => t.length > 2 && factTokens.includes(t));
+            }
+            return false;
+        });
 
         if (relevantFacts.length === 0) {
             // No facts, maybe just infer from title?

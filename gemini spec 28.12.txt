@@ -1,0 +1,306 @@
+ Here is the complete inventory and technical specification for the Magnetic Studio Console.
+
+  Step 1: Inventory
+
+  1. Agents & Skills (Code-Grounded)
+
+  ┌─────────────────────┬──────────────────────────────────┬─────────────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────┐
+  │ Agent / Skill Name  │ Implementation Path              │ Trigger                                 │ Core Responsibility                                                                │
+  ├─────────────────────┼──────────────────────────────────┼─────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┤
+  │ Flow (Orchestrator) │ convex/agents/flow.ts            │ Chat UI (Planning/Ideation/Solutioning) │ Manages conversation, updates shared flowWorkspaces, persists turnBundles.         │
+  │ Clarification V2    │ convex/agents/clarificationV2.ts │ Chat UI (Clarification Tab)             │ Conducts interviews, updates itemRevisions (ItemSpecV2), manages "open questions". │
+  │ Planning            │ convex/agents/planning.ts        │ Manual "Generate Plan" / Background     │ Generates high-level plan markdown & itemChangeSets from context.                  │
+  │ Architect           │ convex/agents/architect.ts       │ Tasks Page "Auto-Generate"              │ Breaks down plans into tasks & dependencies.                                       │
+  │ Estimator           │ convex/agents/estimator.ts       │ Accounting Tab / Background             │ Estimates materials (materialLines) & labor (workLines) for sections or items.     │
+  │ Task Refiner        │ convex/agents/taskRefiner.ts     │ Tasks Page "Refine Tasks"               │ Updates task estimates & dependencies based on new context.                        │
+  │ Task Editor         │ convex/agents/taskEditor.ts      │ Task Modal AI Edit                      │ Edits single task details.                                                         │
+  │ Knowledge Ingestion │ convex/ingestion.ts              │ File Upload / Email / Drive             │ Enhances, chunks, and embeds documents into knowledgeDocs/knowledgeChunks.         │
+  └─────────────────────┴──────────────────────────────────┴─────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────┘
+
+
+  2. Key Routes (Next.js App Router)
+  All under studio-console/app/projects/[id]/:
+   * overview/: Project dashboard.
+   * ideation/: Chat-based concept generation.
+   * clarification/: Structured item refinement (chat + form).
+   * planning/: High-level plan generation (FlowWorkbench).
+   * elements/: Item tree management.
+   * solutioning/: Detailed technical solving.
+   * accounting/: Budgeting, BOM, Labor estimates (Estimator trigger).
+   * tasks/: Kanban board, Task generation/refinement (Architect trigger).
+   * gantt/: Timeline view.
+   * quote/: Client quote generation.
+   * trello-view/: Trello sync status & visualization.
+   * knowledge/: RAG document management.
+
+  3. Core Schema Tables (convex/schema.ts)
+   * Entities: projects, projectItems (hierarchical), tasks, quests.
+   * State/Version Control: itemRevisions, itemChangeSets, itemChangeSetOps, plans.
+   * Financial: sections, materialLines, workLines, accountingLines, quotes.
+   * Knowledge/RAG: knowledgeDocs, knowledgeChunks, ingestionJobs, ingestionFiles, retrievalLogs.
+   * Facts Engine: facts (v1), factAtoms (v2), factGroups, turnBundles, factExtractionRuns, factIssues.
+   * Integration: trelloMappings, settings.
+
+  ---
+
+  Step 2: Full Technical Specification
+
+  Magnetic Studio Console: System Specification
+
+  A) EXECUTIVE OVERVIEW
+
+  Magnetic Studio Console is an agentic operating system for creative production studios. It orchestrates the lifecycle of physical projects—from vague client emails to concrete production tasks, bills of materials (BOM), and Trello execution.
+
+  Primary Workflow:
+   1. Ingestion: Client briefs (PDF/Email) are ingested and converted into a Knowledge Graph (Facts/Docs).
+   2. Clarification: AI Agents interview the user to resolve ambiguities in Project Items.
+   3. Planning: A Planning Agent synthesizes facts into a strategic textual plan.
+   4. Architecture: An Architect Agent converts the plan into atomic, dependent Tasks.
+   5. Estimation: An Estimator Agent calculates precise Material & Labor costs based on specs.
+   6. Execution: Tasks sync bi-directionally with Trello for field teams.
+
+    1 graph TD
+    2     User((User)) <--> UI[Next.js Console]
+    3     UI <--> Convex[Convex Backend & DB]
+    4
+    5     subgraph "Agentic Core"
+    6         Flow[Flow Agent]
+    7         Clarifier[Clarification Agent]
+    8         Planner[Planning Agent]
+    9         Architect[Architect Agent]
+   10         Estimator[Estimator Agent]
+   11     end
+   12
+   13     subgraph "Knowledge Engine"
+   14         Ingest[Ingestion Pipeline]
+   15         Facts[Facts V2 Pipeline]
+   16         RAG[Vector Search]
+   17     end
+   18
+   19     Convex <--> Flow
+   20     Convex <--> Clarifier
+   21     Convex <--> Planner
+   22     Convex <--> Architect
+   23     Convex <--> Estimator
+   24
+   25     Convex <--> Ingest
+   26     Convex <--> Trello[Trello Sync Engine]
+   27
+   28     Ingest --> RAG
+   29     Flow --> Facts
+
+  ---
+
+  B) AGENTIC ORCHESTRATION
+
+  1. Agent Roster
+
+
+  ┌──────────────────┬──────────────────────────────────┬─────────────────────────────────────────────────────────┬────────────────────────────────────────────────────┬───────────────────────────────────────┬─────────────────────────┐
+  │ Agent Name       │ Trigger                          │ Inputs (Context)                                        │ Outputs (Artifacts)                                │ Persistence                           │ Consumers               │
+  ├──────────────────┼──────────────────────────────────┼─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┼───────────────────────────────────────┼─────────────────────────┤
+  │ Flow             │ POST /flow/send (Chat)           │ Chat History, factsContext, knowledgeBlocks, activePlan │ flowWorkspaces (text), turnBundles (chat logs)     │ flowWorkspaces, turnBundles           │ Facts Pipeline, Planner │
+  │ Clarification V2 │ POST /clarification/send (Chat)  │ Item Spec (itemRevisions), factsContext, Chat History   │ itemRevisions (Draft Spec), openQuestions, summary │ itemRevisions, chatMessages           │ Planner, Estimator      │
+  │ Planning         │ POST /planning/run (Manual)      │ clarification summary, knowledgeDocs, projectItems      │ plans (Markdown), itemChangeSets (Draft Items)     │ plans, itemChangeSets                 │ Architect               │
+  │ Architect        │ POST /architect/run (Tasks Page) │ activePlan, projectItems, sections                      │ itemChangeSets (Tasks + Dependencies)              │ itemChangeSets (Ops: Create Task/Dep) │ Trello Sync, Gantt      │
+  │ Estimator        │ POST /estimator/run (Acct Page)  │ materialCatalog, projectItems, sections                 │ materialLines, workLines (BOM/Labor)               │ materialLines, workLines              │ Quote, Accounting       │
+  │ Ingestion        │ File Upload / Email              │ Raw File Buffer                                         │ knowledgeDocs, knowledgeChunks, normalizedText     │ ingestionFiles, knowledgeChunks       │ All Agents              │
+  └──────────────────┴──────────────────────────────────┴─────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┴───────────────────────────────────────┴─────────────────────────┘
+
+  2. Global "Studio Workflow" State Machine
+
+  The system moves a project through distinct phases. State is implicit, derived from the presence of artifacts.
+
+   1. Clarification Phase
+       * Entry: Project created, initial brief ingested.
+       * Activity: User chats with ClarificationV2.
+       * Exit: ItemSpecV2 revisions approved; openQuestions resolved.
+       * Canonical Truth: projectItems (Specs), facts (v2).
+
+   2. Planning Phase
+       * Entry: Clarification sufficiently done.
+       * Activity: Planning agent generates/updates plans (Markdown).
+       * Exit: Plan marked isActive: true.
+       * Canonical Truth: plans table.
+
+   3. Architecture Phase
+       * Entry: Active Plan exists.
+       * Activity: Architect agent reads plan -> generates tasks via itemChangeSets.
+       * Exit: Tasks approved (applied to tasks table).
+       * Canonical Truth: tasks table.
+
+   4. Estimation Phase
+       * Entry: Items/Tasks exist.
+       * Activity: Estimator agent fills materialLines/workLines.
+       * Exit: Budget approved.
+       * Canonical Truth: materialLines, workLines.
+
+   5. Execution Phase
+       * Entry: Tasks generated.
+       * Activity: Trello Sync runs. Field teams update status.
+       * Canonical Truth: tasks table (synced to Trello).
+
+  3. Inter-Agent Handoffs
+
+  Handoff 1: Clarification → Planning
+   * Artifact: Clarification Summary (Markdown) + Facts (Database).
+   * Producer: ClarificationV2 agent (summarizes interview).
+   * Consumer: Planning agent (uses summary as context).
+   * Storage: plans table (phase="clarification").
+
+  Handoff 2: Planning → Architecture
+   * Artifact: Active Plan (Markdown).
+   * Producer: Planning agent.
+   * Consumer: Architect agent.
+   * Contract: The Planner produces a text strategy; the Architect must produce tasks that implement that strategy 1:1.
+   * Storage: plans table (isActive=true).
+
+  Handoff 3: Architecture → Execution
+   * Artifact: Task List (JSON).
+   * Producer: Architect agent.
+   * Consumer: Trello Sync engine.
+   * Contract: Architect produces tempId dependencies; System resolves to taskId; Sync maps taskId ↔ trelloCardId.
+
+  4. Facts Pipeline (Context Assembly)
+
+  The "Facts V2" pipeline is the brain that prevents agents from asking repeated questions.
+
+   1. Extraction: Every chat turn (flow or clarification) creates a turnBundle.
+   2. Processing: factExtractionRuns (background job) calls LLM to extract atomic facts (e.g., "Event Date: 2025-10-10").
+   3. Deduplication: Facts are hashed (sha256(scope + key + value)). Duplicates are marked status: duplicate.
+   4. Vectorization: factEmbeddings are created for semantic search.
+   5. Retrieval: Agents call getFactsContext(query).
+       * Ranking: Exact matches > High confidence hypotheses > Vector similarity.
+       * Scoping: Agents request facts scoped to Project, Item, or MultiItem.
+
+  ---
+
+  C) INFORMATION ARCHITECTURE
+
+  1. Tabs Inventory (Project Level)
+
+
+  ┌───────────────┬────────────────┬────────────────────────────────────────┬───────────────────────────────────────────────────────────────┐
+  │ Tab Name      │ Route Path     │ Purpose                                │ Key Backend Calls                                             │
+  ├───────────────┼────────────────┼────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ Overview      │ /overview      │ Project dashboard, high-level summary. │ api.projects.getProject                                       │
+  │ Ideation      │ /ideation      │ Brainstorming chat.                    │ api.flowWorkspaces.ensure, api.chat.getThreadContext          │
+  │ Clarification │ /clarification │ Deep-dive item specification.          │ api.agents.clarificationV2.send, api.items.listSidebarTree    │
+  │ Planning      │ /planning      │ Plan generation & revision.            │ api.agents.planning.run, api.changeSets.list                  │
+  │ Tasks         │ /tasks         │ Kanban board, Architect trigger.       │ api.tasks.listByProject, api.agents.architect.run             │
+  │ Accounting    │ /accounting    │ Cost estimation & tracking.            │ api.accounting.getProjectAccounting, api.agents.estimator.run │
+  │ Knowledge     │ /knowledge     │ RAG document management.               │ api.ingestion.listJobs, api.knowledge.listRecentDocs          │
+  └───────────────┴────────────────┴────────────────────────────────────────┴───────────────────────────────────────────────────────────────┘
+
+  2. Key Pages Deep Dive
+
+  Page: Tasks (`/projects/[id]/tasks`)
+   * UI: Kanban Board (ToDo/In Progress/Blocked/Done).
+   * Actions:
+       * "Auto-Generate": Calls api.agents.architect.run.
+       * "Refine": Calls api.agents.taskRefiner.run.
+       * Drag & Drop: Calls api.tasks.updateTask.
+   * Filtering: By Accounting Section or Project Item.
+   * Agent Interaction: Agents run in background; UI polls agentRuns table to show "Thinking..." spinners.
+
+  Page: Planning (`/projects/[id]/planning`)
+   * UI: Split screen. Left: Chat/History. Right: Live Plan Document (Markdown).
+   * Logic: Uses FlowWorkbench. Chatting updates the "Current Understanding" scratchpad.
+   * Agent Interaction: User asks "Draft a plan". Agent generates ChangeSet. User reviews & applies.
+
+  ---
+
+  D) DATA MODEL (CONVEX SCHEMA)
+
+  Core Entities & Relationships
+
+   * `projects`: Root entity.
+   * `projectItems`: The "What". Hierarchical (parent/child). Linked to tasks and materialLines.
+       * Fields: title, typeKey, status, flags, scope, rollups.
+   * `tasks`: The "How". Actionable steps.
+       * Fields: title, status, dependencies (recursive), estimatedMinutes, accountingSectionId, itemId.
+   * `trelloMappings`: Sync state.
+       * Fields: taskId, trelloCardId, trelloListId, contentHash.
+
+  Costing & Accounting
+
+   * `sections`: Budget groups (e.g., "Carpentry", "Logistics").
+   * `materialLines`: Physical goods. Linked to sections and vendors.
+   * `workLines`: Labor. Linked to sections and roles.
+
+  Agent & Knowledge Memory
+
+   * `knowledgeDocs`: Uploaded files/artifacts.
+   * `knowledgeChunks`: Vectorized text segments (embedding field, 1536 dims).
+   * `factAtoms`: Discretized facts.
+       * Fields: factTextHe, status (accepted/proposed), confidence, sourceTier.
+   * `agentRuns`: Execution log for UI feedback/debugging.
+       * Fields: status (queued/running/failed), events (log array).
+
+  ---
+
+  E) BACKEND: API & RAG PIPELINE
+
+  1. RAG Ingestion Pipeline (convex/ingestion.ts)
+   1. Upload: createJob -> addFilesToJob (store in Convex storage).
+   2. Parse: runJob triggers parsing (PDF/Excel text extraction).
+   3. Enrich: LLM (GPT-4o) summarizes & extracts tags (EnhancerSchema).
+   4. Chunk: Text split into 1200 char chunks (150 overlap).
+   5. Embed: internal.knowledge.generateEmbeddings creates vectors.
+   6. Persist: Writes to knowledgeChunks.
+
+  2. Retrieval Pipeline (convex/knowledge.ts)
+   1. Query: dynamicSearch(query, scope).
+   2. Embed: Embed user query.
+   3. Search: ctx.vectorSearch("knowledgeChunks") with filter projectId.
+   4. Rank: Sort by cosine similarity score.
+   5. Log: retrievalLogs for observability.
+
+  ---
+
+  F) TRELLO INTEGRATION (convex/trelloSync.ts)
+
+   * Direction: Two-way (conceptually, though code focuses heavily on Push to Trello).
+   * Mapping: trelloMappings table links internal taskId to Trello cardId.
+   * Idempotency:
+       * Calculates contentHash of task fields.
+       * If hash matches stored hash, skips update (saves API quota).
+   * Sync Logic:
+       * Iterates all project tasks.
+       * If no mapping: POST /cards -> Store mapping.
+       * If mapping exists & hash differs: PUT /cards/:id.
+       * If task done: closed: true.
+
+  ---
+
+  G) FRONTEND ARCHITECTURE
+
+   * Framework: Next.js 14+ App Router.
+   * State: Convex React Query (useQuery, useMutation). Real-time updates by default.
+   * Drag & Drop: @dnd-kit/core used in TasksPage.
+   * Context: ItemsProvider wraps project routes to share item tree state.
+   * UI Components: Likely shadcn/ui (inferred from class names like bg-white border rounded).
+
+  ---
+
+  H) SECURITY & OPS
+
+   * Secrets: Trello API keys stored in settings table (JSON blob).
+   * Rate Limiting: rateLimit.consume used in flow.ts (30 reqs/min per thread).
+   * Observability: agentRuns table stores step-by-step logs for every agent action, visible in UI.
+
+  ---
+
+  J) GAP ANALYSIS & RECOMMENDATIONS
+
+  Observations:
+   1. Agent Logic: The Architect agent uses a "tempId" system for dependency resolution which is robust, but the Estimator agent overwrites lines aggressively (delete then insert).
+       * Risk: Manual edits to BOM might be lost on re-estimation.
+   2. Trello Sync: The sync is currently triggered manually or via specific actions.
+       * Gap: No webhook handler found to process updates from Trello back to Convex (e.g. moving a card in Trello updates Convex status).
+   3. Facts: The V2 pipeline is very advanced but complex. "Hypothesis" facts might pollute context if not strictly filtered.
+
+  Prioritized Recommendations:
+   1. Fix Estimator Overwrite: Modify estimator.ts to "upsert" or "mark as stale" instead of delete/insert, to preserve user customizations.
+   2. Trello Webhooks: Implement an HTTP action to receive Trello webhooks for bi-directional status sync.
+   3. Cost Versioning: The plans table versions text, but materialLines are live. Implement costSnapshots to freeze a budget at a point in time.

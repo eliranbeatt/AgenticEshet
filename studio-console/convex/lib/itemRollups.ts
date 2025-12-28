@@ -1,5 +1,10 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { 
+    getProjectPricingPolicy, 
+    getEffectiveRoleRates, 
+    calculateClientPrice 
+} from "./pricing";
 
 function parseTime(value?: string | number | null) {
     if (value === null || value === undefined) return null;
@@ -27,6 +32,13 @@ export async function recomputeRollups(
         "archived",
     ];
 
+    // 1. Fetch Policy & Rates
+    const [policy, roleRates] = await Promise.all([
+        getProjectPricingPolicy(ctx, args.projectId),
+        getEffectiveRoleRates(ctx, args.projectId)
+    ]);
+
+    // 2. Fetch all relevant data
     const items: Doc<"projectItems">[] = [];
     for (const status of statuses) {
         const batch = await ctx.db
@@ -43,21 +55,17 @@ export async function recomputeRollups(
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
         .collect();
 
-    const accountingLines = await ctx.db
-        .query("accountingLines")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .collect();
-
     const materialLines = await ctx.db
         .query("materialLines")
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
         .collect();
 
-    const workLines = await ctx.db
-        .query("workLines")
+    const accountingLines = await ctx.db
+        .query("accountingLines")
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
         .collect();
 
+    // 3. Index data by Item ID
     const tasksByItem = new Map<Id<"projectItems">, Doc<"tasks">[]>();
     for (const task of tasks) {
         if (!task.itemId) continue;
@@ -66,27 +74,19 @@ export async function recomputeRollups(
         tasksByItem.set(task.itemId, list);
     }
 
-    const linesByItem = new Map<Id<"projectItems">, Doc<"accountingLines">[]>();
-    for (const line of accountingLines) {
-        const list = linesByItem.get(line.itemId) ?? [];
-        list.push(line);
-        linesByItem.set(line.itemId, list);
-    }
-
-    const materialLinesByItem = new Map<Id<"projectItems">, Doc<"materialLines">[]>();
+    const materialsByItem = new Map<Id<"projectItems">, Doc<"materialLines">[]>();
     for (const line of materialLines) {
         if (!line.itemId) continue;
-        const list = materialLinesByItem.get(line.itemId) ?? [];
+        const list = materialsByItem.get(line.itemId) ?? [];
         list.push(line);
-        materialLinesByItem.set(line.itemId, list);
+        materialsByItem.set(line.itemId, list);
     }
 
-    const workLinesByItem = new Map<Id<"projectItems">, Doc<"workLines">[]>();
-    for (const line of workLines) {
-        if (!line.itemId) continue;
-        const list = workLinesByItem.get(line.itemId) ?? [];
+    const legacyLinesByItem = new Map<Id<"projectItems">, Doc<"accountingLines">[]>();
+    for (const line of accountingLines) {
+        const list = legacyLinesByItem.get(line.itemId) ?? [];
         list.push(line);
-        workLinesByItem.set(line.itemId, list);
+        legacyLinesByItem.set(line.itemId, list);
     }
 
     const childrenByParent = new Map<Id<"projectItems"> | null, Doc<"projectItems">[]>();
@@ -99,91 +99,79 @@ export async function recomputeRollups(
 
     const rollups = new Map<Id<"projectItems">, NonNullable<Doc<"projectItems">["rollups"]>>();
 
+    // 4. Compute Rollups (Recursive)
     function computeForItem(item: Doc<"projectItems">): NonNullable<Doc<"projectItems">["rollups"]> {
-        const existing = rollups.get(item._id);
-        if (existing) return existing;
+        if (rollups.has(item._id)) return rollups.get(item._id)!;
 
+        // Children
         const childItems = childrenByParent.get(item._id) ?? [];
         const childRollups = childItems.map(computeForItem);
 
-        const itemLines = linesByItem.get(item._id) ?? [];
-        const itemMaterials = materialLinesByItem.get(item._id) ?? [];
-        const itemWork = workLinesByItem.get(item._id) ?? [];
-
-        const costTotals = {
-            material: 0,
-            labor: 0,
-            rentals: 0,
-            purchases: 0,
-            shipping: 0,
-            misc: 0,
-            totalCost: 0,
-            currency: itemLines[0]?.currency ?? "ILS",
-        };
-
-        for (const line of itemMaterials) {
-            const qty = line.actualQuantity ?? line.plannedQuantity;
-            const cost = line.actualUnitCost ?? line.plannedUnitCost;
-            costTotals.material += qty * cost;
-        }
-
-        for (const line of itemWork) {
-            const qty = line.actualQuantity ?? line.plannedQuantity;
-            const cost = line.actualUnitCost ?? line.plannedUnitCost;
-            costTotals.labor += qty * cost;
-        }
-
-        for (const line of itemLines) {
-            const quantity = safeNumber(line.quantity ?? 1);
-            const unitCost = safeNumber(line.unitCost);
-            const amount = quantity * unitCost;
-
-            switch (line.lineType) {
-                case "material":
-                    costTotals.material += amount;
-                    break;
-                case "labor":
-                    costTotals.labor += amount;
-                    break;
-                case "rental":
-                    costTotals.rentals += amount;
-                    break;
-                case "purchase":
-                    costTotals.purchases += amount;
-                    break;
-                case "shipping":
-                    costTotals.shipping += amount;
-                    break;
-                case "service":
-                    costTotals.misc += amount;
-                    break;
-                case "misc":
-                    costTotals.misc += amount;
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        for (const child of childRollups) {
-            const childCost = child.cost ?? {};
-            costTotals.material += safeNumber(childCost.material ?? 0);
-            costTotals.labor += safeNumber(childCost.labor ?? 0);
-            costTotals.rentals += safeNumber(childCost.rentals ?? 0);
-            costTotals.purchases += safeNumber(childCost.purchases ?? 0);
-            costTotals.shipping += safeNumber(childCost.shipping ?? 0);
-            costTotals.misc += safeNumber(childCost.misc ?? 0);
-        }
-
-        costTotals.totalCost =
-            costTotals.material +
-            costTotals.labor +
-            costTotals.rentals +
-            costTotals.purchases +
-            costTotals.shipping +
-            costTotals.misc;
-
+        // Own Data
         const itemTasks = tasksByItem.get(item._id) ?? [];
+        const itemMaterials = materialsByItem.get(item._id) ?? [];
+        const itemLegacy = legacyLinesByItem.get(item._id) ?? [];
+
+        // Costs
+        let materialCost = 0;
+        let laborCost = 0;
+        let miscCost = 0; // Legacy lines + others
+
+        // A. Materials
+        for (const line of itemMaterials) {
+            const qty = line.actualQuantity ?? line.plannedQuantity ?? 0;
+            const unitCost = line.actualUnitCost ?? line.plannedUnitCost ?? 0;
+            materialCost += qty * unitCost;
+        }
+
+        // B. Labor (Tasks)
+        for (const task of itemTasks) {
+            // Default to true if undefined
+            const include = task.costingPolicy?.includeInAccounting ?? true;
+            if (!include) continue;
+
+            // Determine effort in days
+            let days = 0;
+            // TODO: schema for task should have 'effortDays' explicitly per plan?
+            // Currently using durationHours.
+            if (typeof task.durationHours === "number") {
+                days = task.durationHours / 8; // Assuming 8h day
+            } else if (typeof task.estimatedDuration === "number") {
+                days = task.estimatedDuration / 3600000 / 8;
+            } else if (typeof task.estimatedMinutes === "number") {
+                days = task.estimatedMinutes / 60 / 8;
+            }
+
+            // Determine Rate
+            // Task schema has 'role' field now.
+            const roleName = task.role ?? "איש ארט"; // Default role if missing
+            const rate = roleRates.get(roleName) ?? 800; // Look up rate, fallback to 800
+
+            laborCost += days * rate;
+        }
+
+        // C. Legacy
+        for (const line of itemLegacy) {
+            const qty = line.quantity ?? 1;
+            const cost = line.unitCost ?? 0;
+            const amount = qty * cost;
+            if (line.lineType === "material") materialCost += amount;
+            else if (line.lineType === "labor") laborCost += amount;
+            else miscCost += amount;
+        }
+
+        // Children Costs
+        for (const child of childRollups) {
+            const c = child.cost ?? {};
+            materialCost += safeNumber(c.material);
+            laborCost += safeNumber(c.labor);
+            miscCost += safeNumber(c.misc) + safeNumber(c.rentals) + safeNumber(c.purchases) + safeNumber(c.shipping);
+        }
+
+        const baseCost = materialCost + laborCost + miscCost;
+        const sellPrice = calculateClientPrice(baseCost, policy);
+
+        // Schedule
         let durationHours = 0;
         let earliestStart: number | null = null;
         let latestEnd: number | null = null;
@@ -192,50 +180,36 @@ export async function recomputeRollups(
         let blockedTasks = 0;
 
         for (const task of itemTasks) {
-            totalTasks += 1;
-            if (task.status === "done") doneTasks += 1;
-            if (task.status === "blocked") blockedTasks += 1;
+            totalTasks++;
+            if (task.status === "done") doneTasks++;
+            if (task.status === "blocked") blockedTasks++;
 
-            if (typeof task.durationHours === "number") {
-                durationHours += task.durationHours;
-            } else if (typeof task.estimatedDuration === "number") {
-                durationHours += task.estimatedDuration / 3600000;
-            } else if (typeof task.estimatedMinutes === "number") {
-                durationHours += task.estimatedMinutes / 60;
-            }
-
+            if (typeof task.durationHours === "number") durationHours += task.durationHours;
+            
             const start = parseTime(task.plannedStart ?? task.startDate ?? null);
             const end = parseTime(task.plannedEnd ?? task.endDate ?? null);
-
-            if (start !== null) {
-                earliestStart = earliestStart === null ? start : Math.min(earliestStart, start);
-            }
-            if (end !== null) {
-                latestEnd = latestEnd === null ? end : Math.max(latestEnd, end);
-            }
+            if (start !== null) earliestStart = earliestStart === null ? start : Math.min(earliestStart, start);
+            if (end !== null) latestEnd = latestEnd === null ? end : Math.max(latestEnd, end);
         }
 
         for (const child of childRollups) {
-            durationHours += safeNumber(child.schedule?.durationHours ?? 0);
-            totalTasks += safeNumber(child.tasks?.total ?? 0);
-            doneTasks += safeNumber(child.tasks?.done ?? 0);
-            blockedTasks += safeNumber(child.tasks?.blocked ?? 0);
-
-            const childStart = parseTime(child.schedule?.plannedStart ?? null);
-            const childEnd = parseTime(child.schedule?.plannedEnd ?? null);
-            if (childStart !== null) {
-                earliestStart = earliestStart === null ? childStart : Math.min(earliestStart, childStart);
-            }
-            if (childEnd !== null) {
-                latestEnd = latestEnd === null ? childEnd : Math.max(latestEnd, childEnd);
-            }
+            durationHours += safeNumber(child.schedule?.durationHours);
+            totalTasks += safeNumber(child.tasks?.total);
+            doneTasks += safeNumber(child.tasks?.done);
+            blockedTasks += safeNumber(child.tasks?.blocked);
         }
 
         const progressPct = totalTasks > 0 ? (doneTasks / totalTasks) * 100 : 0;
 
-        const rollup = {
+        const rollup: NonNullable<Doc<"projectItems">["rollups"]> = {
             cost: {
-                ...costTotals,
+                material: materialCost,
+                labor: laborCost,
+                misc: miscCost,
+                totalCost: baseCost,
+                sellPrice: sellPrice,
+                margin: sellPrice - baseCost,
+                currency: policy.currency,
             },
             schedule: {
                 durationHours,
@@ -255,10 +229,9 @@ export async function recomputeRollups(
         return rollup;
     }
 
+    // 5. Save updates
     for (const item of items) {
-        if (itemIdsFilter && !itemIdsFilter.has(item._id)) {
-            continue;
-        }
+        if (itemIdsFilter && !itemIdsFilter.has(item._id)) continue;
         const rollup = computeForItem(item);
         await ctx.db.patch(item._id, { rollups: rollup, updatedAt: Date.now() });
     }

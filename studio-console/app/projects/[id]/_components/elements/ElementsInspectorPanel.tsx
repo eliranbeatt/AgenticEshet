@@ -18,13 +18,13 @@ export function ElementsInspectorPanel() {
         selectedItemId ? { itemId: selectedItemId as Id<"projectItems"> } : "skip",
     ) as
         | {
-              item: Doc<"projectItems">;
-              tasks: Doc<"tasks">[];
-              materialLines: Doc<"materialLines">[];
-              workLines: Doc<"workLines">[];
-              accountingLines: Doc<"accountingLines">[];
-              revisions: Doc<"itemRevisions">[];
-          }
+            item: Doc<"projectItems">;
+            tasks: Doc<"tasks">[];
+            materialLines: Doc<"materialLines">[];
+            workLines: Doc<"workLines">[];
+            accountingLines: Doc<"accountingLines">[];
+            revisions: Doc<"itemRevisions">[];
+        }
         | null
         | undefined;
 
@@ -90,9 +90,13 @@ export function ElementsInspectorPanel() {
                                 {content.tasks.map((task) => (
                                     <div key={task._id} className="border rounded p-3">
                                         <div className="text-sm font-semibold text-gray-900">{task.title}</div>
-                                        <div className="text-xs text-gray-500 mt-1">
-                                            {task.status} - {task.durationHours ?? "n/a"} hrs
-                                        </div>
+                                        {task.status} -{" "}
+                                        {task.durationHours ??
+                                            (task.effortDays ? task.effortDays * 8 : undefined) ??
+                                            (task.estimatedMinutes
+                                                ? (task.estimatedMinutes / 60).toFixed(1)
+                                                : "n/a")}{" "}
+                                        hrs
                                     </div>
                                 ))}
                             </div>
@@ -173,11 +177,10 @@ function TabButton({
         <button
             type="button"
             onClick={() => onClick(tab)}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${
-                isActive
+            className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${isActive
                     ? "bg-blue-600 text-white border-blue-600"
                     : "border-gray-200 text-gray-600 hover:bg-gray-50"
-            }`}
+                }`}
         >
             {children}
         </button>

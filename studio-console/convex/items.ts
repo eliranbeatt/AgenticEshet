@@ -2,15 +2,12 @@ import { v } from "convex/values";
 import { action, mutation, query, internalQuery } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
-import { ItemSpecV2Schema, ItemUpdateOutputSchema, type ItemSpecV2 } from "./lib/zodSchemas";
+import { ItemSpecV2Schema, ItemUpdateOutputSchema, type ItemSpecV2, ChangeSetSchema } from "./lib/zodSchemas";
 import { syncItemProjections } from "./lib/itemProjections";
 import {
     parseItemSpec,
     buildSearchText,
     buildBaseItemSpec,
-    normalizeRateType,
-    buildMaterialSpec,
-    buildLaborSpec,
     buildSpecFromAccounting
 } from "./lib/itemHelpers";
 
@@ -386,6 +383,7 @@ export const createFromTemplate = mutation({
         const typeKey = template.templateId;
         const description = template.quotePattern || template.name;
 
+        // 1. Create Main Item
         const itemId = await ctx.db.insert("projectItems", {
             projectId: args.projectId,
             parentItemId: null,
@@ -409,39 +407,54 @@ export const createFromTemplate = mutation({
         });
 
         const spec = buildBaseItemSpec(title, typeKey, description);
-        const revisionId = await ctx.db.insert("itemRevisions", {
-            projectId: args.projectId,
-            itemId,
-            tabScope: "planning",
-            state: "proposed",
-            revisionNumber: 1,
-            data: spec,
-            createdBy: { kind: "user" },
-            createdAt: now,
-        });
 
-        if (template.tasks) {
+        // 2. Expand Tasks
+        if (template.tasks) { // Force reload
             for (const t of template.tasks) {
-                await ctx.db.insert("tasks", {
+                const taskId = await ctx.db.insert("tasks", {
                     projectId: args.projectId,
                     itemId,
                     title: t.title,
                     category: t.category as any,
+                    durationHours: t.effortDays ? t.effortDays * 8 : undefined,
                     status: "todo",
                     priority: "Medium",
                     tags: ["template"],
-                    description: `Role: ${t.role}, Effort: ${t.role ? t.role + " " : ""}${t.effortDays}d`,
+                    source: "user",
+                    description: `Role: ${t.role}, Effort: ${t.effortDays}d`,
                     origin: {
                         source: "template",
                         templateId: template.templateId,
                         version: template.version,
                     },
+
                     createdAt: now,
                     updatedAt: now,
                 });
+
+                // Add to spec
+                spec.breakdown.subtasks.push({
+                    id: String(taskId),
+                    title: t.title,
+                    description: `Role: ${t.role}`,
+                    estMinutes: t.effortDays ? t.effortDays * 8 * 60 : undefined,
+                    status: "todo",
+                });
+
+                if (t.role) {
+                    spec.breakdown.labor.push({
+                        id: `labor_${taskId}`,
+                        workType: t.category || "Studio",
+                        role: t.role,
+                        rateType: "day",
+                        quantity: t.effortDays || 0,
+                        description: `Linked to task: ${t.title}`
+                    });
+                }
             }
         }
 
+        // 3. Expand Materials
         if (template.materials && template.materials.length > 0) {
             let section = await ctx.db.query("sections").withIndex("by_project", q => q.eq("projectId", args.projectId)).first();
             if (!section) {
@@ -456,7 +469,7 @@ export const createFromTemplate = mutation({
             }
             if (section) {
                 for (const m of template.materials) {
-                    await ctx.db.insert("materialLines", {
+                    const materialId = await ctx.db.insert("materialLines", {
                         projectId: args.projectId,
                         sectionId: section._id,
                         itemId,
@@ -472,7 +485,86 @@ export const createFromTemplate = mutation({
                             version: template.version
                         }
                     });
+
+                    // Add to spec
+                    spec.breakdown.materials.push({
+                        id: String(materialId),
+                        label: m.name,
+                        qty: m.qty || 1,
+                        unit: m.unit || "unit",
+                        category: "Materials",
+                    });
                 }
+            }
+        }
+
+        const revisionId = await ctx.db.insert("itemRevisions", {
+            projectId: args.projectId,
+            itemId,
+            tabScope: "planning",
+            state: "proposed",
+            revisionNumber: 1,
+            data: spec,
+            createdBy: { kind: "user" },
+            createdAt: now,
+        });
+
+        // 4. Handle Companion Rules (Suggestions)
+        if (template.companionRules && template.companionRules.length > 0) {
+            const itemsToCreate = [];
+
+            for (const rule of template.companionRules) {
+                if (rule.type === "suggestItem") {
+                    // Fetch referenced template to get defaults
+                    // We assume it exists and we pick latest version
+                    const comps = await ctx.db.query("templateDefinitions")
+                        .withIndex("by_templateId_version", q => q.eq("templateId", rule.templateId))
+                        .collect();
+                    const compTemplate = comps.sort((a: any, b: any) => b.version - a.version)[0];
+
+                    if (compTemplate) {
+                        itemsToCreate.push({
+                            tempId: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                            kind: compTemplate.appliesToKind as any,
+                            category: "template", // or infer
+                            name: compTemplate.name,
+                            description: compTemplate.quotePattern || compTemplate.name,
+                            flags: {},
+                            sortKey: String(Date.now()),
+                        });
+                    }
+                }
+            }
+
+            if (itemsToCreate.length > 0) {
+                const changeSet = {
+                    type: "ChangeSet",
+                    projectId: args.projectId,
+                    phase: "planning",
+                    agentName: "system-rules",
+                    summary: `Suggestions triggered by ${template.name}`,
+                    assumptions: [],
+                    openQuestions: [],
+                    warnings: [],
+                    items: {
+                        create: itemsToCreate,
+                        patch: [],
+                        deleteRequest: [],
+                    },
+                    tasks: { create: [], patch: [], dependencies: [] },
+                    accountingLines: { create: [], patch: [] },
+                    materialLines: { create: [], patch: [], deleteRequest: [] },
+                    uiHints: {
+                        focusItemIds: [itemId],
+                        expandItemIds: [],
+                        nextSuggestedAction: "approve_changeset",
+                    },
+                };
+
+                // Validate against schema to be safe, then insert
+                // Or just trust construction since we control it
+                // We'll call the create mutation
+                await ctx.runMutation(api.changeSets.create, { changeSet });
             }
         }
 

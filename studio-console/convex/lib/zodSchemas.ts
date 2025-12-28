@@ -396,6 +396,8 @@ const ItemCreateSchema = z.object({
     flags: ItemFlagsSchema,
     scope: ItemScopeSchema.optional(),
     quoteDefaults: QuoteDefaultsSchema.optional(),
+    templateId: z.string().optional(),
+    templateVersion: z.number().optional(),
 }).strict();
 
 const ItemPatchSchema = z.object({
@@ -425,6 +427,8 @@ const TaskCreateSchema = z.object({
     isManagement: z.boolean().optional(),
     durationHours: z.number().min(0),
     status: TaskStatusSchema,
+    category: z.enum(TASK_CATEGORIES).optional(),
+    priority: z.enum(TASK_PRIORITIES).optional(),
     tags: z.array(z.string()),
     plannedStart: z.string().datetime().nullable(),
     plannedEnd: z.string().datetime().nullable(),
@@ -439,6 +443,8 @@ const TaskPatchSchema = z.object({
         isManagement: z.boolean().optional(),
         durationHours: z.number().min(0).optional(),
         status: TaskStatusSchema.optional(),
+        category: z.enum(TASK_CATEGORIES).optional(),
+        priority: z.enum(TASK_PRIORITIES).optional(),
         tags: z.array(z.string()).optional(),
         plannedStart: z.string().datetime().nullable().optional(),
         plannedEnd: z.string().datetime().nullable().optional(),

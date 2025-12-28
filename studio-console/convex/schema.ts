@@ -563,6 +563,8 @@ export default defineSchema({
         })),
     })
         .index("by_project_phase_status", ["projectId", "phase", "status"])
+        .index("by_project", ["projectId"])
+        .index("by_project_phase", ["projectId", "phase"])
         .index("by_run", ["runId"]),
 
     itemChangeSetOps: defineTable({
@@ -1387,34 +1389,17 @@ export default defineSchema({
     }).index("by_key", ["key"]),
 
     // 27. PRICE OBSERVATIONS (Price Memory)
-    priceObservations: defineTable({
-        canonicalItemId: v.id("canonicalItems"),
-        rawItemName: v.string(),
-        vendorId: v.optional(v.id("vendors")),
-        unit: v.string(), // "sqm", "piece", "sheet"
-        unitPrice: v.number(),
-        currency: v.string(), // default "ILS"
-        minQty: v.optional(v.number()),
-        qtyBreaks: v.optional(v.string()), // JSON string for breaks if needed
-        leadTimeDays: v.optional(v.number()),
-        locationTag: v.optional(v.string()), // "TLV", "center", "Eilat"
-        source: v.union(
-            v.literal("purchase"),
-            v.literal("invoice"),
-            v.literal("quote"),
-            v.literal("manual"),
-            v.literal("research")
-        ),
-        sourceRef: v.object({
-            type: v.string(), // "purchaseId", "docId", "researchRunId"
-            id: v.string(),
-        }),
-        projectId: v.optional(v.id("projects")),
-        observedAt: v.number(),
-        notes: v.optional(v.string()),
-    })
-        .index("by_canonicalItem_observedAt", ["canonicalItemId", "observedAt"])
-        .index("by_vendor_observedAt", ["vendorId", "observedAt"]),
+
+
+    // 27b. QUESTS
+    quests: defineTable({
+        projectId: v.id("projects"),
+        title: v.string(),
+        description: v.optional(v.string()),
+        status: v.string(), // "active", "completed", "archived"
+        createdAt: v.number(),
+        updatedAt: v.optional(v.number()),
+    }).index("by_project", ["projectId"]),
 
     // 28. CANONICAL ITEMS (Normalized Master List)
     canonicalItems: defineTable({

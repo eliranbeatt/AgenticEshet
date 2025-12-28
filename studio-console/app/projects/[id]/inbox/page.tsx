@@ -9,58 +9,56 @@ import { useState } from "react";
 export default function ProjectInboxPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
-    const inboxItems = useQuery(api.inbox.list, { projectId }) as Array<Doc<"inboxItems">> | undefined;
-    const [selectedItemId, setSelectedItemId] = useState<Id<"inboxItems"> | null>(null);
+    
+    // Switch to ChangeSets
+    const changeSets = useQuery(api.changeSets.listByProject, { 
+        projectId, 
+        status: "pending" 
+    });
 
-    const selectedItem = inboxItems?.find((item) => item._id === selectedItemId);
+    const [selectedId, setSelectedId] = useState<Id<"itemChangeSets"> | null>(null);
 
     return (
         <div className="flex h-full">
             {/* List View */}
-            <div className="w-1/3 border-r border-gray-200 overflow-y-auto">
-                <div className="p-4 border-b border-gray-200">
-                    <h2 className="text-lg font-semibold">Inbox</h2>
+            <div className="w-1/3 border-r border-gray-200 overflow-y-auto bg-gray-50">
+                <div className="p-4 border-b border-gray-200 bg-white">
+                    <h2 className="text-lg font-semibold">Inbox (Pending Changes)</h2>
                 </div>
                 <div className="divide-y divide-gray-200">
-                    {inboxItems?.map((item) => (
+                    {changeSets?.map((cs) => (
                         <div 
-                            key={item._id} 
-                            onClick={() => setSelectedItemId(item._id)}
-                            className={`p-4 cursor-pointer hover:bg-gray-50 ${selectedItemId === item._id ? 'bg-blue-50' : ''}`}
+                            key={cs._id} 
+                            onClick={() => setSelectedId(cs._id)}
+                            className={`p-4 cursor-pointer hover:bg-white transition-colors ${selectedId === cs._id ? 'bg-white border-l-4 border-blue-500 shadow-sm' : ''}`}
                         >
                             <div className="flex justify-between items-start mb-1">
-                                <span className="font-medium text-sm truncate">{item.fromName || item.fromAddressOrPhone || "Unknown"}</span>
-                                <span className="text-xs text-gray-500">{new Date(item.receivedAt).toLocaleDateString()}</span>
+                                <span className="font-bold text-gray-700">{cs.agentName}</span>
+                                <span className="text-xs text-gray-400">{new Date(cs.createdAt).toLocaleDateString()}</span>
                             </div>
-                            <div className="text-sm font-medium text-gray-900 truncate">{item.subject || "(No Subject)"}</div>
-                            <div className="text-xs text-gray-500 truncate mt-1">{item.bodyText}</div>
-                            <div className="mt-2 flex gap-2">
-                                <span className={`px-2 py-0.5 text-xs rounded-full ${
-                                    item.status === 'new' ? 'bg-blue-100 text-blue-800' : 
-                                    item.status === 'triaged' ? 'bg-green-100 text-green-800' : 
-                                    'bg-gray-100 text-gray-800'
-                                }`}>
-                                    {item.status}
-                                </span>
-                                <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full capitalize">
-                                    {item.source}
-                                </span>
+                            <div className="text-sm font-medium text-gray-900 mb-1">{cs.title || "(No Title)"}</div>
+                            
+                            {/* Counts badges */}
+                            <div className="flex gap-2 flex-wrap mt-2">
+                                {cs.counts?.items ? <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">+{cs.counts.items} Items</span> : null}
+                                {cs.counts?.tasks ? <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">+{cs.counts.tasks} Tasks</span> : null}
                             </div>
                         </div>
                     ))}
-                    {inboxItems?.length === 0 && (
-                        <div className="p-8 text-center text-gray-500">No items in inbox</div>
+                    {changeSets?.length === 0 && (
+                        <div className="p-8 text-center text-gray-500">No pending changes.</div>
                     )}
                 </div>
             </div>
 
             {/* Detail View */}
-            <div className="w-2/3 overflow-y-auto p-6">
-                {selectedItem ? (
-                    <InboxItemDetail item={selectedItem} />
+            <div className="w-2/3 overflow-y-auto p-6 bg-white">
+                {selectedId ? (
+                    <ChangeSetDetail changeSetId={selectedId} />
                 ) : (
-                    <div className="h-full flex items-center justify-center text-gray-400">
-                        Select an item to view details
+                    <div className="h-full flex items-center justify-center text-gray-400 flex-col gap-2">
+                        <span className="text-4xl">📨</span>
+                        <span>Select a ChangeSet to review</span>
                     </div>
                 )}
             </div>
@@ -68,180 +66,160 @@ export default function ProjectInboxPage() {
     );
 }
 
-function InboxItemDetail({ item }: { item: Doc<"inboxItems"> }) {
-    const acceptSuggestions = useMutation(api.inbox.acceptSuggestions);
-    const [accepting, setAccepting] = useState(false);
+function ChangeSetDetail({ changeSetId }: { changeSetId: Id<"itemChangeSets"> }) {
+    const data = useQuery(api.changeSets.getWithOps, { changeSetId });
+    const applyMutation = useMutation(api.changeSets.apply);
+    const rejectMutation = useMutation(api.changeSets.reject);
+    const [processing, setProcessing] = useState(false);
 
-    const handleAccept = async (tasks: number[], decisions: number[] = [], questions: number[] = []) => {
-        setAccepting(true);
+    if (!data) return <div className="p-4 text-gray-500">Loading details...</div>;
+
+    const { changeSet, ops } = data;
+
+    const handleApply = async () => {
+        if (!confirm("Apply these changes to the project?")) return;
+        setProcessing(true);
         try {
-            await acceptSuggestions({
-                inboxItemId: item._id,
-                acceptedTasks: tasks,
-                acceptedDecisions: decisions,
-                acceptedQuestions: questions,
-            });
+            await applyMutation({ changeSetId, decidedBy: "user" });
         } catch (e) {
-            console.error("Failed to accept", e);
-            alert("Failed to accept suggestions");
+            alert("Error applying: " + e);
         } finally {
-            setAccepting(false);
+            setProcessing(false);
         }
     };
 
+    const handleReject = async () => {
+        if (!confirm("Reject these changes?")) return;
+        setProcessing(true);
+        try {
+            await rejectMutation({ changeSetId, decidedBy: "user" });
+        } catch (e) {
+            alert("Error rejecting: " + e);
+        } finally {
+            setProcessing(false);
+        }
+    };
+
+    // Group ops by type for display
+    const createdItems = ops.filter(o => o.entityType === "item" && o.opType === "create");
+    const createdTasks = ops.filter(o => o.entityType === "task" && o.opType === "create");
+    const createdMaterials = ops.filter(o => o.entityType === "materialLine" && o.opType === "create");
+
     return (
-        <div>
-            <div className="mb-6">
-                <h1 className="text-2xl font-bold mb-2">{item.subject || "(No Subject)"}</h1>
-                <div className="text-sm text-gray-600 mb-4">
-                    From: <span className="font-medium">{item.fromName}</span> ({item.fromAddressOrPhone})
-                    <span className="mx-2">•</span>
-                    {new Date(item.receivedAt).toLocaleString()}
-                </div>
-                <div className="prose max-w-none bg-gray-50 p-4 rounded-lg text-sm">
-                    {item.bodyText}
-                </div>
-                {item.attachments?.length > 0 && (
-                    <div className="mt-4">
-                        <h4 className="text-sm font-medium mb-2">Attachments</h4>
-                        <div className="flex gap-2 flex-wrap">
-                            {item.attachments.map((att: { name: string; sizeBytes?: number }, i: number) => (
-                                <div key={i} className="border rounded px-3 py-2 text-sm bg-white flex items-center gap-2">
-                                    <span className="text-gray-500">📎</span>
-                                    {att.name}
-                                    <span className="text-xs text-gray-400">({(((att.sizeBytes ?? 0) / 1024)).toFixed(0)} KB)</span>
-                                </div>
-                            ))}
+        <div className="space-y-6">
+            {/* Header */}
+            <div className="border-b pb-4">
+                <div className="flex justify-between items-start">
+                    <div>
+                        <h1 className="text-2xl font-bold text-gray-900">{changeSet.title}</h1>
+                        <div className="text-sm text-gray-500 mt-1">
+                            Proposed by <span className="font-medium text-gray-700">{changeSet.agentName}</span> • {new Date(changeSet.createdAt).toLocaleString()}
                         </div>
+                    </div>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={handleReject}
+                            disabled={processing}
+                            className="px-4 py-2 bg-white border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50"
+                        >
+                            Reject
+                        </button>
+                        <button 
+                            onClick={handleApply}
+                            disabled={processing}
+                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 shadow-sm disabled:opacity-50"
+                        >
+                            {processing ? "Applying..." : "Apply Changes"}
+                        </button>
+                    </div>
+                </div>
+
+                {/* Warnings / Assumptions */}
+                {(changeSet.warnings?.length || changeSet.assumptions?.length) && (
+                    <div className="mt-4 space-y-2">
+                        {changeSet.warnings?.map((w, i) => (
+                            <div key={i} className="bg-yellow-50 text-yellow-800 px-3 py-2 rounded text-sm border border-yellow-200 flex gap-2">
+                                ⚠️ {w}
+                            </div>
+                        ))}
+                        {changeSet.assumptions?.map((a, i) => (
+                            <div key={i} className="bg-blue-50 text-blue-800 px-3 py-2 rounded text-sm border border-blue-100 flex gap-2">
+                                ℹ️ Assumption: {a}
+                            </div>
+                        ))}
                     </div>
                 )}
             </div>
 
-            {/* Triage Section */}
-            <div className="border-t border-gray-200 pt-6">
-                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                    AI Suggestions
-                    {item.suggestions?.triage?.status === "running" && <span className="text-xs font-normal text-blue-600">(Analyzing...)</span>}
-                </h3>
-
-                {item.suggestions?.tasksDraft?.length > 0 && (
-                    <div className="mb-6">
-                        <h4 className="text-sm font-medium text-gray-700 mb-2 uppercase tracking-wide">Suggested Tasks</h4>
-                        <div className="space-y-3">
-                            {item.suggestions.tasksDraft.map(
-                                (
-                                    task: { title: string; details: string; tags: string[]; priority?: string },
-                                    i: number,
-                                ) => (
-                                <div key={i} className="border border-blue-100 bg-blue-50 rounded-lg p-4">
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <div className="font-medium text-blue-900">{task.title}</div>
-                                            <div className="text-sm text-blue-700 mt-1">{task.details}</div>
-                                            <div className="flex gap-2 mt-2">
-                                                {task.tags.map((tag: string) => (
-                                                    <span key={tag} className="text-xs bg-white text-blue-600 px-2 py-0.5 rounded border border-blue-200">{tag}</span>
-                                                ))}
-                                                {task.priority && <span className="text-xs bg-white text-orange-600 px-2 py-0.5 rounded border border-orange-200">{task.priority}</span>}
-                                            </div>
+            {/* Content Preview */}
+            <div className="space-y-6">
+                
+                {/* Items */}
+                {createdItems.length > 0 && (
+                    <section>
+                        <h3 className="font-bold text-gray-700 mb-3 border-b border-gray-100 pb-1">Items to Create ({createdItems.length})</h3>
+                        <div className="grid gap-3">
+                            {createdItems.map(op => {
+                                const payload = JSON.parse(op.payloadJson);
+                                return (
+                                    <div key={op._id} className="border rounded p-3 bg-white shadow-sm border-l-4 border-l-purple-400">
+                                        <div className="font-semibold text-gray-900">{payload.name}</div>
+                                        <div className="text-sm text-gray-600 flex gap-3 mt-1">
+                                            <span className="bg-gray-100 px-2 rounded text-xs py-0.5 capitalize">{payload.kind}</span>
+                                            <span className="bg-gray-100 px-2 rounded text-xs py-0.5">{payload.category}</span>
                                         </div>
-                                        {item.status !== "triaged" && (
-                                            <button 
-                                                onClick={() => handleAccept([i])}
-                                                disabled={accepting}
-                                                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50"
-                                            >
-                                                Accept
-                                            </button>
-                                        )}
+                                        {payload.description && <div className="text-sm text-gray-500 mt-2">{payload.description}</div>}
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
-                    </div>
+                    </section>
                 )}
 
-                {item.suggestions?.decisionsDraft?.length > 0 && (
-                    <div className="mb-6">
-                        <h4 className="text-sm font-medium text-gray-700 mb-2 uppercase tracking-wide">Suggested Decisions</h4>
-                        <div className="space-y-3">
-                            {item.suggestions.decisionsDraft.map(
-                                (
-                                    decision: { title: string; details?: string; options?: string[] },
-                                    i: number,
-                                ) => (
-                                <div key={i} className="border border-purple-100 bg-purple-50 rounded-lg p-4">
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <div className="font-medium text-purple-900">{decision.title}</div>
-                                            {decision.details && <div className="text-sm text-purple-700 mt-1">{decision.details}</div>}
-                                            {decision.options && decision.options.length > 0 && (
-                                                <ul className="mt-2 list-disc list-inside text-xs text-purple-800">
-                                                    {decision.options.map((opt, idx) => (
-                                                        <li key={idx}>{opt}</li>
-                                                    ))}
-                                                </ul>
-                                            )}
+                {/* Tasks */}
+                {createdTasks.length > 0 && (
+                    <section>
+                        <h3 className="font-bold text-gray-700 mb-3 border-b border-gray-100 pb-1">Tasks to Create ({createdTasks.length})</h3>
+                        <div className="grid gap-3">
+                            {createdTasks.map(op => {
+                                const payload = JSON.parse(op.payloadJson);
+                                return (
+                                    <div key={op._id} className="border rounded p-3 bg-white shadow-sm border-l-4 border-l-green-400">
+                                        <div className="font-semibold text-gray-900">{payload.title}</div>
+                                        <div className="text-sm text-gray-600 mt-1 flex gap-4">
+                                            <span>Role: <b>{payload.role || "Unassigned"}</b></span>
+                                            <span>Effort: <b>{payload.durationHours ? (payload.durationHours/8).toFixed(2) : payload.effortDays} days</b></span>
                                         </div>
-                                        {item.status !== "triaged" && (
-                                            <button 
-                                                onClick={() => handleAccept([], [i], [])}
-                                                disabled={accepting}
-                                                className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded hover:bg-purple-700 disabled:opacity-50"
-                                                title="Creates a task to make this decision"
-                                            >
-                                                Accept
-                                            </button>
-                                        )}
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
-                    </div>
+                    </section>
                 )}
 
-                {item.suggestions?.questionsDraft?.length > 0 && (
-                    <div className="mb-6">
-                        <h4 className="text-sm font-medium text-gray-700 mb-2 uppercase tracking-wide">Suggested Questions</h4>
-                        <div className="space-y-3">
-                            {item.suggestions.questionsDraft.map(
-                                (
-                                    question: { question: string; reason?: string; priority?: string },
-                                    i: number,
-                                ) => (
-                                <div key={i} className="border border-orange-100 bg-orange-50 rounded-lg p-4">
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <div className="font-medium text-orange-900">{question.question}</div>
-                                            {question.reason && <div className="text-sm text-orange-700 mt-1">{question.reason}</div>}
-                                            {question.priority && (
-                                                <div className="mt-2">
-                                                    <span className="text-xs bg-white text-orange-600 px-2 py-0.5 rounded border border-orange-200">{question.priority}</span>
-                                                </div>
-                                            )}
+                {/* Materials */}
+                {createdMaterials.length > 0 && (
+                    <section>
+                        <h3 className="font-bold text-gray-700 mb-3 border-b border-gray-100 pb-1">Materials ({createdMaterials.length})</h3>
+                        <div className="grid gap-2">
+                            {createdMaterials.map(op => {
+                                const payload = JSON.parse(op.payloadJson);
+                                return (
+                                    <div key={op._id} className="border-b border-dashed py-2 flex justify-between items-center last:border-0">
+                                        <div className="flex-1">
+                                            <div className="font-medium text-sm text-gray-900">{payload.label}</div>
+                                            <div className="text-xs text-gray-500">{payload.category}</div>
                                         </div>
-                                        {item.status !== "triaged" && (
-                                            <button 
-                                                onClick={() => handleAccept([], [], [i])}
-                                                disabled={accepting}
-                                                className="text-xs bg-orange-600 text-white px-3 py-1.5 rounded hover:bg-orange-700 disabled:opacity-50"
-                                                title="Creates a task to answer this question"
-                                            >
-                                                Accept
-                                            </button>
-                                        )}
+                                        <div className="text-sm font-mono bg-gray-50 px-2 py-1 rounded">
+                                            {payload.plannedQuantity} {payload.unit}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
-                    </div>
+                    </section>
                 )}
 
-                {item.status === "triaged" && (
-                    <div className="text-center p-4 bg-green-50 text-green-800 rounded-lg">
-                        ✓ This item has been triaged
-                    </div>
-                )}
             </div>
         </div>
     );

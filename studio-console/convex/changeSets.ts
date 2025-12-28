@@ -3,7 +3,9 @@ import { action, mutation, query } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ChangeSetSchema } from "./lib/zodSchemas";
+import { ChangeSetSchema } from "./lib/zodSchemas";
 import { recomputeRollups } from "./lib/itemRollups";
+import { buildBaseItemSpec } from "./lib/itemHelpers";
 
 function serializePayload(value: unknown) {
     return JSON.stringify(value ?? null);
@@ -68,19 +70,30 @@ export const listByProject = query({
             return await ctx.db
                 .query("itemChangeSets")
                 .withIndex("by_project_phase_status", (q) =>
-                    q.eq("projectId", args.projectId).eq("phase", args.phase).eq("status", args.status)
+                    q.eq("projectId", args.projectId).eq("phase", args.phase!).eq("status", args.status!)
                 )
                 .collect();
         }
 
-        const changeSets = await ctx.db
-            .query("itemChangeSets")
-            .withIndex("by_project_phase_status", (q) =>
-                q.eq("projectId", args.projectId).eq("phase", args.phase ?? "planning").eq("status", args.status ?? "pending")
-            )
-            .collect();
+        if (args.phase) {
+            return await ctx.db
+                .query("itemChangeSets")
+                .withIndex("by_project_phase", (q) =>
+                    q.eq("projectId", args.projectId).eq("phase", args.phase!)
+                )
+                .filter((q) => args.status ? q.eq(q.field("status"), args.status) : true)
+                .collect();
+        }
 
-        return changeSets;
+        return await ctx.db
+            .query("itemChangeSets")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .filter((q) => {
+                const phaseMatch = args.phase ? q.eq(q.field("phase"), args.phase) : true;
+                const statusMatch = args.status ? q.eq(q.field("status"), args.status) : true;
+                return q.and(phaseMatch, statusMatch);
+            })
+            .collect();
     },
 });
 
@@ -329,6 +342,8 @@ export const apply = mutation({
                 flags?: Record<string, unknown>;
                 scope?: Record<string, unknown>;
                 quoteDefaults?: Record<string, unknown>;
+                templateId?: string;
+                templateVersion?: number;
             };
 
             const parentItemId = payload.parentItemId
@@ -336,6 +351,21 @@ export const apply = mutation({
                 : payload.parentTempId
                     ? tempItemMap.get(payload.parentTempId) ?? null
                     : null;
+
+            // Fetch template Early if needed
+            let template: any = null;
+            if (payload.templateId) {
+                if (payload.templateVersion) {
+                    template = await ctx.db.query("templateDefinitions")
+                        .withIndex("by_templateId_version", q => q.eq("templateId", payload.templateId!).eq("version", payload.templateVersion!))
+                        .first();
+                } else {
+                    const templates = await ctx.db.query("templateDefinitions")
+                        .withIndex("by_templateId_version", q => q.eq("templateId", payload.templateId!))
+                        .collect();
+                    template = templates.sort((a: any, b: any) => b.version - a.version)[0];
+                }
+            }
 
             const itemId = await ctx.db.insert("projectItems", {
                 projectId: changeSet.projectId,
@@ -346,7 +376,7 @@ export const apply = mutation({
                 name: payload.name,
                 title: payload.name,
                 typeKey: payload.category,
-                description: payload.description,
+                description: payload.description || (template?.quotePattern || undefined),
                 flags: payload.flags,
                 scope: payload.scope,
                 quoteDefaults: payload.quoteDefaults,
@@ -356,11 +386,104 @@ export const apply = mutation({
                     category: payload.category,
                 }),
                 status: "approved",
-                createdFrom: { source: "agent", sourceId: changeSet._id },
+                createdFrom: payload.templateId ? { source: "template", sourceId: payload.templateId } : { source: "agent", sourceId: changeSet._id },
                 latestRevisionNumber: 1,
                 createdAt: now,
                 updatedAt: now,
             });
+
+            // Initialize Spec
+            const spec = buildBaseItemSpec(payload.name, payload.category, payload.description || template?.quotePattern);
+
+            // Expand Template Tasks
+            if (template && template.tasks) {
+                for (const t of template.tasks) {
+                    const taskId = await ctx.db.insert("tasks", {
+                        projectId: changeSet.projectId,
+                        itemId,
+                        title: t.title,
+                        category: t.category as any,
+                        durationHours: t.effortDays ? t.effortDays * 8 : undefined,
+                        status: "todo",
+                        priority: "Medium",
+                        tags: ["template"],
+                        source: "user",
+                        description: `Role: ${t.role}, Effort: ${t.effortDays}d`,
+                        origin: {
+                            source: "template",
+                            templateId: template.templateId,
+                            version: template.version,
+                        },
+                        createdAt: now,
+                        updatedAt: now,
+                    });
+
+                    // Add to spec
+                    spec.breakdown.subtasks.push({
+                        id: String(taskId),
+                        title: t.title,
+                        description: `Role: ${t.role}`,
+                        estMinutes: t.effortDays ? t.effortDays * 8 * 60 : undefined,
+                        status: "todo",
+                    });
+
+                    if (t.role) {
+                        spec.breakdown.labor.push({
+                            id: `labor_${taskId}`,
+                            workType: t.category || "Studio",
+                            role: t.role,
+                            rateType: "day",
+                            quantity: t.effortDays || 0,
+                            description: `Linked to task: ${t.title}`
+                        });
+                    }
+                }
+            }
+
+            // Expand Template Materials
+            if (template && template.materials) {
+                let section = await ctx.db.query("sections").withIndex("by_project", q => q.eq("projectId", changeSet.projectId)).first();
+                if (!section) {
+                    const sectionId = await ctx.db.insert("sections", {
+                        projectId: changeSet.projectId,
+                        group: "Logistics",
+                        name: "General",
+                        sortOrder: 0,
+                        pricingMode: "estimated"
+                    });
+                    section = await ctx.db.get(sectionId);
+                }
+
+                if (section) {
+                    for (const m of template.materials) {
+                        const materialId = await ctx.db.insert("materialLines", {
+                            projectId: changeSet.projectId,
+                            sectionId: section._id,
+                            itemId,
+                            category: "Materials",
+                            label: m.name,
+                            unit: m.unit || "unit",
+                            plannedQuantity: m.qty || 1,
+                            plannedUnitCost: 0,
+                            status: "planned",
+                            origin: {
+                                source: "template",
+                                templateId: template.templateId,
+                                version: template.version
+                            }
+                        });
+
+                        // Add to spec
+                        spec.breakdown.materials.push({
+                            id: String(materialId),
+                            label: m.name,
+                            qty: m.qty || 1,
+                            unit: m.unit || "unit",
+                            category: "Materials",
+                        });
+                    }
+                }
+            }
 
             await ctx.db.insert("itemRevisions", {
                 projectId: changeSet.projectId,
@@ -371,11 +494,11 @@ export const apply = mutation({
                 agentName: changeSet.agentName,
                 runId: changeSet.runId ?? undefined,
                 revisionType: "snapshot",
-                snapshotJson: serializePayload(payload),
+                snapshotJson: serializePayload(spec),
                 changeSetId: changeSet._id,
                 revisionNumber: 1,
                 state: "approved",
-                data: payload,
+                data: spec,
                 createdBy: { kind: "agent" },
                 createdAt: now,
             });
@@ -449,6 +572,8 @@ export const apply = mutation({
                 isManagement?: boolean;
                 durationHours: number;
                 status: Doc<"tasks">["status"];
+                category?: string;
+                priority?: string;
                 tags: string[];
                 plannedStart?: string | null;
                 plannedEnd?: string | null;
@@ -468,8 +593,8 @@ export const apply = mutation({
                 workstream: payload.workstream,
                 isManagement: payload.isManagement,
                 status: payload.status ?? "todo",
-                category: "Studio",
-                priority: "Medium",
+                category: (payload.category as any) ?? "Studio",
+                priority: (payload.priority as any) ?? "Medium",
                 durationHours: payload.durationHours,
                 plannedStart: payload.plannedStart === null ? undefined : payload.plannedStart,
                 plannedEnd: payload.plannedEnd === null ? undefined : payload.plannedEnd,

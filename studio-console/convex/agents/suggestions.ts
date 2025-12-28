@@ -42,15 +42,21 @@ export const generateBatch = action({
         userInstructions: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
-        const context = await ctx.runQuery(internal.agents.suggestions.getContext, {
-            projectId: args.projectId,
-            itemIds: args.itemIds,
-        });
+        const [context, templates] = await Promise.all([
+            ctx.runQuery(internal.agents.suggestions.getContext, {
+                projectId: args.projectId,
+                itemIds: args.itemIds,
+            }),
+            ctx.runQuery(api.items.listTemplates),
+        ]);
 
         const prompt = `
 Project: ${context.project.name}
 Strategy: ${args.strategy}
 User Instructions: ${args.userInstructions ?? "None"}
+
+Available Templates:
+${JSON.stringify(templates.map(t => ({ id: t.templateId, name: t.name, version: t.version, description: t.quotePattern })), null, 2)}
 
 Items to Analyze:
 ${JSON.stringify(context.items, null, 2)}
@@ -59,6 +65,11 @@ Generate a ChangeSet that addresses the strategy.
 - If "initial_breakdown": Create tasks and material lines for the items.
 - If "material_fill": Focus on missing materials.
 - If "sanity_check": Look for missing dependencies or unrealistic costs.
+
+Start by checking the "Available Templates".
+If you propose creating a NEW Item (Op: Create Item), prefer using 'templateId' if a matching template exists.
+If you use 'templateId', the system will automatically create the standard tasks and materials for that template.
+You can then ADD extra tasks or materials on top of the template if needed, but do not re-list the standard ones.
 
 Ensure all new entities have 'tempId' and references are correct.
         `;

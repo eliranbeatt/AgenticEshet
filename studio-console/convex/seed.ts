@@ -165,39 +165,39 @@ export const seedRefactorData = mutation({
         const templates = [
             // Day Items
             createTemplate("transport_day", "הובלה", "day", "שירותי הובלה לאתר ובחזרה", [
-                { title: "תיאום הובלה", category: "אדמין", role: "איש ארט", effortDays: 0.1 }
+                { title: "תיאום הובלה", category: "Admin", role: "איש ארט", effortDays: 0.1 }
             ]),
             createTemplate("install_day", "התקנה", "day", "יום התקנה באתר", [
-                { title: "הקמה והתקנה בשטח", category: "התקנה", role: "עובד התקנה", effortDays: 1 }
+                { title: "הקמה והתקנה בשטח", category: "Logistics", role: "עובד התקנה", effortDays: 1 }
             ]),
             createTemplate("shoot_day", "יום צילום", "day", "ליווי יום צילום", [
-                { title: "נוכחות ביום צילום", category: "סטודיו", role: "איש ארט", effortDays: 1 }
+                { title: "נוכחות ביום צילום", category: "Studio", role: "איש ארט", effortDays: 1 }
             ]),
             createTemplate("teardown_day", "פירוק", "day", "פירוק וקיפול ציוד מהאתר", [
-                { title: "פירוק והחזרה למחסן", category: "התקנה", role: "עובד התקנה", effortDays: 0.5 }
+                { title: "פירוק והחזרה למחסן", category: "Logistics", role: "עובד התקנה", effortDays: 0.5 }
             ]),
             createTemplate("management_day", "יום ניהול", "day", "ניהול והפקה", [
-                { title: "ניהול פרויקט", category: "אדמין", role: "איש ארט", effortDays: 1 }
+                { title: "ניהול פרויקט", category: "Admin", role: "איש ארט", effortDays: 1 }
             ]), // Note: Excluded logic is policy-based, not template-based
 
             // Deliverables
             createTemplate("studio_build", "בניה של אלמנט בסטודיו", "deliverable", "ייצור ובניית אלמנט ייחודי בסטודיו", [
-                { title: "תכנון ושרטוט", category: "עיצוב", role: "איש ארט", effortDays: 0.25 },
-                { title: "רכש חומרים", category: "רכש", role: "איש ארט", effortDays: 0.25 },
-                { title: "בנייה בסטודיו", category: "סטודיו", role: "איש ארט", effortDays: 1 }
+                { title: "תכנון ושרטוט", category: "Creative", role: "איש ארט", effortDays: 0.25 },
+                { title: "רכש חומרים", category: "Logistics", role: "איש ארט", effortDays: 0.25 },
+                { title: "בנייה בסטודיו", category: "Studio", role: "איש ארט", effortDays: 1 }
             ], [
                 { name: "חומרי גלם (עץ/זכוכית/פרזול)", defaultVendorRole: "נגריה" }
             ]),
 
             createTemplate("dressing", "דרסינג - השכרת פרופס וארט", "deliverable", "השכרה וליקוט אביזרים ופרופס", [
-                { title: "חיפוש וליקוט ספקים", category: "רכש", role: "סט דראסר", effortDays: 0.5 },
-                { title: "איסוף והחזרה", category: "רכש", role: "סט דראסר", effortDays: 0.25 }
+                { title: "חיפוש וליקוט ספקים", category: "Logistics", role: "סט דראסר", effortDays: 0.5 },
+                { title: "איסוף והחזרה", category: "Logistics", role: "סט דראסר", effortDays: 0.25 }
             ], [
                 { name: "השכרת ציוד/פרופס", defaultVendorRole: "ספקי משנה" }
             ]),
 
             createTemplate("pvc_floor", "רצפת PVC", "deliverable", "אספקה והתקנת רצפת PVC", [
-                { title: "הזמנה וחיתוך", category: "רכש", role: "איש ארט", effortDays: 0.25 }
+                { title: "הזמנה וחיתוך", category: "Logistics", role: "איש ארט", effortDays: 0.25 }
             ], [
                 { name: "יריעת PVC", unit: "מ״ר" }
             ], [
@@ -205,24 +205,24 @@ export const seedRefactorData = mutation({
             ]),
 
             createTemplate("print_house", "הדפסות בבית דפוס", "deliverable", "הפקת דפוס לפי מפרט", [
-                { title: "בדיקת קבצים גרפיים", category: "עיצוב", role: "מעצב גרפי", effortDays: 0.5 }, // conditional logic handled in UI/Expansion
-                { title: "סגירת מפרט מול דפוס", category: "ספקי משנה", role: "איש ארט", effortDays: 0.25 },
-                { title: "איסוף ובקרת איכות", category: "רכש", role: "איש ארט", effortDays: 0.5 }
+                { title: "בדיקת קבצים גרפיים", category: "Creative", role: "מעצב גרפי", effortDays: 0.5 }, // conditional logic handled in UI/Expansion
+                { title: "סגירת מפרט מול דפוס", category: "Admin", role: "איש ארט", effortDays: 0.25 },
+                { title: "איסוף ובקרת איכות", category: "Logistics", role: "איש ארט", effortDays: 0.5 }
             ], [
                 { name: "הדפסה (שירות)", defaultVendorRole: "בית דפוס" }
             ]),
 
             createTemplate("subcontractor", "ספקי משנה", "service", "תיאום וניהול ספק משנה", [
-                { title: "תיאום מול ספק", category: "אדמין", role: "איש ארט", effortDays: 0.25 }
+                { title: "תיאום מול ספק", category: "Admin", role: "איש ארט", effortDays: 0.25 }
             ]),
 
             createTemplate("event_production", "אירוע", "deliverable", "הפקת אירוע מלא", [
-                { title: "הקמה בשטח", category: "התקנה", role: "עובד התקנה", effortDays: 1 }
+                { title: "הקמה בשטח", category: "Logistics", role: "עובד התקנה", effortDays: 1 }
             ]),
 
             createTemplate("exhibit", "מיצג", "deliverable", "הקמת מיצג אומנותי", [
-                { title: "תכנון המיצג", category: "עיצוב", role: "איש ארט", effortDays: 1 },
-                { title: "הקמה", category: "סטודיו", role: "איש ארט", effortDays: 1 }
+                { title: "תכנון המיצג", category: "Creative", role: "איש ארט", effortDays: 1 },
+                { title: "הקמה", category: "Studio", role: "איש ארט", effortDays: 1 }
             ])
         ];
 

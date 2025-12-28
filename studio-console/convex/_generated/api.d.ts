@@ -24,6 +24,7 @@ import type * as agents_ideation from "../agents/ideation.js";
 import type * as agents_itemPopulator from "../agents/itemPopulator.js";
 import type * as agents_planning from "../agents/planning.js";
 import type * as agents_quote from "../agents/quote.js";
+import type * as agents_rules from "../agents/rules.js";
 import type * as agents_solutioning from "../agents/solutioning.js";
 import type * as agents_solutioningV2 from "../agents/solutioningV2.js";
 import type * as agents_structuredQuestions from "../agents/structuredQuestions.js";
@@ -125,6 +126,7 @@ declare const fullApi: ApiFromModules<{
   "agents/itemPopulator": typeof agents_itemPopulator;
   "agents/planning": typeof agents_planning;
   "agents/quote": typeof agents_quote;
+  "agents/rules": typeof agents_rules;
   "agents/solutioning": typeof agents_solutioning;
   "agents/solutioningV2": typeof agents_solutioningV2;
   "agents/structuredQuestions": typeof agents_structuredQuestions;

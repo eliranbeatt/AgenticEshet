@@ -37,6 +37,7 @@ export function ChangeSetReviewBanner({
 
     const applyChangeSet = useMutation(api.changeSets.apply);
     const rejectChangeSet = useMutation(api.changeSets.reject);
+    const runRules = useMutation(api.agents.rules.run);
 
     const count = pending?.length ?? 0;
     const active = activeDetail?.changeSet ?? null;
@@ -56,7 +57,7 @@ export function ChangeSetReviewBanner({
 
     return (
         <>
-            {count > 0 && (
+            {count > 0 ? (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center justify-between">
                     <div className="text-sm text-amber-900">
                         {count} pending ChangeSet{count === 1 ? "" : "s"} in {phase}.
@@ -72,6 +73,28 @@ export function ChangeSetReviewBanner({
                         }}
                     >
                         Review
+                    </button>
+                </div>
+            ) : (
+                <div className="flex justify-end p-2">
+                    <button
+                        type="button"
+                        className="text-sm px-3 py-1.5 rounded bg-white border text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                        onClick={async () => {
+                            if (!confirm("Run companion rules check?")) return;
+                            try {
+                                const result = await runRules({ projectId });
+                                if (result.count === 0) {
+                                    alert("No suggestions found.");
+                                } else {
+                                    alert(`Created ChangeSet with ${result.count} suggestions.`);
+                                }
+                            } catch (e) {
+                                alert("Failed: " + e);
+                            }
+                        }}
+                    >
+                        Check Rules
                     </button>
                 </div>
             )}

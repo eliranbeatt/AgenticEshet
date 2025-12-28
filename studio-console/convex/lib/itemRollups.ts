@@ -48,6 +48,16 @@ export async function recomputeRollups(
         .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
         .collect();
 
+    const materialLines = await ctx.db
+        .query("materialLines")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
+    const workLines = await ctx.db
+        .query("workLines")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .collect();
+
     const tasksByItem = new Map<Id<"projectItems">, Doc<"tasks">[]>();
     for (const task of tasks) {
         if (!task.itemId) continue;
@@ -61,6 +71,22 @@ export async function recomputeRollups(
         const list = linesByItem.get(line.itemId) ?? [];
         list.push(line);
         linesByItem.set(line.itemId, list);
+    }
+
+    const materialLinesByItem = new Map<Id<"projectItems">, Doc<"materialLines">[]>();
+    for (const line of materialLines) {
+        if (!line.itemId) continue;
+        const list = materialLinesByItem.get(line.itemId) ?? [];
+        list.push(line);
+        materialLinesByItem.set(line.itemId, list);
+    }
+
+    const workLinesByItem = new Map<Id<"projectItems">, Doc<"workLines">[]>();
+    for (const line of workLines) {
+        if (!line.itemId) continue;
+        const list = workLinesByItem.get(line.itemId) ?? [];
+        list.push(line);
+        workLinesByItem.set(line.itemId, list);
     }
 
     const childrenByParent = new Map<Id<"projectItems"> | null, Doc<"projectItems">[]>();
@@ -81,6 +107,9 @@ export async function recomputeRollups(
         const childRollups = childItems.map(computeForItem);
 
         const itemLines = linesByItem.get(item._id) ?? [];
+        const itemMaterials = materialLinesByItem.get(item._id) ?? [];
+        const itemWork = workLinesByItem.get(item._id) ?? [];
+
         const costTotals = {
             material: 0,
             labor: 0,
@@ -89,8 +118,20 @@ export async function recomputeRollups(
             shipping: 0,
             misc: 0,
             totalCost: 0,
-            currency: itemLines[0]?.currency,
+            currency: itemLines[0]?.currency ?? "ILS",
         };
+
+        for (const line of itemMaterials) {
+            const qty = line.actualQuantity ?? line.plannedQuantity;
+            const cost = line.actualUnitCost ?? line.plannedUnitCost;
+            costTotals.material += qty * cost;
+        }
+
+        for (const line of itemWork) {
+            const qty = line.actualQuantity ?? line.plannedQuantity;
+            const cost = line.actualUnitCost ?? line.plannedUnitCost;
+            costTotals.labor += qty * cost;
+        }
 
         for (const line of itemLines) {
             const quantity = safeNumber(line.quantity ?? 1);

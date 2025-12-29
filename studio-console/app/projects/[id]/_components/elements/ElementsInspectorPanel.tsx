@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import type { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import { useItemsContext } from "../items/ItemsContext";
@@ -12,6 +12,7 @@ type TabKey = "specs" | "tasks" | "costs" | "history";
 export function ElementsInspectorPanel() {
     const { selectedItemId } = useItemsContext();
     const [activeTab, setActiveTab] = useState<TabKey>("specs");
+    const publishElementVersion = useMutation(api.elementVersions.publishElementVersion);
 
     const details = useQuery(
         api.items.getItemDetails,
@@ -57,6 +58,16 @@ export function ElementsInspectorPanel() {
                     )}
                 </div>
                 <div className="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (!content?.item) return;
+                            void publishElementVersion({ elementId: content.item._id, createdBy: "user" });
+                        }}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-full border border-blue-600 text-blue-700 hover:bg-blue-50"
+                    >
+                        Publish update
+                    </button>
                     <TabButton tab="specs" activeTab={activeTab} onClick={setActiveTab}>
                         Specs
                     </TabButton>

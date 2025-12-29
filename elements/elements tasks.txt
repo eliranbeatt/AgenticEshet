@@ -1,0 +1,426 @@
+Below is a **concrete Jira-style ticket list** (Epics → Stories/Tasks) with **acceptance criteria per ticket**, aligned to the current codebase/pages/tables you already have (Next.js tabs like `/projects/[id]/tasks`, `/projects/[id]/accounting`, `/projects/[id]/quote`, `/projects/[id]/history`, `/projects/[id]/knowledge` and Convex domains `tasks`, `sections/materialLines/workLines`, `quotes`, `conversations`, agents, etc.). 
+
+---
+
+## EPIC ELM-0 — Feature flag + rollout safety
+
+### ELM-0.1 — Add feature flag: `elementsCanonical`
+
+**Description:** Gate all new behavior behind a project-level flag.
+**Acceptance criteria**
+
+* Flag can be enabled per project from admin/settings.
+* When OFF: current behavior unchanged.
+* When ON: Elements workflow paths appear and projections come from elements.
+
+### ELM-0.2 — Add “Read-only preview” mode for projections
+
+**Description:** Allow generating projections from elements without overwriting existing tables (debug).
+**Acceptance criteria**
+
+* Backend can compute tasks/accounting/quote projections and return preview JSON.
+* UI can display preview without mutating DB.
+
+---
+
+## EPIC ELM-1 — Canonical Elements schema + versioning
+
+### ELM-1.1 — Add Convex tables: `elements`, `elementVersions`
+
+**Acceptance criteria**
+
+* Tables exist with indexes by `projectId`, `elementId`, `createdAt`.
+* `elements.activeVersionId` enforced (cannot be null for active elements after migration).
+
+### ELM-1.2 — Define `ElementSnapshot` schema + validators (Zod)
+
+**Acceptance criteria**
+
+* Strict schema includes: `materials[]`, `labor[]`, `tasks[]`, `freeText.*`, `tombstones.*`.
+* Each material/labor/task includes stable keys: `materialKey`, `laborKey`, `taskKey`.
+* Validation errors are surfaced with field paths (developer readable).
+
+### ELM-1.3 — Elements CRUD API (Convex)
+
+Endpoints: `elements.create`, `elements.archive`, `elements.get`, `elements.listByProject`, `elements.getActiveSnapshots`
+**Acceptance criteria**
+
+* Create element creates initial version + sets activeVersionId.
+* Archive doesn’t delete versions.
+* List returns active snapshot + minimal metadata.
+
+### ELM-1.4 — Element version history API
+
+Endpoints: `elements.listVersions(elementId)`, `elements.getVersion(versionId)`
+**Acceptance criteria**
+
+* Returns tags, summary, origin tab, timestamp, changeStats.
+
+### ELM-1.5 — Add “Revert element to version” operation (creates NEW version)
+
+**Acceptance criteria**
+
+* Revert does not mutate old versions.
+* Creates a new version tagged `revert` and sets activeVersionId.
+* Triggers projection rebuild.
+
+---
+
+## EPIC ELM-2 — Draft revisions + approval workflow (Accounting/Tasks/Agent suggestions)
+
+### ELM-2.1 — Add Convex tables: `revisions`, `revisionChanges`
+
+**Acceptance criteria**
+
+* `revisions` stores: status(draft/approved/rejected), originTab, tags[], summary.
+* `revisionChanges` stores: elementId, baseVersionId, replaceMask[], patchOps/proposedSnapshot.
+
+### ELM-2.2 — Draft lifecycle API
+
+Endpoints: `revisions.createDraft`, `revisions.getDraft`, `revisions.listDrafts`, `revisions.discardDraft`
+**Acceptance criteria**
+
+* Only one active draft per (projectId, originTab) unless explicitly “New draft”.
+* Discard removes draft + all revisionChanges.
+
+### ELM-2.3 — Patch API for draft editing
+
+Endpoints:
+
+* `revisions.patchElement(revisionId, elementId, patchOps[])`
+* `revisions.setProposedSnapshot(revisionId, elementId, proposedSnapshot, replaceMask[])`
+  **Acceptance criteria**
+* Patch supports add/edit/delete for tasks/materials/labor/freeText.
+* Patch is key-based (taskKey/materialKey/laborKey), never index-based.
+
+### ELM-2.4 — Approval pipeline: `revisions.approve(revisionId)`
+
+**Acceptance criteria**
+
+* Creates new `elementVersions` for each affected element.
+* Copies metadata to each version: originTab, tags, summary, createdAt.
+* Updates each element’s activeVersionId.
+* Triggers projection rebuild (tasks/accounting/quote).
+* Revision status becomes `approved` and immutable.
+
+### ELM-2.5 — Conflict detection + “rebase required” warning
+
+**Acceptance criteria**
+
+* If `baseVersionId != elements.activeVersionId` at approval time:
+
+  * approval blocks with a structured conflict response OR supports rebase action.
+* UI shows which elements conflicted.
+
+### ELM-2.6 — Auto-summary + tags generation on approve
+
+**Acceptance criteria**
+
+* If user leaves summary empty, system generates summary from diff stats (no LLM required).
+* Tags always include:
+
+  * `tab:<originTab>`
+  * `source:<manual|agent|dependency|critique>`
+  * timestamp stored and shown in UI.
+
+---
+
+## EPIC ELM-3 — Tombstones + business rules (your special cases)
+
+### ELM-3.1 — Tombstone enforcement in approval
+
+**Acceptance criteria**
+
+* When patch deletes task/material/labor: key appended to tombstones in the new snapshot.
+* If a patch/proposedSnapshot tries to re-add tombstoned key:
+
+  * approval fails unless `restore=true` is explicitly set in patchOps.
+
+### ELM-3.2 — Auto-delete empty tasks rule
+
+**Acceptance criteria**
+
+* On approval, any task with empty/whitespace title AND empty/whitespace details is removed.
+* Removal increments changeStats and adds taskKey to tombstones.
+
+### ELM-3.3 — Purchase-task deletion rule
+
+**Acceptance criteria**
+
+* If a `purchase_material` task is deleted during draft:
+
+  * corresponding material remains
+  * material.needPurchase is set to `false`
+* Covered by unit tests.
+
+---
+
+## EPIC ELM-4 — Projection engine (Elements → Tasks/Accounting/Quotes)
+
+> Even though you edit via drafts, after approval everything becomes consistent because projections rebuild from canonical elements.
+
+### ELM-4.1 — Implement `projections.buildProjectSnapshot(projectId)`
+
+**Acceptance criteria**
+
+* Returns deterministic projections: tasks list, accounting lines, quote inputs.
+* Same elements snapshot always produces identical projection output.
+
+### ELM-4.2 — Write tasks projection into existing `tasks` table (replace current canonical use)
+
+**Acceptance criteria**
+
+* After approval, tasks table is overwritten from elements snapshot (for that project).
+* Each task row includes `elementId` + `taskKey`.
+* Ordering/kanban status comes from snapshot or default rules (define clearly).
+
+### ELM-4.3 — Write accounting projection into `sections/materialLines/workLines`
+
+**Acceptance criteria**
+
+* Sections generated per bucketKey (or configured mapping).
+* materialLines/workLines include `elementId` + key references.
+* No manual drift: projection fully recomputed on approve.
+
+### ELM-4.4 — Quote generator reads from elements (not from accounting tables as source)
+
+**Acceptance criteria**
+
+* Quote generation uses element snapshots + configured margins.
+* Accounting tables can still be used as display, but not as truth source.
+
+### ELM-4.5 — Trigger projections rebuild on `revisions.approve`
+
+**Acceptance criteria**
+
+* Rebuild runs once per approval (debounced/locked).
+* UI shows progress/agentRuns-like status if rebuild is long.
+
+---
+
+## EPIC ELM-5 — Suggested Elements side panel (Ideation/Planning/Solutioning)
+
+### ELM-5.1 — Add UI shell: “Suggested Elements” side panel on 3 tabs
+
+Tabs: `/clarification` (optional), `/planning`, `/solutioning` (and your Ideation tab if separate).
+**Acceptance criteria**
+
+* Panel shows suggestions grouped: new elements / updates to existing.
+* Each suggestion has buttons: Edit, Approve, Decline/Delete.
+* Shows diff preview (counts + changed areas).
+
+### ELM-5.2 — “Generate Suggestions” button + mode buttons
+
+Buttons: Ideation / Planning / Solutioning + Critique/Stress test/Risk scan/Improve
+**Acceptance criteria**
+
+* Clicking a button creates (or reuses) a draft revision with correct originTab + actionType.
+* Prompts include: selected elements + current knowledge + recent chat.
+* Suggestions appear in side panel.
+
+### ELM-5.3 — Backend action: `agents.generateElementSuggestions(mode, selectedElementIds, userInstructions)`
+
+**Acceptance criteria**
+
+* Produces `revisionChanges` records (proposedSnapshot + replaceMask).
+* Does not mutate elements directly.
+* Rejects invalid outputs via schema validator.
+
+### ELM-5.4 — Suggestion manual editor UI
+
+**Acceptance criteria**
+
+* User can edit proposedSnapshot fields (materials/labor/tasks/freeText).
+* Edits are saved into the draft revisionChanges.
+* Approve applies edited version.
+
+### ELM-5.5 — Decline/Delete suggestion
+
+**Acceptance criteria**
+
+* Removes the revisionChange entry (or marks declined).
+* Does not impact elements.
+
+---
+
+## EPIC ELM-6 — Accounting draft editor (edit → approve → new version)
+
+### ELM-6.1 — Accounting “Edit mode” creates/uses draft revision (originTab=Accounting)
+
+**Acceptance criteria**
+
+* When entering edit mode, UI shows “Draft” banner and Save/Approve/Discard actions.
+* Editing materialLines/workLines modifies draft patchOps (not elements, not projections).
+* Leaving page prompts if draft exists.
+
+### ELM-6.2 — Accounting edits generate element patches (key-based)
+
+**Acceptance criteria**
+
+* Delete row → patch removes material/labor by key from the element snapshot in the draft.
+* Edit qty/cost/bucket/needPurchase → patch updates matching item by key.
+
+### ELM-6.3 — Approve from accounting creates element versions + rebuilds projections
+
+**Acceptance criteria**
+
+* No changes visible in tasks/quote until approval.
+* After approval: tasks/accounting/quote reflect new element state.
+
+---
+
+## EPIC ELM-7 — Tasks draft editor + dependency agent saved to version
+
+### ELM-7.1 — Tasks “Edit mode” uses draft revision (originTab=Tasks)
+
+**Acceptance criteria**
+
+* Add/edit/delete tasks in UI modifies draft only.
+* No changes to elements/tasks projections until approval.
+
+### ELM-7.2 — “Compute dependencies” button (dependency agent)
+
+**Acceptance criteria**
+
+* Runs dependency agent and writes dependencies into draft (taskKey-based).
+* On approval, dependencies are persisted in element version snapshot.
+* Version tags include `change:dependencies` and summary mentions dependency update.
+
+### ELM-7.3 — Task delete cascades (purchase rule + empty tasks)
+
+**Acceptance criteria**
+
+* Deleting purchase task toggles material.needPurchase=false (material preserved).
+* Empty tasks auto-deleted on approval.
+
+---
+
+## EPIC ELM-8 — Current Knowledge (ידע נוכחי) as highest-truth text
+
+### ELM-8.1 — Redesign `/projects/[id]/knowledge` into Current Knowledge editor
+
+**Acceptance criteria**
+
+* Top section: Preferences (editable)
+* Below: Current Knowledge text (editable)
+* Below: Knowledge Log entries (append-only list, can be hidden/collapsed)
+
+### ELM-8.2 — Append-only knowledge log pipeline
+
+**Acceptance criteria**
+
+* Ingestion and “summarize chat” actions append bullet entries to knowledgeLogEntries.
+* Entries never auto-delete.
+* User can edit currentText/preferencesText freely.
+
+### ELM-8.3 — Agent context builders enforce precedence rule
+
+**Acceptance criteria**
+
+* All agent `getContext` functions include:
+
+  * element snapshots
+  * current knowledge (explicit “this overrides chat” instruction)
+  * conversation history
+* If a contradiction is detected in prompt guidelines: must prefer current knowledge.
+
+---
+
+## EPIC ELM-9 — Version History UI + tagging + summaries
+
+### ELM-9.1 — Update `/projects/[id]/history` to show element versions
+
+**Acceptance criteria**
+
+* List versions grouped by element.
+* Shows: tab, timestamp, tags, summary, changeStats.
+* Clicking version shows snapshot + diff vs previous.
+
+### ELM-9.2 — Add “Revert” action from history
+
+**Acceptance criteria**
+
+* Revert creates new version (not overwrite).
+* New version auto-tagged `revert` and includes summary “Reverted to vX”.
+* Projections rebuilt.
+
+---
+
+## EPIC ELM-10 — Migration/backfill from current system to elements
+
+### ELM-10.1 — Backfill script: derive initial elements from existing accounting+tasks
+
+**Acceptance criteria**
+
+* For each project: create 1..N elements (configurable rule; start with 1 element per section or 1 overall).
+* Populate snapshot materials/labor from materialLines/workLines.
+* Populate snapshot tasks from tasks table.
+* Generate stable keys for all items.
+* Set activeVersionId.
+
+### ELM-10.2 — Projection consistency validation tool
+
+**Acceptance criteria**
+
+* After backfill, rebuilding projections reproduces the original tasks/accounting totals within tolerance.
+* Produces a report of mismatches.
+
+### ELM-10.3 — Enable flag for pilot projects
+
+**Acceptance criteria**
+
+* Select pilot project(s) with `elementsCanonical=true`.
+* Old projects remain unchanged until migrated.
+
+---
+
+## EPIC ELM-11 — Quality, tests, and dev tooling
+
+### ELM-11.1 — Unit tests: approval rules & tombstones
+
+**Acceptance criteria**
+
+* Tests cover:
+
+  * tombstone add + re-add rejection
+  * empty task auto-delete
+  * purchase task delete → needPurchase=false
+  * conflict detection
+
+### ELM-11.2 — E2E tests: accounting/tasks draft → approve → projections update
+
+**Acceptance criteria**
+
+* Test flow:
+
+  * edit accounting draft (delete labor row)
+  * verify tasks/quote unchanged pre-approve
+  * approve
+  * verify tasks/accounting/quote updated
+
+### ELM-11.3 — Developer docs update
+
+**Acceptance criteria**
+
+* `MagneticStudioSystemSpec.md` updated with:
+
+  * new tables
+  * new flows
+  * canonical rule and draft approval semantics
+
+---
+
+## Suggested Jira ordering (implementation sequence)
+
+1. **ELM-0** flags + preview
+2. **ELM-1** elements/versions schema + APIs
+3. **ELM-2** revisions + approve pipeline
+4. **ELM-3** tombstones + business rules
+5. **ELM-4** projections engine (tasks/accounting/quote)
+6. **ELM-8** current knowledge precedence + UI
+7. **ELM-6/7** accounting/tasks draft editors + dependency agent
+8. **ELM-5** suggested elements panel + generation buttons
+9. **ELM-9** history UI + revert
+10. **ELM-10** migration/backfill
+11. **ELM-11** tests/docs
+

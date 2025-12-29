@@ -1,0 +1,715 @@
+Below are **strict, exact JSON contracts** for:
+
+1. `ElementSnapshot` (what gets stored in `elementVersions.snapshot`)
+2. `revisionChanges.patchOps` (the only allowed edit language for drafts)
+3. Agent “suggestion output” format (button-triggered generation)
+
+They’re written as **JSON Schema (draft 2020-12)**, with **`additionalProperties: false`** everywhere so the LLM can’t freestyle.
+
+---
+
+## 1) `ElementSnapshot` JSON Schema (approved/canonical snapshot)
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yourapp/schemas/ElementSnapshot.json",
+  "title": "ElementSnapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "descriptions",
+    "freeText",
+    "materials",
+    "labor",
+    "tasks",
+    "tombstones"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "element-snapshot/v1"
+    },
+    "descriptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["short", "long"],
+      "properties": {
+        "short": { "type": "string", "maxLength": 400 },
+        "long": { "type": "string", "maxLength": 20000 }
+      }
+    },
+    "freeText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preferences",
+        "risks",
+        "openQuestions",
+        "installation",
+        "building",
+        "constraints",
+        "notes"
+      ],
+      "properties": {
+        "preferences": { "type": "string", "maxLength": 20000 },
+        "risks": { "type": "string", "maxLength": 20000 },
+        "openQuestions": { "type": "string", "maxLength": 20000 },
+        "installation": { "type": "string", "maxLength": 20000 },
+        "building": { "type": "string", "maxLength": 20000 },
+        "constraints": { "type": "string", "maxLength": 20000 },
+        "notes": { "type": "string", "maxLength": 20000 }
+      }
+    },
+    "materials": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": { "$ref": "#/$defs/MaterialLine" }
+    },
+    "labor": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": { "$ref": "#/$defs/LaborLine" }
+    },
+    "tasks": {
+      "type": "array",
+      "maxItems": 4000,
+      "items": { "$ref": "#/$defs/TaskLine" }
+    },
+    "tombstones": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskKeys", "materialKeys", "laborKeys"],
+      "properties": {
+        "taskKeys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Key" },
+          "uniqueItems": true,
+          "maxItems": 10000
+        },
+        "materialKeys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Key" },
+          "uniqueItems": true,
+          "maxItems": 10000
+        },
+        "laborKeys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Key" },
+          "uniqueItems": true,
+          "maxItems": 10000
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Key": {
+      "type": "string",
+      "pattern": "^(tsk|mat|lab)_[a-f0-9]{8}$"
+    },
+    "BucketKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "Money": {
+      "type": "number",
+      "minimum": 0
+    },
+    "Quantity": {
+      "type": "number",
+      "minimum": 0
+    },
+    "Unit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20
+    },
+    "MaterialLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "materialKey",
+        "name",
+        "spec",
+        "qty",
+        "unit",
+        "bucketKey",
+        "needPurchase"
+      ],
+      "properties": {
+        "materialKey": { "$ref": "#/$defs/Key" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "spec": { "type": "string", "maxLength": 1000 },
+        "qty": { "$ref": "#/$defs/Quantity" },
+        "unit": { "$ref": "#/$defs/Unit" },
+        "unitCost": { "$ref": "#/$defs/Money" },
+        "totalCost": { "$ref": "#/$defs/Money" },
+        "bucketKey": { "$ref": "#/$defs/BucketKey" },
+        "needPurchase": { "type": "boolean" },
+        "vendorRef": { "type": "string", "maxLength": 200 },
+        "notes": { "type": "string", "maxLength": 2000 }
+      }
+    },
+    "LaborLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "laborKey",
+        "role",
+        "qty",
+        "unit",
+        "rate",
+        "bucketKey"
+      ],
+      "properties": {
+        "laborKey": { "$ref": "#/$defs/Key" },
+        "role": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "qty": { "$ref": "#/$defs/Quantity" },
+        "unit": { "$ref": "#/$defs/Unit" },
+        "rate": { "$ref": "#/$defs/Money" },
+        "bucketKey": { "$ref": "#/$defs/BucketKey" },
+        "notes": { "type": "string", "maxLength": 2000 }
+      }
+    },
+    "TaskType": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "purchase_material",
+        "install",
+        "build",
+        "transport",
+        "admin"
+      ]
+    },
+    "TaskLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskKey",
+        "title",
+        "details",
+        "bucketKey",
+        "taskType",
+        "dependencies",
+        "usesMaterialKeys",
+        "usesLaborKeys"
+      ],
+      "properties": {
+        "taskKey": { "$ref": "#/$defs/Key" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "details": { "type": "string", "maxLength": 5000 },
+        "bucketKey": { "$ref": "#/$defs/BucketKey" },
+        "taskType": { "$ref": "#/$defs/TaskType" },
+        "estimate": { "type": "string", "maxLength": 80 },
+        "dependencies": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Key" },
+          "uniqueItems": true,
+          "maxItems": 200
+        },
+        "usesMaterialKeys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Key" },
+          "uniqueItems": true,
+          "maxItems": 200
+        },
+        "usesLaborKeys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Key" },
+          "uniqueItems": true,
+          "maxItems": 200
+        },
+        "materialKey": {
+          "description": "Required when taskType == purchase_material",
+          "$ref": "#/$defs/Key"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "taskType": { "const": "purchase_material" } } },
+          "then": { "required": ["materialKey"] }
+        }
+      ]
+    }
+  }
+}
+```
+
+**Important invariants (enforced by approval code, not schema alone):**
+
+* Approved snapshots must not contain empty tasks (you wanted auto-delete).
+* `purchase_material` task deletion => keep material, set `needPurchase=false` (enforced in approval rule).
+* Tombstones are append-only unless an explicit restore op is applied.
+
+---
+
+## 2) `revisionChanges.patchOps` JSON Schema (draft edit language)
+
+This is the strict “edit language” used by Accounting/Tasks/manual UI edits **and** optionally by agents.
+
+**Core idea:** patch ops operate on a base snapshot (baseVersionId), then on **Approve** we produce a new snapshot + version.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yourapp/schemas/PatchOps.json",
+  "title": "PatchOps",
+  "type": "array",
+  "minItems": 1,
+  "maxItems": 5000,
+  "items": { "$ref": "#/$defs/PatchOp" },
+  "$defs": {
+    "Key": {
+      "type": "string",
+      "pattern": "^(tsk|mat|lab)_[a-f0-9]{8}$"
+    },
+    "Section": {
+      "type": "string",
+      "enum": ["descriptions", "freeText", "materials", "labor", "tasks", "tombstones"]
+    },
+    "TextFieldPath": {
+      "type": "string",
+      "enum": [
+        "descriptions.short",
+        "descriptions.long",
+        "freeText.preferences",
+        "freeText.risks",
+        "freeText.openQuestions",
+        "freeText.installation",
+        "freeText.building",
+        "freeText.constraints",
+        "freeText.notes"
+      ]
+    },
+    "PatchOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "set_text",
+            "replace_section",
+            "upsert_line",
+            "remove_line",
+            "tombstone_add",
+            "tombstone_restore"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "op": { "const": "set_text" } } },
+          "then": {
+            "required": ["path", "value"],
+            "properties": {
+              "path": { "$ref": "#/$defs/TextFieldPath" },
+              "value": { "type": "string", "maxLength": 20000 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "replace_section" } } },
+          "then": {
+            "required": ["section", "value"],
+            "properties": {
+              "section": { "$ref": "#/$defs/Section" },
+              "value": {
+                "description": "Full replacement value for the section.",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["short", "long"],
+                    "properties": {
+                      "short": { "type": "string", "maxLength": 400 },
+                      "long": { "type": "string", "maxLength": 20000 }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "preferences",
+                      "risks",
+                      "openQuestions",
+                      "installation",
+                      "building",
+                      "constraints",
+                      "notes"
+                    ],
+                    "properties": {
+                      "preferences": { "type": "string", "maxLength": 20000 },
+                      "risks": { "type": "string", "maxLength": 20000 },
+                      "openQuestions": { "type": "string", "maxLength": 20000 },
+                      "installation": { "type": "string", "maxLength": 20000 },
+                      "building": { "type": "string", "maxLength": 20000 },
+                      "constraints": { "type": "string", "maxLength": 20000 },
+                      "notes": { "type": "string", "maxLength": 20000 }
+                    }
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 4000,
+                    "items": { "type": "object" }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["taskKeys", "materialKeys", "laborKeys"],
+                    "properties": {
+                      "taskKeys": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/Key" },
+                        "uniqueItems": true
+                      },
+                      "materialKeys": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/Key" },
+                        "uniqueItems": true
+                      },
+                      "laborKeys": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/Key" },
+                        "uniqueItems": true
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "upsert_line" } } },
+          "then": {
+            "required": ["entity", "key", "value"],
+            "properties": {
+              "entity": { "type": "string", "enum": ["materials", "labor", "tasks"] },
+              "key": { "$ref": "#/$defs/Key" },
+              "value": {
+                "description": "Full object to insert/replace for this key.",
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "remove_line" } } },
+          "then": {
+            "required": ["entity", "key", "reason"],
+            "properties": {
+              "entity": { "type": "string", "enum": ["materials", "labor", "tasks"] },
+              "key": { "$ref": "#/$defs/Key" },
+              "reason": { "type": "string", "maxLength": 300 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "tombstone_add" } } },
+          "then": {
+            "required": ["entity", "key", "reason"],
+            "properties": {
+              "entity": { "type": "string", "enum": ["materials", "labor", "tasks"] },
+              "key": { "$ref": "#/$defs/Key" },
+              "reason": { "type": "string", "maxLength": 300 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "tombstone_restore" } } },
+          "then": {
+            "required": ["entity", "key", "reason"],
+            "properties": {
+              "entity": { "type": "string", "enum": ["materials", "labor", "tasks"] },
+              "key": { "$ref": "#/$defs/Key" },
+              "reason": { "type": "string", "maxLength": 300 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+### PatchOps semantics (must be implemented exactly)
+
+Apply ops **in order** on the base snapshot:
+
+* `set_text`: set a single text field.
+* `replace_section`: replace entire section (used for “replace all tasks”, etc.).
+* `upsert_line`: insert or replace the full line (keyed).
+* `remove_line`: remove the line by key.
+
+  * Approval logic must:
+
+    * add key to tombstones (unless it’s a temp key and you choose not to)
+    * remove key references from tasks.dependencies / usesMaterialKeys / usesLaborKeys
+    * if removed task was `purchase_material` => set linked material `needPurchase=false` (keep material)
+* `tombstone_add`: explicitly add a key to tombstones (rare; usually implied by remove_line)
+* `tombstone_restore`: explicit override allowing a re-add of a tombstoned key in the same revision
+
+### Empty task auto-delete (your rule)
+
+On approve:
+
+* if a task ends up with empty/whitespace `title` **or** (title exists but user removed details and you treat it as empty) → delete it.
+* When auto-deleting, still tombstone it (recommended), so it doesn’t pop back in.
+
+---
+
+## 3) Agent “suggestion output” JSON Schema (button-triggered)
+
+This is what your generation agents must return. **Only JSON. No prose.**
+
+Key goals:
+
+* agent can propose multiple element suggestions
+* each suggestion maps directly into a `revisionChange`
+* agent must declare whether it is `create` or `update`
+* agent must respect tombstones (no reuse unless restore is explicit)
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yourapp/schemas/AgentSuggestionOutput.json",
+  "title": "AgentSuggestionOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mode", "suggestions"],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "agent-suggestions/v1" },
+    "mode": {
+      "type": "string",
+      "enum": ["ideation", "planning", "solutioning", "critique", "stress_test", "risk_scan", "improve", "dependencies"]
+    },
+    "suggestions": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/Suggestion" }
+    }
+  },
+  "$defs": {
+    "Key": { "type": "string", "pattern": "^(tsk|mat|lab)_[a-f0-9]{8}$" },
+    "SuggestionId": { "type": "string", "pattern": "^sug_[a-f0-9]{10}$" },
+    "Tab": { "type": "string", "enum": ["Ideation", "Planning", "Solutioning", "Accounting", "Tasks"] },
+    "Action": { "type": "string", "enum": ["create_element", "update_element"] },
+    "ReplaceMask": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["descriptions", "freeText", "materials", "labor", "tasks", "tombstones"]
+      }
+    },
+    "Suggestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "suggestionId",
+        "action",
+        "tab",
+        "title",
+        "rationale",
+        "assumptions",
+        "replaceMask",
+        "proposal"
+      ],
+      "properties": {
+        "suggestionId": { "$ref": "#/$defs/SuggestionId" },
+        "action": { "$ref": "#/$defs/Action" },
+        "tab": { "$ref": "#/$defs/Tab" },
+
+        "targetElementId": {
+          "description": "Required if action == update_element",
+          "type": "string",
+          "minLength": 1
+        },
+        "baseVersionId": {
+          "description": "Required if action == update_element",
+          "type": "string",
+          "minLength": 1
+        },
+
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "rationale": { "type": "string", "maxLength": 2000 },
+        "assumptions": { "type": "string", "maxLength": 2000 },
+
+        "replaceMask": { "$ref": "#/$defs/ReplaceMask" },
+
+        "proposal": {
+          "description": "Either full snapshot replacement for the replaceMask, OR patchOps. Prefer fullSnapshot for large replace, patchOps for small edits.",
+          "oneOf": [
+            { "$ref": "#/$defs/ProposalFullSnapshot" },
+            { "$ref": "#/$defs/ProposalPatchOps" }
+          ]
+        },
+
+        "tombstonePolicy": {
+          "type": "string",
+          "enum": ["respect_tombstones"],
+          "default": "respect_tombstones"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "update_element" } } },
+          "then": { "required": ["targetElementId", "baseVersionId"] }
+        },
+        {
+          "if": { "properties": { "action": { "const": "create_element" } } },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["targetElementId"] },
+                { "required": ["baseVersionId"] }
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    "ProposalFullSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "snapshot"],
+      "properties": {
+        "type": { "type": "string", "const": "fullSnapshot" },
+        "snapshot": {
+          "description": "Must be a complete ElementSnapshot-like object. Server may allow partial sections based on replaceMask, but agent must still output full objects for any included section.",
+          "$ref": "https://yourapp/schemas/ElementSnapshot.json"
+        }
+      }
+    },
+
+    "ProposalPatchOps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "patchOps"],
+      "properties": {
+        "type": { "type": "string", "const": "patchOps" },
+        "patchOps": {
+          "$ref": "https://yourapp/schemas/PatchOps.json"
+        }
+      }
+    }
+  }
+}
+```
+
+### Agent hard rules (enforced by validator / system prompt)
+
+* Output must be **valid JSON** matching schema. No markdown, no commentary.
+* For `update_element`, agent must:
+
+  * use the **existing keys** for unchanged lines
+  * introduce new keys only for new lines
+  * never re-add tombstoned keys unless it includes `tombstone_restore` op (rare).
+* For `dependencies` mode:
+
+  * agent should emit `proposal.type="patchOps"` with `upsert_line` ops updating existing `tasks[].dependencies` only (no rewriting everything unless explicitly requested).
+
+---
+
+## Practical examples
+
+### Example A — Accounting draft: delete purchase task, keep material but mark needPurchase=false
+
+```json
+[
+  { "op": "remove_line", "entity": "tasks", "key": "tsk_a1b2c3d4", "reason": "User removed purchase task" },
+  { "op": "upsert_line", "entity": "materials", "key": "mat_1122aabb", "value": {
+    "materialKey": "mat_1122aabb",
+    "name": "Plywood",
+    "spec": "10mm 122x244",
+    "qty": 4,
+    "unit": "pcs",
+    "unitCost": 100,
+    "bucketKey": "בניה בסטודיו",
+    "needPurchase": false,
+    "notes": "Already in stock / not purchasing now"
+  }}
+]
+```
+
+### Example B — Agent suggestion: update dependencies only
+
+```json
+{
+  "schemaVersion": "agent-suggestions/v1",
+  "mode": "dependencies",
+  "suggestions": [
+    {
+      "suggestionId": "sug_0f1e2d3c4b",
+      "action": "update_element",
+      "tab": "Planning",
+      "targetElementId": "el_123",
+      "baseVersionId": "ver_456",
+      "title": "Add task dependencies (build → paint → install)",
+      "rationale": "Tasks existed but lacked ordering; adds safe dependency graph.",
+      "assumptions": "No parallel work constraints were provided beyond standard workflow.",
+      "replaceMask": ["tasks"],
+      "proposal": {
+        "type": "patchOps",
+        "patchOps": [
+          {
+            "op": "upsert_line",
+            "entity": "tasks",
+            "key": "tsk_0a0b0c0d",
+            "value": {
+              "taskKey": "tsk_0a0b0c0d",
+              "title": "Build frame",
+              "details": "",
+              "bucketKey": "בניה בסטודיו",
+              "taskType": "build",
+              "estimate": "",
+              "dependencies": [],
+              "usesMaterialKeys": [],
+              "usesLaborKeys": []
+            }
+          },
+          {
+            "op": "upsert_line",
+            "entity": "tasks",
+            "key": "tsk_1a1b1c1d",
+            "value": {
+              "taskKey": "tsk_1a1b1c1d",
+              "title": "Paint / finish",
+              "details": "",
+              "bucketKey": "בניה בסטודיו",
+              "taskType": "build",
+              "estimate": "",
+              "dependencies": ["tsk_0a0b0c0d"],
+              "usesMaterialKeys": [],
+              "usesLaborKeys": []
+            }
+          }
+        ]
+      },
+      "tombstonePolicy": "respect_tombstones"
+    }
+  ]
+}
+```
+
+---
+
+## One implementation note (important)
+
+Even with strict schemas, you should still validate these **server-side** with:
+
+* AJV (JSON Schema) **or** Zod-derived schemas (but then keep them identical)
+* and then run your **approval business rules**:
+
+  * empty task auto-delete
+  * purchase task delete ⇒ material.needPurchase=false
+  * tombstone enforcement + restore requirements
+  * conflict check using `baseVersionId`

@@ -20,6 +20,9 @@ export function FlowItemsPanel(props: Props) {
         projectId: props.projectId,
         includeDrafts: true,
     });
+    const pendingUpdates = useQuery(api.elementVersions.getPendingElementUpdates, {
+        projectId: props.projectId,
+    });
 
     const templates = useQuery(api.items.listTemplates);
     const createManual = useMutation(api.items.createManual);
@@ -51,6 +54,10 @@ export function FlowItemsPanel(props: Props) {
     }, [allItems, search]);
 
     const selectedSet = useMemo(() => new Set(props.selectedItemIds.map(String)), [props.selectedItemIds]);
+    const pendingById = useMemo(
+        () => new Map((pendingUpdates ?? []).map((entry) => [String(entry.elementId), entry.count])),
+        [pendingUpdates],
+    );
 
     const DEFAULT_ITEMS = [
         { title: "הובלה", typeKey: "logistics", description: "Moving from studio to set" },
@@ -205,6 +212,11 @@ export function FlowItemsPanel(props: Props) {
                                                     ) : null}
                                                 </div>
                                                 <div className="flex flex-col items-end gap-1 shrink-0">
+                                                    {pendingById.get(String(item._id)) ? (
+                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">
+                                                            Pending update
+                                                        </span>
+                                                    ) : null}
                                                     <button
                                                         type="button"
                                                         className="text-[11px] text-blue-700 hover:underline"

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
-import { Plus, Wand2, Save, Pencil, Trash2, X } from "lucide-react";
+import { Plus, Wand2, Save, Pencil, Trash2, X, Lock, Unlock } from "lucide-react";
 import { type ProjectAccountingData, type ProjectAccountingSection } from "./AccountingTypes";
 import { type CostingOptions } from "@/src/lib/costing";
 
@@ -217,6 +217,7 @@ function WorkRow({
             actualUnitCost?: number;
             status?: string;
             description?: string;
+            lock?: boolean;
         };
     }) => Promise<void>;
     onDelete: () => void;
@@ -380,13 +381,23 @@ function WorkRow({
                         }`}>
                             {visibility}
                         </span>
-                        {line.isManagement && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600">
-                                management
-                            </span>
-                        )}
-                    </div>
-                </td>
+                    {line.isManagement && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600">
+                            management
+                        </span>
+                    )}
+                    {line.generation && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600">
+                            {line.generation}
+                        </span>
+                    )}
+                    {line.lock && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700">
+                            locked
+                        </span>
+                    )}
+                </div>
+            </td>
                 <td className="px-3 py-2 text-right bg-blue-50/30">
                 {plannedQuantityCell}
             </td>
@@ -451,6 +462,13 @@ function WorkRow({
                             <Pencil className="w-4 h-4" />
                         </button>
                     )}
+                    <button
+                        className="text-gray-500 hover:text-amber-600"
+                        title={line.lock ? "Unlock line" : "Lock line"}
+                        onClick={() => update({ id: line._id, updates: { lock: !line.lock } })}
+                    >
+                        {line.lock ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                    </button>
                     <button
                         className="text-red-500 hover:text-red-600"
                         title="Delete"

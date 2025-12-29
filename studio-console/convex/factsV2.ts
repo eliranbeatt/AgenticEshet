@@ -1269,6 +1269,10 @@ export const backfillLegacyFactsInternal = internalMutation({
                 updatedAt: Date.now(),
             });
 
+            await ctx.runMutation(internal.factsPipeline.upsertFactFromAtom, {
+                factAtomId: newFactId,
+            });
+
             if (fact.status === "conflict") {
                 await ctx.db.insert("factIssues", {
                     projectId: args.projectId,

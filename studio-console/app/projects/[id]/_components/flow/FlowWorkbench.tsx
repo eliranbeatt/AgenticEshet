@@ -16,6 +16,7 @@ import { StructuredQuestionsPanel } from "./StructuredQuestionsPanel";
 import { FactsPanel } from "../facts/FactsPanel";
 import { CurrentStatePanel } from "../facts/CurrentStatePanel";
 import { IdeasPanel } from "./IdeasPanel";
+import { QuestionQueuePanel } from "../questions/QuestionQueuePanel";
 import { ChangeSetReviewBanner } from "../changesets/ChangeSetReviewBanner";
 
 type Mode = "clarify" | "generate";
@@ -79,7 +80,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
     const [isSubmittingState, setIsSubmittingState] = useState(false);
     const [hasRemoteUpdate, setHasRemoteUpdate] = useState(false);
-    const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts" | "ideas">("state");
+    const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts" | "questions" | "ideas">("state");
 
     const lastLoadedScopeKeyRef = useRef<string | null>(null);
     const lastRemoteTextRef = useRef<string>("");
@@ -375,6 +376,12 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                 >
                                     Facts Ledger
                                 </button>
+                                <button
+                                    onClick={() => setRightPanelTab("questions")}
+                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "questions" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                >
+                                    Questions
+                                </button>
                                 {tab === "ideation" && (
                                     <button
                                         onClick={() => setRightPanelTab("ideas")}
@@ -399,6 +406,8 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                 />
                             ) : rightPanelTab === "facts" ? (
                                 <FactsPanel projectId={projectId} />
+                            ) : rightPanelTab === "questions" ? (
+                                <QuestionQueuePanel projectId={projectId} />
                             ) : (
                                 <IdeasPanel projectId={projectId} />
                             )}

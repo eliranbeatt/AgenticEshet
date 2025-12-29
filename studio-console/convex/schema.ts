@@ -437,6 +437,12 @@ export default defineSchema({
         searchText: v.optional(v.string()),
         sortOrder: v.optional(v.number()),
         tags: v.optional(v.array(v.string())),
+        elementStatus: v.optional(v.union(
+            v.literal("suggested"),
+            v.literal("active"),
+            v.literal("archived")
+        )),
+        publishedVersionId: v.optional(v.id("elementVersions")),
         createdFrom: v.object({
             source: v.union(
                 v.literal("manual"),
@@ -632,6 +638,83 @@ export default defineSchema({
         lastSyncedAt: v.number(),
     }).index("by_project_item", ["projectId", "itemId"]),
 
+    elementVersions: defineTable({
+        projectId: v.id("projects"),
+        elementId: v.id("projectItems"),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        basedOnVersionId: v.optional(v.id("elementVersions")),
+        appliedFactIds: v.array(v.id("facts")),
+        data: v.any(),
+        freeText: v.any(),
+        hashes: v.object({
+            dataHash: v.string(),
+            freeTextHashByBucket: v.any(),
+        }),
+        diffSummaryHe: v.string(),
+    })
+        .index("by_element_createdAt", ["elementId", "createdAt"]),
+
+    projectVersions: defineTable({
+        projectId: v.id("projects"),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        publishedElementVersionIds: v.array(v.id("elementVersions")),
+        noteHe: v.optional(v.string()),
+        hash: v.string(),
+    })
+        .index("by_project_createdAt", ["projectId", "createdAt"]),
+
+    questionQueue: defineTable({
+        projectId: v.id("projects"),
+        elementId: v.optional(v.id("projectItems")),
+        categoryHe: v.string(),
+        questionKey: v.string(),
+        questionTextHe: v.string(),
+        answerType: v.union(
+            v.literal("text"),
+            v.literal("number"),
+            v.literal("date"),
+            v.literal("select"),
+            v.literal("multiselect"),
+            v.literal("yesno")
+        ),
+        optionsHe: v.optional(v.array(v.string())),
+        status: v.union(
+            v.literal("open"),
+            v.literal("answered"),
+            v.literal("dismissed")
+        ),
+        answeredByFactId: v.optional(v.id("facts")),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+        .index("by_project_key", ["projectId", "questionKey"])
+        .index("by_project_status", ["projectId", "status"]),
+
+    derivationRuns: defineTable({
+        projectId: v.id("projects"),
+        triggerType: v.union(
+            v.literal("elementVersion"),
+            v.literal("projectVersion")
+        ),
+        triggerId: v.union(v.id("elementVersions"), v.id("projectVersions")),
+        mode: v.union(v.literal("patch"), v.literal("replace")),
+        status: v.union(
+            v.literal("proposed"),
+            v.literal("applied"),
+            v.literal("rejected"),
+            v.literal("error")
+        ),
+        changeSet: v.any(),
+        error: v.optional(v.string()),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+        .index("by_project_createdAt", ["projectId", "createdAt"])
+        .index("by_project_status", ["projectId", "status"])
+        .index("by_trigger", ["triggerType", "triggerId"]),
+
     rateLimitBuckets: defineTable({
         key: v.string(),
         windowStart: v.number(),
@@ -715,6 +798,13 @@ export default defineSchema({
             version: v.optional(v.number()),
             templateMaterialId: v.optional(v.string())
         })),
+        generation: v.optional(v.union(v.literal("generated"), v.literal("manual"))),
+        lock: v.optional(v.boolean()),
+        derivedFrom: v.optional(v.object({
+            elementVersionId: v.id("elementVersions"),
+            projectVersionId: v.optional(v.id("projectVersions")),
+            derivationRunId: v.id("derivationRuns"),
+        })),
     })
         .index("by_section", ["sectionId"])
         .index("by_project", ["projectId"])
@@ -751,6 +841,13 @@ export default defineSchema({
 
         status: v.string(), // planned, scheduled, done, paid
         description: v.optional(v.string()),
+        generation: v.optional(v.union(v.literal("generated"), v.literal("manual"))),
+        lock: v.optional(v.boolean()),
+        derivedFrom: v.optional(v.object({
+            elementVersionId: v.id("elementVersions"),
+            projectVersionId: v.optional(v.id("projectVersions")),
+            derivationRunId: v.id("derivationRuns"),
+        })),
     })
         .index("by_section", ["sectionId"])
         .index("by_project", ["projectId"])
@@ -796,6 +893,13 @@ export default defineSchema({
         )),
         createdAt: v.number(),
         updatedAt: v.number(),
+        generation: v.optional(v.union(v.literal("generated"), v.literal("manual"))),
+        lock: v.optional(v.boolean()),
+        derivedFrom: v.optional(v.object({
+            elementVersionId: v.id("elementVersions"),
+            projectVersionId: v.optional(v.id("projectVersions")),
+            derivationRunId: v.id("derivationRuns"),
+        })),
     })
         .index("by_project", ["projectId"])
         .index("by_project_item", ["projectId", "itemId"])
@@ -928,6 +1032,13 @@ export default defineSchema({
             version: v.optional(v.number()),
             templateTaskId: v.optional(v.string())
         })),
+        generation: v.optional(v.union(v.literal("generated"), v.literal("manual"))),
+        lock: v.optional(v.boolean()),
+        derivedFrom: v.optional(v.object({
+            elementVersionId: v.id("elementVersions"),
+            projectVersionId: v.optional(v.id("projectVersions")),
+            derivationRunId: v.id("derivationRuns"),
+        })),
         // Timestamps
         createdAt: v.optional(v.number()),
         updatedAt: v.number(),
@@ -1035,6 +1146,13 @@ export default defineSchema({
         pdfStorageId: v.optional(v.string()),
         createdAt: v.number(),
         createdBy: v.string(),
+        generation: v.optional(v.union(v.literal("generated"), v.literal("manual"))),
+        lock: v.optional(v.boolean()),
+        derivedFrom: v.optional(v.object({
+            elementVersionId: v.optional(v.id("elementVersions")),
+            projectVersionId: v.optional(v.id("projectVersions")),
+            derivationRunId: v.optional(v.id("derivationRuns")),
+        })),
     }).index("by_project", ["projectId"]),
 
     // 7b. DEEP RESEARCH RUNS (Gemini Deep Research outputs)
@@ -1114,15 +1232,6 @@ export default defineSchema({
         .index("by_project", ["projectId"])
         .index("by_project_tab", ["projectId", "tab"])
         .index("by_project_tab_scopeKey", ["projectId", "tab", "scopeKey"]),
-
-    // 9. QUESTS: task group / milestone
-    quests: defineTable({
-        projectId: v.id("projects"),
-        title: v.string(),
-        description: v.optional(v.string()),
-        order: v.number(),      // sort order in UI
-        createdAt: v.number(),
-    }).index("by_project", ["projectId"]),
 
     // 10. INGESTION JOBS
     ingestionJobs: defineTable({
@@ -1396,7 +1505,8 @@ export default defineSchema({
         projectId: v.id("projects"),
         title: v.string(),
         description: v.optional(v.string()),
-        status: v.string(), // "active", "completed", "archived"
+        order: v.optional(v.number()),
+        status: v.optional(v.string()), // "active", "completed", "archived"
         createdAt: v.number(),
         updatedAt: v.optional(v.number()),
     }).index("by_project", ["projectId"]),
@@ -1564,10 +1674,41 @@ export default defineSchema({
         parseRunId: v.optional(v.id("factParseRuns")),
         createdAt: v.number(),
         supersedesFactId: v.optional(v.id("facts")),
+        scope: v.optional(v.union(v.literal("project"), v.literal("element"))),
+        elementId: v.optional(v.id("projectItems")),
+        categoryHe: v.optional(v.string()),
+        subCategoryHe: v.optional(v.string()),
+        type: v.optional(v.union(
+            v.literal("field_update"),
+            v.literal("free_text"),
+            v.literal("decision"),
+            v.literal("risk"),
+            v.literal("preference"),
+            v.literal("constraint"),
+            v.literal("note")
+        )),
+        fieldPath: v.optional(v.string()),
+        bucketKey: v.optional(v.string()),
+        valueTyped: v.optional(v.any()),
+        valueTextHe: v.optional(v.string()),
+        source: v.optional(v.union(
+            v.literal("user_chat"),
+            v.literal("user_form"),
+            v.literal("file_upload"),
+            v.literal("agent_inference"),
+            v.literal("manual_edit"),
+            v.literal("migration")
+        )),
+        sourceRef: v.optional(v.string()),
+        updatedAt: v.optional(v.number()),
     })
         .index("by_scope_key", ["projectId", "scopeType", "itemId", "key"])
         .index("by_project_status", ["projectId", "status"])
-        .index("by_item", ["projectId", "itemId"]),
+        .index("by_item", ["projectId", "itemId"])
+        .index("by_project_element_status", ["projectId", "elementId", "status"])
+        .index("by_project_category_status", ["projectId", "categoryHe", "status"])
+        .index("by_project_field_status", ["projectId", "fieldPath", "status"])
+        .index("by_project_sourceRef", ["projectId", "sourceRef"]),
 
     factExtractionRuns: defineTable({
         projectId: v.id("projects"),

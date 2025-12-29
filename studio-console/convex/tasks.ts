@@ -85,6 +85,7 @@ export const createTask = mutation({
         steps: v.optional(v.array(v.string())),
         subtasks: v.optional(v.array(v.object({ title: v.string(), done: v.boolean() }))),
         assignee: v.optional(v.union(v.string(), v.null())),
+        lock: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
         const existingTasks = await ctx.db

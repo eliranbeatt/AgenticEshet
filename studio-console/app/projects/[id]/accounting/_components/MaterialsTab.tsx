@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
-import { Save, Plus, Wand2, Pencil, Trash2, X, ShoppingCart } from "lucide-react";
+import { Save, Plus, Wand2, Pencil, Trash2, X, ShoppingCart, Lock, Unlock } from "lucide-react";
 import { BuyingAssistantPanel } from "../../quote/_components/BuyingAssistantPanel";
 import { type ProjectAccountingData, type ProjectAccountingSection } from "./AccountingTypes";
 import { type CostingOptions } from "@/src/lib/costing";
@@ -237,6 +237,7 @@ function MaterialRow({
             actualUnitCost?: number;
             status?: string;
             note?: string;
+            lock?: boolean;
         };
     }) => Promise<void>;
     onSaveCatalog: () => void;
@@ -406,6 +407,16 @@ function MaterialRow({
                                 AI
                             </span>
                         )}
+                        {line.generation && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600 font-medium">
+                                {line.generation}
+                            </span>
+                        )}
+                        {line.lock && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 font-medium">
+                                locked
+                            </span>
+                        )}
                         <span className={`text-[10px] px-2 py-0.5 rounded-full border ${visibility === "exclude"
                                 ? "border-red-200 bg-red-50 text-red-700"
                                 : visibility === "optional"
@@ -517,6 +528,13 @@ function MaterialRow({
                             title="Save to Catalog"
                         >
                             <Save className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={() => update({ id: line._id, updates: { lock: !line.lock } })}
+                            className="text-gray-500 hover:text-amber-600"
+                            title={line.lock ? "Unlock line" : "Lock line"}
+                        >
+                            {line.lock ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
                         </button>
                         <button
                             onClick={onDelete}

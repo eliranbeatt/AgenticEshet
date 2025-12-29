@@ -1,0 +1,498 @@
+Below is a **dev-ready plan** that implements everything you asked for: **no Facts**, **Elements are canonical**, **Current Knowledge is the editable truth**, **all edits in Accounting/Tasks go through draft → approve → new version**, **stable keys**, **tombstones**, **version tags + summaries**, plus the **agent-generated Suggested Elements** workflow and the **action buttons** (Ideation/Planning/Solutioning/Critique/Stress test/Dependencies).
+
+---
+
+# 0) Product rules
+
+## Canonical truth
+
+1. **Elements (אלמנטים)** are the canonical source for:
+
+   * accounting lines (materials/labor)
+   * tasks (including dependencies)
+   * quotes content + pricing inputs
+2. Any other representation (tables like `tasks`, `materialLines`, `workLines`, quote previews) is a **projection/cache** that can be rebuilt from Elements.
+
+## Draft → Approve (no immediate destructive writes)
+
+* In **Accounting UI** and **Tasks UI**, edits do **not** change Elements immediately.
+* Edits create/modify a **Draft Revision**.
+* Only when user clicks **Approve**:
+
+  * a new **ElementVersion** is created (per affected element)
+  * the element’s active snapshot becomes the new version
+  * projections (accounting/tasks/quote) are rebuilt
+  * revision metadata/tags/summary are persisted
+
+## Priority of truth for agents
+
+When agents receive context, priority is:
+
+1. **Element current snapshot** (what is saved/approved)
+2. **Current Knowledge (ידע נוכחי)** (user-edited truth)
+3. **Conversation history** (supporting evidence; may be outdated)
+
+If contradiction exists, agents must follow **(1) then (2)** and ignore chat.
+
+---
+
+# 1) Data model design (Convex)
+
+## 1.1 Elements (canonical)
+
+### `elements`
+
+* `projectId`
+* `title`
+* `status` (active/archived)
+* `activeVersionId`
+* timestamps
+
+### `elementVersions`
+
+* `projectId`
+* `elementId`
+* `revisionId` (grouping)
+* `createdAt`
+* `createdBy` (user/agent)
+* `createdFrom`:
+
+  * `tab` (Ideation / Planning / Solutioning / Accounting / Tasks)
+  * `source` (manual_edit / agent_suggestion / dependency_agent / critique_tool)
+* `tags[]` (strings)
+* `summary` (short text)
+* `changeStats` (counts: tasksAdded/Removed, materialsAdded/Removed, etc.)
+* `snapshot` (see below)
+
+### `ElementSnapshot` shape (stored inside elementVersions)
+
+* `descriptions`:
+
+  * `short`
+  * `long`
+* `freeText` (your “dump but organized” fields):
+
+  * `preferences`
+  * `risks`
+  * `openQuestions`
+  * `installation`
+  * `building`
+  * `dependenciesNotes` (optional, separate from task graph)
+  * `constraints`
+  * `notes`
+* `materials[]` (canonical)
+
+  * `materialKey` (stable)
+  * `name`
+  * `spec`
+  * `qty`
+  * `unit`
+  * `unitCost` (optional)
+  * `totalCost` (optional)
+  * `bucketKey` (e.g., בניה בסטודיו / התקנה / הובלה / בית דפוס / ספקי משנה)
+  * `needPurchase: boolean` ✅ (your rule)
+  * `vendorRef?`
+  * `notes?`
+* `labor[]` (canonical)
+
+  * `laborKey`
+  * `role` (e.g., art worker / נגר / מתקין)
+  * `daysOrHours`
+  * `unit`
+  * `rate`
+  * `bucketKey`
+  * `notes?`
+* `tasks[]` (canonical)
+
+  * `taskKey`
+  * `title`
+  * `details`
+  * `bucketKey`
+  * `estimate?`
+  * `dependencies: taskKey[]` ✅ (dependency agent writes here)
+  * `usesMaterialKeys: materialKey[]` (optional but recommended)
+  * `usesLaborKeys: laborKey[]`
+  * `taskType` (normal / purchase_material / install / admin / etc.)
+  * `materialKey?` (for purchase tasks)
+* `tombstones` ✅
+
+  * `taskKeys[]`
+  * `materialKeys[]`
+  * `laborKeys[]`
+
+### Business rules baked into snapshot apply
+
+* **Empty tasks auto-delete**: task becomes empty (no title AND no details) → removed at approval time.
+* **Purchase task deletion**: if a `purchase_material` task is deleted in a draft:
+
+  * keep the material
+  * set `material.needPurchase = false` ✅
+* **Tombstones**: when user deletes a task/material/labor during draft approval:
+
+  * its key is appended to tombstones
+  * agents must not re-add tombstoned keys unless user explicitly asks “restore”.
+
+---
+
+## 1.2 Revisions (draft + approval + grouping)
+
+You asked: edits in Accounting/Tasks only apply after **version approval**, and versions have tags/summary.
+
+### `revisions`
+
+* `projectId`
+* `status`: `draft | approved | rejected`
+* `createdAt`
+* `createdBy`
+* `originTab`: Ideation / Planning / Solutioning / Accounting / Tasks
+* `actionType`: `manual_edit | agent_suggestions | dependency_calc | critique | stress_test`
+* `tags[]`
+* `summary` (auto-generated diff summary + user editable)
+* `affectedElementIds[]`
+
+### `revisionChanges` (patches per element)
+
+* `revisionId`
+* `elementId`
+* `baseVersionId` (conflict detection)
+* `replaceMask[]` (e.g. tasks/materials/labor/freeText/descriptions)
+* `patchOps[]` OR full `proposedSnapshot` (choose one; recommendation below)
+* `diffPreview` (cached for UI)
+
+**Recommendation**: store **patchOps** for manual edits (Accounting/Tasks), and store **full proposedSnapshot** for agent suggestions (easier for “Replace all”).
+
+---
+
+## 1.3 Current Knowledge (truthy brief + append-only log)
+
+### `projectKnowledge`
+
+* `projectId`
+* `currentText` (editable “ידע נוכחי”)
+* `preferencesText` (optional dedicated top section; can be part of currentText too)
+* `updatedAt`
+
+### `knowledgeLogEntries`
+
+* `projectId`
+* `createdAt`
+* `source`: `ingestion | user_chat | agent_summary`
+* `text` (append-only entry)
+* `linkedDocId?` / `linkedMessageId?`
+
+UI requirement: **Preferences / Current Knowledge shown above conversation history**.
+
+---
+
+# 2) Core workflows
+
+## 2.1 Suggested Elements (agent proposals) — side panel on all 3 tabs
+
+### UI
+
+Each tab (Ideation / Planning / Solutioning) includes:
+
+* Chat window
+* Elements list (select elements)
+* **Suggested Elements side panel**:
+
+  * Suggestions grouped: “New elements” / “Updates to existing”
+  * Each suggestion: Preview, Edit, Approve, Decline/Delete
+  * Diff preview always visible (counts + changed sections)
+
+### Trigger
+
+Generation is **only** by button click:
+
+* Buttons: **Ideation**, **Planning**, **Solutioning**
+* Tools: **Critique**, **Stress test**, **Risk scan**, **Improve**, **Compute Dependencies**
+
+All call: `agents.generateSuggestions({ mode, selectedElementIds, userInstructions })`
+
+### Agent output contract (high level)
+
+Agent produces an array of `ElementSuggestion` objects that map 1:1 into `revisionChanges` rows (inside a draft revision created as `agent_suggestions`).
+
+---
+
+## 2.2 Accounting edits → Draft Revision → Approve
+
+### Behavior
+
+* Accounting screen reads from **projection** (built from active element snapshots)
+* User clicks **Edit accounting** → creates a **Draft Revision (originTab=Accounting)**
+* All edits update the **draft**, not elements:
+
+  * delete material/labor row
+  * adjust qty/cost/bucket
+  * toggle `needPurchase`
+* User clicks **Approve**:
+
+  * creates new ElementVersions for affected elements
+  * updates `activeVersionId`
+  * rebuild projections (accounting/tasks/quote)
+
+No immediate cascading changes until approval (your request).
+
+---
+
+## 2.3 Tasks edits → Draft Revision → Approve
+
+Same pattern:
+
+* Tasks screen reads from projection
+* **Edit tasks** creates Draft Revision (originTab=Tasks)
+* user add/edit/delete tasks in the draft
+* approve creates new element versions
+* dependencies agent can run and write into draft before approval
+
+---
+
+# 3) Projections (derived views you keep for UI speed)
+
+Even though Elements are canonical, you likely still want fast tables for UI + integrations.
+
+## 3.1 `tasks` projection
+
+* Rebuilt from element snapshots (latest versions)
+* Includes `taskKey`, `elementId`, `bucketKey`, etc.
+* Stores runtime-only view fields if needed (UI ordering, grouping)
+  But **writes never go here**; writes go to a draft revision.
+
+## 3.2 Accounting projections
+
+* `sections`, `materialLines`, `workLines` rebuilt from elements
+* Again: for speed and grouping, but **never canonical**.
+
+## 3.3 Quotes projection
+
+* quotes are generated from element snapshots + project margins
+* quote “Generate” also creates a revision tag checkpoint (optional but recommended).
+
+---
+
+# 4) Validation & safety (prevents “failed implementation” loops)
+
+## 4.1 Revision approval validation pipeline
+
+On Approve:
+
+1. **Schema validation**: required fields, types, keys exist
+2. **Business validation**:
+
+   * empty tasks auto-delete
+   * purchase task deletion ⇒ set `needPurchase=false`
+   * bucketKey must be from allowed set (configurable)
+   * quantities/units sanity (if qty missing → warning or block, your choice)
+3. **Tombstone enforcement**:
+
+   * if patch attempts to re-add tombstoned key → reject unless `restore=true` explicitly set
+
+## 4.2 Conflict detection
+
+Each revision change stores `baseVersionId`.
+If current element version differs at approve time:
+
+* show warning and allow:
+
+  * “Rebase” (reapply patch onto latest) OR
+  * “Approve anyway” (overwrite)
+    Default: warn + rebase.
+
+---
+
+# 5) Version tags + summaries (your requirement)
+
+## Metadata to show in UI for each version
+
+* created date/time
+* created tab (Ideation/Planning/Solutioning/Accounting/Tasks)
+* tags (manual + auto)
+* summary text
+
+## How summary is produced
+
+On approval, compute diff stats:
+
+* tasks added/removed/edited
+* materials added/removed/edited
+* labor added/removed/edited
+* dependencies added/changed
+  Then create a short summary:
+* auto-generated (deterministic template) and optionally refined by LLM
+* user can edit before finalize approval (nice-to-have)
+
+Example tags:
+
+* `tab:Planning`
+* `change:dependencies`
+* `change:removed_tasks`
+* `source:manual_edit`
+* `tool:stress_test`
+
+---
+
+# 6) Epics & phases (implementation plan)
+
+## Epic 1 — Foundations: Elements + Versions + Tombstones
+
+**Goal:** introduce canonical element model and approval pipeline.
+
+**Deliverables**
+
+* Convex schema: `elements`, `elementVersions`, `revisions`, `revisionChanges`
+* Snapshot structure + stable keys
+* Tombstones support
+* Approval mutation: `revisions.approve(revisionId)`
+
+**Acceptance criteria**
+
+* Can create element + version
+* Can delete task/material/labor and see tombstone stored
+* Approve produces new version with tags/summary
+
+---
+
+## Epic 2 — Current Knowledge (ידע נוכחי) + Knowledge Log
+
+**Goal:** replace Facts with editable curated knowledge + append log.
+
+**Deliverables**
+
+* `projectKnowledge` + `knowledgeLogEntries`
+* UI: preferences/current knowledge panel above chat
+* Ingestion pipeline writes bullet summaries into knowledge log
+* Agent prompt rule: current knowledge overrides chat
+
+**Acceptance criteria**
+
+* User edits current knowledge; agents use it as truth even if chat contradicts
+* Ingested files append bullets to knowledge log
+
+---
+
+## Epic 3 — Suggested Elements panel + agent-driven proposals
+
+**Goal:** agents generate suggestions only via button; user approve/decline/edit.
+
+**Deliverables**
+
+* Side panel in Ideation/Planning/Solutioning
+* Button-triggered generation actions:
+
+  * Ideation / Planning / Solutioning
+  * Critique / Stress test / Risk scan / Improve
+  * Dependencies calc
+* Suggestions stored as draft revision changes
+* Diff preview + manual edit UI for suggestion snapshots
+
+**Acceptance criteria**
+
+* Click button → suggestions appear
+* Edit suggestion → approve → new element version created and active snapshot updates
+* Decline deletes suggestion
+
+---
+
+## Epic 4 — Projection engine (Elements → Tasks/Accounting/Quote)
+
+**Goal:** everything else becomes a projection from elements.
+
+**Deliverables**
+
+* Materialization function: `materializeProjectFromElements(projectId)`
+* Rebuild tables: tasks + accounting lines + quote inputs
+* Trigger materialization on revision approval
+
+**Acceptance criteria**
+
+* Approve any revision updates tasks + accounting projections consistently
+* Can rebuild projections from scratch and get same result
+
+---
+
+## Epic 5 — Accounting draft editor (no immediate write)
+
+**Goal:** accounting edits create drafts, apply on approval only.
+
+**Deliverables**
+
+* Accounting UI “Edit mode” → creates/uses a draft revision
+* Row edits write patchOps into revisionChanges
+* Approve applies to elements, then projections rebuild
+
+**Acceptance criteria**
+
+* Delete labor/material row in accounting → nothing changes elsewhere until approve
+* Approve updates element + tasks + quote view
+* Purchase-task deletion behavior enforced via rules
+
+---
+
+## Epic 6 — Tasks draft editor + dependency agent persistence
+
+**Goal:** same as accounting, plus dependency graph saved into versions.
+
+**Deliverables**
+
+* Tasks UI edit mode with draft revision
+* Add/edit/delete tasks in draft
+* Auto-delete empty tasks on approve
+* “Compute dependencies” button:
+
+  * produces patch updating `tasks[].dependencies`
+  * saved into element version on approval
+
+**Acceptance criteria**
+
+* Task edits don’t affect element until approve
+* Dependencies generated and persisted in version metadata (`change:dependencies`)
+
+---
+
+## Epic 7 — Guardrails & validators
+
+**Goal:** prevent garbage suggestions and broken accounting buckets.
+
+**Deliverables**
+
+* Schema validator for suggestion payloads
+* Business validator rules (buckets, missing units, etc.)
+* Tombstone enforcement (no re-add)
+* Conflict/rebase UX
+
+**Acceptance criteria**
+
+* Bad suggestion is rejected with clear errors
+* Tombstoned keys never reappear unless explicit restore
+
+---
+
+## Epic 8 — Quotes generation tied to versions
+
+**Goal:** quote button produces deterministic quote from elements + creates tagged checkpoint.
+
+**Deliverables**
+
+* Quote generation reads only element active snapshots + margins
+* On “Generate Quote”, create a `revision` tag checkpoint:
+
+  * `tab:Quotes`, `action:generate_quote`
+* Quote doc is versioned and reproducible
+
+**Acceptance criteria**
+
+* Quote output matches element state exactly
+* Can regenerate same quote from same element versions
+
+---
+
+# 7) Key design decisions (so devs don’t “interpret”)
+
+1. **Canonical = elements**
+2. **All human edits in accounting/tasks go to draft revision**
+3. **Only approval creates new element versions**
+4. **Tombstones prevent re-add**
+5. **Current Knowledge overrides chat**
+6. **Purchase-task deletion toggles `needPurchase=false` (material remains)**
+

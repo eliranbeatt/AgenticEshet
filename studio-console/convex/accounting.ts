@@ -246,6 +246,7 @@ export const updateMaterialLine = mutation({
         actualUnitCost: v.optional(v.number()),
         status: v.optional(v.string()),
         note: v.optional(v.string()),
+        lock: v.optional(v.boolean()),
     })
   },
   handler: async (ctx, args) => {
@@ -312,6 +313,7 @@ export const updateWorkLine = mutation({
         actualUnitCost: v.optional(v.number()),
         status: v.optional(v.string()),
         description: v.optional(v.string()),
+        lock: v.optional(v.boolean()),
     })
   },
   handler: async (ctx, args) => {

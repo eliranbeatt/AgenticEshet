@@ -77,6 +77,14 @@ function normalizeValue(value: unknown): string {
     }
 }
 
+async function isFactsEnabled(
+    ctx: { db: { get: (id: Id<"projects">) => Promise<Doc<"projects"> | null> } },
+    projectId: Id<"projects">
+) {
+    const project = await ctx.db.get(projectId);
+    return project?.features?.factsEnabled !== false;
+}
+
 function formatLegacyFactValue(value: unknown): string {
     if (value === null || value === undefined) return "";
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
@@ -599,6 +607,9 @@ export const extractTurnBundle = internalAction({
         const project = await ctx.runQuery(api.projects.getProject, {
             projectId: bundle.projectId,
         });
+        if (project?.features?.factsEnabled === false) {
+            return { skipped: true };
+        }
         if (!project?.features?.factsV2) {
             return { skipped: true };
         }
@@ -997,6 +1008,7 @@ export const insertEmbedding = internalMutation({
 export const listFacts = query({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
+        if (!(await isFactsEnabled(ctx, args.projectId))) return [];
         const facts = await ctx.db
             .query("factAtoms")
             .filter((q) => q.eq(q.field("projectId"), args.projectId))
@@ -1008,6 +1020,7 @@ export const listFacts = query({
 export const listIssues = query({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
+        if (!(await isFactsEnabled(ctx, args.projectId))) return [];
         const issues = await ctx.db
             .query("factIssues")
             .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", "open"))
@@ -1020,6 +1033,7 @@ export const listIssues = query({
 export const listExtractionRuns = query({
     args: { projectId: v.id("projects"), limit: v.optional(v.number()) },
     handler: async (ctx, args) => {
+        if (!(await isFactsEnabled(ctx, args.projectId))) return [];
         const limit = Math.max(1, Math.min(args.limit ?? 10, 50));
         return await ctx.db
             .query("factExtractionRuns")
@@ -1032,14 +1046,22 @@ export const listExtractionRuns = query({
 export const acceptFact = mutation({
     args: { factId: v.id("factAtoms") },
     handler: async (ctx, args) => {
+        const fact = await ctx.db.get(args.factId);
+        if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
         await ctx.db.patch(args.factId, { status: "accepted", updatedAt: Date.now() });
+        return { ok: true };
     },
 });
 
 export const rejectFact = mutation({
     args: { factId: v.id("factAtoms") },
     handler: async (ctx, args) => {
+        const fact = await ctx.db.get(args.factId);
+        if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
         await ctx.db.patch(args.factId, { status: "rejected", updatedAt: Date.now() });
+        return { ok: true };
     },
 });
 
@@ -1048,6 +1070,7 @@ export const updateFactTextInternal = internalMutation({
     handler: async (ctx, args) => {
         const fact = await ctx.db.get(args.factId);
         if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { projectId: fact.projectId, factTextHe: fact.factTextHe };
         const factTextHe = args.factTextHe.trim();
         if (!factTextHe) throw new Error("Fact text is required");
 
@@ -1080,6 +1103,9 @@ export const updateFactTextInternal = internalMutation({
 export const updateFactText = action({
     args: { factId: v.id("factAtoms"), factTextHe: v.string() },
     handler: async (ctx, args) => {
+        const fact = await ctx.runQuery(internal.factsV2.getFactById, { factId: args.factId });
+        if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
         const { projectId, factTextHe } = await ctx.runMutation(internal.factsV2.updateFactTextInternal, {
             factId: args.factId,
             factTextHe: args.factTextHe,
@@ -1100,6 +1126,7 @@ export const deleteFact = mutation({
     handler: async (ctx, args) => {
         const fact = await ctx.db.get(args.factId);
         if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
 
         const embeddings = await ctx.db
             .query("factEmbeddings")
@@ -1143,11 +1170,15 @@ export const deleteFact = mutation({
 export const resolveIssue = mutation({
     args: { issueId: v.id("factIssues"), resolution: v.union(v.literal("resolved"), v.literal("dismissed")) },
     handler: async (ctx, args) => {
+        const issue = await ctx.db.get(args.issueId);
+        if (!issue) throw new Error("Issue not found");
+        if (!(await isFactsEnabled(ctx, issue.projectId))) return { ok: true, skipped: true };
         await ctx.db.patch(args.issueId, {
             status: args.resolution,
             resolvedAt: Date.now(),
             resolvedByUserId: "user",
         });
+        return { ok: true };
     },
 });
 
@@ -1156,11 +1187,13 @@ export const assignItem = mutation({
     handler: async (ctx, args) => {
         const fact = await ctx.db.get(args.factId);
         if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
         await ctx.db.patch(args.factId, {
             scopeType: "item",
             itemId: args.itemId,
             updatedAt: Date.now(),
         });
+        return { ok: true };
     },
 });
 

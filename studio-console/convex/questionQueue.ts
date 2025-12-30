@@ -109,7 +109,7 @@ export const answerQuestion = mutation({
 
         await ctx.db.patch(args.questionId, {
             status: "answered",
-            answeredByFactId: result.factId as Id<"facts">,
+            answeredByFactId: (result.factId ?? undefined) as Id<"facts"> | undefined,
             updatedAt: Date.now(),
         });
 

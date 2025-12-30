@@ -10,6 +10,7 @@ import {
     summarizeItems,
     summarizeKnowledgeBlocks,
     summarizeKnowledgeDocs,
+    summarizeElementSnapshots,
 } from "../lib/contextSummary";
 
 const tabValidator = v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning"));
@@ -95,16 +96,22 @@ export const send = action({
             ? await ctx.runQuery(api.items.listByIds, { itemIds: args.scopeItemIds })
             : []) as Doc<"projectItems">[];
 
-        const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
+        const factsContext = project.features?.factsEnabled === false
+            ? { bullets: "(facts disabled)" }
+            : await ctx.runAction(internal.factsV2.getFactsContext, {
+                projectId: project._id,
+                scopeType:
+                    args.scopeType === "allProject"
+                        ? "project"
+                        : args.scopeType === "singleItem"
+                            ? "item"
+                            : "multiItem",
+                itemIds: args.scopeItemIds,
+                queryText: args.userContent,
+            });
+
+        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
             projectId: project._id,
-            scopeType:
-                args.scopeType === "allProject"
-                    ? "project"
-                    : args.scopeType === "singleItem"
-                        ? "item"
-                        : "multiItem",
-            itemIds: args.scopeItemIds,
-            queryText: args.userContent,
         });
 
         const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -121,6 +128,14 @@ export const send = action({
             projectId: project._id,
             includeDrafts: true,
         });
+
+        const scopeElementIds = args.scopeItemIds?.length ? args.scopeItemIds : (items ?? []).map((item) => item._id);
+        const elementSnapshots = project.features?.elementsCanonical
+            ? await ctx.runQuery(internal.elementVersions.getActiveSnapshotsByItemIds, { itemIds: scopeElementIds })
+            : [];
+        const elementSnapshotsSummary = project.features?.elementsCanonical
+            ? summarizeElementSnapshots(elementSnapshots, 20)
+            : "(none)";
 
         const scopeSummary =
             args.scopeType === "allProject"
@@ -169,6 +184,14 @@ export const send = action({
             `OVERVIEW: ${JSON.stringify(project.overview || {})}`,
             `TAB: ${args.tab}`,
             `SCOPE: ${scopeSummary}`,
+            "",
+            "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
+            elementSnapshotsSummary,
+            "",
+            "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
+            currentKnowledge
+                ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
+                : "(none)",
             "",
             "KNOWN FACTS (accepted + high-confidence proposed):",
             factsContext.bullets,

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
 import SummaryTab from "./_components/SummaryTab";
@@ -20,15 +20,64 @@ export default function AccountingPage() {
   const [includeManagement, setIncludeManagement] = useState(true);
   const [respectVisibility, setRespectVisibility] = useState(false);
   const [includeOptional, setIncludeOptional] = useState(true);
+  const [editMode, setEditMode] = useState(false);
+  const [draftRevisionId, setDraftRevisionId] = useState<Id<"revisions"> | null>(null);
 
+  const project = useQuery(api.projects.getProject, { projectId });
   const accountingData = useQuery(api.accounting.getProjectAccounting, { projectId });
   const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
+  const createDraft = useMutation(api.revisions.createDraft);
+  const approveDraft = useMutation(api.revisions.approve);
+  const discardDraft = useMutation(api.revisions.discardDraft);
   const elements = useMemo(() => (itemsData?.items ?? []) as Array<Doc<"projectItems">>, [itemsData?.items]);
+  const elementsById = useMemo(() => new Map(elements.map((item) => [String(item._id), item])), [elements]);
   const elementSelection = selectedElementId === "all"
     ? null
     : selectedElementId === "unlinked"
       ? "unlinked"
       : (selectedElementId as Id<"projectItems">);
+
+  const elementsCanonical = project?.features?.elementsCanonical ?? false;
+  const existingDraft = useQuery(
+    api.revisions.getDraft,
+    elementsCanonical ? { projectId, originTab: "Accounting" } : "skip"
+  );
+  const allowInlineEdits = !elementsCanonical || editMode;
+
+  const toggleEditMode = async () => {
+    if (!elementsCanonical) return;
+    if (!editMode) {
+      if (existingDraft?._id) {
+        setDraftRevisionId(existingDraft._id);
+        setEditMode(true);
+        return;
+      }
+      const result = await createDraft({
+        projectId,
+        originTab: "Accounting",
+        actionType: "manual_edit",
+        createdBy: "user",
+      });
+      setDraftRevisionId(result.revisionId);
+      setEditMode(true);
+      return;
+    }
+    setEditMode(false);
+  };
+
+  const handleApprove = async () => {
+    if (!draftRevisionId) return;
+    await approveDraft({ revisionId: draftRevisionId, approvedBy: "user" });
+    setDraftRevisionId(null);
+    setEditMode(false);
+  };
+
+  const handleDiscard = async () => {
+    if (!draftRevisionId) return;
+    await discardDraft({ revisionId: draftRevisionId });
+    setDraftRevisionId(null);
+    setEditMode(false);
+  };
 
   if (!accountingData) {
     return <div className="p-8">Loading accounting data...</div>;
@@ -38,6 +87,32 @@ export default function AccountingPage() {
     <div className="flex flex-col h-full space-y-4">
       <ChangeSetReviewBanner projectId={projectId} phase="accounting" />
       <div className="flex flex-wrap items-center gap-3 text-sm">
+        {elementsCanonical && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void toggleEditMode()}
+              className={`text-xs font-semibold px-3 py-1 rounded ${editMode ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-700"}`}
+            >
+              {editMode ? "Draft editing on" : "Edit accounting"}
+            </button>
+            {editMode && (
+              <>
+                <button
+                  onClick={() => void handleApprove()}
+                  className="text-xs font-semibold px-3 py-1 rounded bg-green-600 text-white"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => void handleDiscard()}
+                  className="text-xs font-semibold px-3 py-1 rounded bg-gray-200 text-gray-700"
+                >
+                  Discard
+                </button>
+              </>
+            )}
+          </div>
+        )}
         <label className="flex items-center gap-2">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Element</span>
           <select
@@ -122,6 +197,10 @@ export default function AccountingPage() {
             includeManagement={includeManagement}
             includeOptional={includeOptional}
             respectVisibility={respectVisibility}
+            editMode={editMode}
+            draftRevisionId={draftRevisionId}
+            elementsById={elementsById}
+            allowInlineEdits={allowInlineEdits}
           />
         )}
         {activeTab === "labor" && (
@@ -132,6 +211,10 @@ export default function AccountingPage() {
             includeManagement={includeManagement}
             includeOptional={includeOptional}
             respectVisibility={respectVisibility}
+            editMode={editMode}
+            draftRevisionId={draftRevisionId}
+            elementsById={elementsById}
+            allowInlineEdits={allowInlineEdits}
           />
         )}
         {activeTab === "deep-research" && <DeepResearchTab projectId={projectId} />}

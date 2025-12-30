@@ -1,10 +1,11 @@
 import { v } from "convex/values";
 import { action } from "../_generated/server";
 import { z } from "zod";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ItemSpecV2Schema, ItemUpdateOutputSchema, ItemSpecV2 } from "../lib/zodSchemas";
 import { parseItemSpec, buildBaseItemSpec, normalizeRateType } from "../lib/itemHelpers";
+import { summarizeElementSnapshots } from "../lib/contextSummary";
 
 const SYSTEM_PROMPT = `
 You are an expert Production Manager for events and construction.
@@ -207,9 +208,27 @@ export const populate = action({
             baseSpec = latestDraft ? parseItemSpec(latestDraft.data) : buildBaseItemSpec(item.title, item.typeKey);
         }
 
+        const project = await ctx.db.get(item.projectId);
+        if (!project) throw new Error("Project not found");
+
         // Fetch facts
         // We want all facts for this project to be safe, but especially those linked to this item
-        const allFacts = await ctx.runQuery(internal.factsV2.listFacts, { projectId: item.projectId });
+        const allFacts = project.features?.factsEnabled === false
+            ? []
+            : await ctx.runQuery(internal.factsV2.listFacts, { projectId: item.projectId });
+
+        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+            projectId: item.projectId,
+        });
+
+        const elementSnapshots = project.features?.elementsCanonical
+            ? await ctx.runQuery(internal.elementVersions.getActiveSnapshotsByItemIds, {
+                itemIds: [args.itemId],
+            })
+            : [];
+        const elementSnapshotsSummary = project.features?.elementsCanonical
+            ? summarizeElementSnapshots(elementSnapshots, 4)
+            : "(none)";
 
         // Filter facts
         // We want:
@@ -252,6 +271,12 @@ Description: ${item.description || "(none)"}
 
 Current Spec JSON:
 ${JSON.stringify(baseSpec, null, 2)}
+
+Element Snapshot (canonical, overrides knowledge/chat):
+${elementSnapshotsSummary}
+
+Current Knowledge (authoritative, overrides chat):
+${currentKnowledge ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n") : "(none)"}
 
 Available Facts:
 ${factsText || "(No facts available)"}

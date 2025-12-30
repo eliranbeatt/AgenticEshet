@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
@@ -44,6 +44,12 @@ export const generateFromAccounting = mutation({
     handler: async (ctx, args) => {
         const project = await ctx.db.get(args.projectId);
         if (!project) throw new Error("Project not found");
+
+        if (project.features?.elementsCanonical) {
+            await ctx.runMutation(api.projections.rebuild, {
+                projectId: args.projectId,
+            });
+        }
 
         const activePlan = await ctx.db
             .query("plans")

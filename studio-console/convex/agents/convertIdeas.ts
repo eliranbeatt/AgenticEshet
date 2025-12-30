@@ -9,7 +9,7 @@ import {
     extractGuardrails,
     sharedContextContract,
 } from "../prompts/itemsPromptPack";
-import { summarizeItems, summarizeKnowledgeBlocks } from "../lib/contextSummary";
+import { summarizeItems, summarizeKnowledgeBlocks, summarizeElementSnapshots } from "../lib/contextSummary";
 
 function normalizeChangeSet(input: any, projectId: string) {
     const base = ChangeSetSchema.parse(input);
@@ -52,10 +52,16 @@ export const createChangeSet = action({
             detailsMarkdown: card!.detailsMarkdown,
         }));
 
-        const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
+        const factsContext = project.features?.factsEnabled === false
+            ? { bullets: "(facts disabled)" }
+            : await ctx.runAction(internal.factsV2.getFactsContext, {
+                projectId: args.projectId,
+                scopeType: "project",
+                queryText: selection.notes ?? project.name,
+            });
+
+        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
             projectId: args.projectId,
-            scopeType: "project",
-            queryText: selection.notes ?? project.name,
         });
 
         const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -66,6 +72,15 @@ export const createChangeSet = action({
             projectId: args.projectId,
             includeDrafts: true,
         });
+
+        const elementSnapshots = project.features?.elementsCanonical
+            ? await ctx.runQuery(internal.elementVersions.getActiveSnapshotsByItemIds, {
+                itemIds: items.map((item) => item._id),
+            })
+            : [];
+        const elementSnapshotsSummary = project.features?.elementsCanonical
+            ? summarizeElementSnapshots(elementSnapshots, 20)
+            : "(none)";
 
         const systemPrompt = [
             sharedContextContract,
@@ -78,6 +93,14 @@ export const createChangeSet = action({
             `PROJECT: ${project.name}`,
             `CLIENT: ${project.clientName}`,
             `DEFAULT_LANGUAGE: ${project.defaultLanguage ?? "he"}`,
+            "",
+            "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
+            elementSnapshotsSummary,
+            "",
+            "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
+            currentKnowledge
+                ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
+                : "(none)",
             "",
             "KNOWN FACTS (accepted + high-confidence proposed):",
             factsContext.bullets,

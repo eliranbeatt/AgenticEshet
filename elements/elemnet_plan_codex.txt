@@ -1,0 +1,141 @@
+Element Canonical Plan (Codex) - aligned to current codebase
+
+0) Repo-fit summary (what already exists)
+- projectItems table is the Element entity (schema in studio-console/convex/schema.ts).
+- itemRevisions provides per-element drafts and approval by tab (items.upsertRevision and items.approveRevision in studio-console/convex/items.ts).
+- ItemSpecV2 (studio-console/lib/items.ts and studio-console/convex/lib/zodSchemas.ts) already stores materials, labor, and subtasks. ItemEditorPanel edits it (studio-console/app/projects/[id]/_components/items/ItemEditorPanel.tsx).
+- syncItemProjections (studio-console/convex/lib/itemProjections.ts) writes materialLines/workLines/tasks from ItemSpecV2, but it is upsert-only today.
+- Accounting UI edits materialLines/workLines directly (studio-console/app/projects/[id]/accounting/*).
+- Tasks UI edits tasks directly (studio-console/app/projects/[id]/tasks/page.tsx + TaskModal).
+- ChangeSets exist for agent suggestions (studio-console/convex/changeSets.ts + ChangeSetReviewBanner).
+- elementVersions + derivations exist but are facts-based today (studio-console/convex/elementVersions.ts and studio-console/convex/derivations.ts).
+- Facts and FactsV2 are wired into Flow/Clarification/StructuredQuestions and Current State (studio-console/convex/currentState.ts, studio-console/convex/agents/*, studio-console/app/projects/[id]/_components/facts/*).
+
+1) Goals (unchanged)
+- Elements are canonical for tasks/materials/labor/quote inputs.
+- Accounting and Tasks edits go through Draft -> Approve; no immediate destructive writes.
+- Stable keys for tasks/materials/labor plus tombstones for deletions.
+- Version tags, summaries, change stats.
+- Suggested Elements panel with action buttons (Ideation/Planning/Solutioning/Critique/Stress/Dependencies).
+- Current Knowledge replaces Facts; precedence: element snapshot -> current knowledge -> chat.
+- Facts should be disabled; if possible, behind a feature flag for later re-enable.
+
+2) Design alignment (fit to code, minimal reinvention)
+- Use projectItems as Elements.
+- Use itemRevisions as the element versions timeline (approved = active snapshot).
+- Extend ItemSpecV2 or add ElementSnapshotV1 stored in itemRevisions.data to match the ElementSnapshot spec:
+  - Add schemaVersion = element-snapshot/v1.
+  - Add descriptions.short/long and freeText.{preferences,risks,openQuestions,installation,building,constraints,notes}.
+  - Expand breakdown tasks/materials/labor to include stable keys, dependencies, taskType, usesMaterialKeys, usesLaborKeys.
+- Keep syncItemProjections as the projection engine, but upgrade it to full replace (not just upsert).
+- Use itemChangeSets as the revision group for draft edits (conceptually revisions), or introduce new revisions tables and keep ChangeSets for legacy agents. Manual edits must write patchOps or proposedSnapshot and only apply on approve.
+- Keep elementVersions table only if it becomes the canonical snapshot store; otherwise deprecate it and migrate UI to itemRevisions.
+
+3) Feature flags and rollout
+- Add projects.features.elementsCanonical (new).
+- Add projects.features.factsEnabled (optional) to fully bypass Facts/FactsV2 pipelines. If too complex, hard-disable facts for flagged projects only.
+- Gate UI: FactsPanel, Populate from Facts, and Update Facts actions hidden when factsEnabled is false.
+- Gate backend: turnBundles.createFromTurn should skip fact extraction when factsEnabled is false; agents must not call facts queries in that mode.
+
+4) Epics and tasks (detailed, aligned to files)
+
+ELM-0 Feature flags + safe rollout
+- Schema changes in studio-console/convex/schema.ts: add features.elementsCanonical and features.factsEnabled.
+- Update project mutations in studio-console/convex/projects.ts to read/write the new flags.
+- Add UI toggle in a project admin area (suggest: studio-console/app/projects/[id]/overview/page.tsx) or add a small settings pane under studio-console/app/admin/*.
+- Acceptance:
+  - elementsCanonical false => current behavior unchanged.
+  - elementsCanonical true => new element snapshot + draft approve pipeline is used.
+  - factsEnabled false => no fact extraction scheduled and no facts UI visible.
+
+ELM-1 Canonical snapshot schema and version metadata
+- Add ElementSnapshot schema and validators in studio-console/convex/lib/zodSchemas.ts and a TS type in studio-console/lib/items.ts.
+- Decide storage:
+  - Option A (preferred): store ElementSnapshot in itemRevisions.data for approved revisions, keep itemRevisions as version history.
+  - Option B: repurpose elementVersions to store ElementSnapshot and link projectItems.activeVersionId; keep itemRevisions as draft only.
+- Add metadata to itemRevisions (or elementVersions): tags[], summary, changeStats, originTab, actionType.
+- Acceptance:
+  - Can serialize and validate a snapshot with stable keys.
+  - Version metadata visible in ElementsInspectorPanel history tab.
+
+ELM-2 Draft revision model and patch ops
+- Implement patchOps or proposedSnapshot storage.
+  - If reusing itemChangeSets: extend studio-console/convex/changeSets.ts to allow entityType="elementSnapshot" ops with patchOps or proposedSnapshot payloads.
+  - If new tables: add revisions + revisionChanges to studio-console/convex/schema.ts and create a new module studio-console/convex/revisions.ts.
+- Provide APIs: createDraft, getDraft, patchElement, setProposedSnapshot, approve, discard.
+- Wire ItemEditorPanel (studio-console/app/projects/[id]/_components/items/ItemEditorPanel.tsx) to keep its existing upsertRevision flow for element spec edits (already matches Draft -> Approve).
+- Acceptance:
+  - One active draft per (projectId, originTab) unless explicitly "New draft".
+  - Approve creates a new element version and triggers projection rebuild.
+
+ELM-3 Tombstones and approval rules
+- Add tombstones to snapshot schema and enforce append-only.
+- Approval pipeline rules:
+  - Remove empty tasks (title and details blank) and tombstone them.
+  - If a purchase task is deleted, set the linked material.needPurchase = false in snapshot.
+  - Reject re-adding tombstoned keys unless a tombstone_restore op is present.
+- Acceptance: rules covered by unit tests and enforced on approve.
+
+ELM-4 Projection engine (Elements -> Tasks/Accounting/Quote)
+- Upgrade studio-console/convex/lib/itemProjections.ts:
+  - Use stable keys (taskKey/materialKey/laborKey) mapped to itemSubtaskId/itemMaterialId/itemLaborId.
+  - Full replace: delete projections that are no longer in snapshot (unless lock or manual).
+  - Persist dependencies and taskType where relevant.
+- Add materializeProjectFromElements(projectId) to rebuild all projections (new module or in itemProjections).
+- Trigger projection rebuild on revision approval.
+- Update quote generation in studio-console/convex/quotes.ts to read from element snapshots (not from accountingLines as truth), while keeping materialLines/workLines as display.
+- Acceptance: rebuild from snapshots yields deterministic tasks/materials/labor and consistent quote totals.
+
+ELM-5 Suggested Elements panel + agent proposals
+- UI: add SuggestedElementsPanel to FlowWorkbench (studio-console/app/projects/[id]/_components/flow/FlowWorkbench.tsx).
+- Add buttons: Ideation, Planning, Solutioning, Critique, StressTest, RiskScan, Improve, Dependencies.
+- Backend: add agents.generateElementSuggestions in studio-console/convex/agents (new file or extend agents/suggestions.ts) to output ElementSnapshot-based proposals.
+- Store suggestions as draft revision changes (patchOps or proposedSnapshot).
+- Acceptance: suggestions can be previewed, edited, approved, or declined without mutating elements directly.
+
+ELM-6 Accounting draft editor (no immediate write)
+- Add accounting edit mode to studio-console/app/projects/[id]/accounting/page.tsx and tabs.
+- MaterialsTab and LaborTab should write patchOps to draft revisions (no direct updateMaterialLine/updateWorkLine when elementsCanonical is on).
+- Approve applies snapshot changes, then projections rebuild.
+- Acceptance: delete a material line in draft does not affect UI until approve; after approve, materialLines/workLines reflect snapshot.
+
+ELM-7 Tasks draft editor + dependency persistence
+- Add tasks edit mode in studio-console/app/projects/[id]/tasks/page.tsx and TaskModal.
+- Tasks edit writes patchOps to draft snapshots keyed by taskKey.
+- Update agents/taskRefiner to write dependencies into draft snapshot (not tasks table).
+- Acceptance: dependencies persist in element version metadata; tasks do not change until approve.
+
+ELM-8 Current Knowledge (replace Facts)
+- Add tables: projectKnowledge + knowledgeLogEntries in studio-console/convex/schema.ts.
+- Add APIs in studio-console/convex/knowledge.ts or a new studio-console/convex/projectKnowledge.ts:
+  - getCurrentKnowledge, updateCurrentKnowledge, appendKnowledgeLog.
+- Update FlowWorkbench right panel:
+  - Replace CurrentStatePanel with CurrentKnowledgePanel (studio-console/app/projects/[id]/_components/facts/CurrentStatePanel.tsx).
+  - Remove Update Facts action; save directly to projectKnowledge.
+- Update studio-console/app/projects/[id]/knowledge/page.tsx to add a Current Knowledge tab (Preferences + Current Knowledge + Log).
+- Update agent context builders (flow.ts, clarification.ts, clarificationV2.ts, structuredQuestions.ts, convertIdeas.ts, itemPopulator.ts) to include projectKnowledge and treat it as higher priority than chat.
+- Update contextSummary.ts to support summarizeCurrentKnowledge.
+- Acceptance: agents use current knowledge; facts are not queried when factsEnabled is false.
+
+ELM-9 Version history + revert
+- Update ElementsInspectorPanel history tab and/or studio-console/app/projects/[id]/history/page.tsx to show element versions with tags/summary/changeStats.
+- Add a Revert to version mutation that creates a new approved revision from an older snapshot.
+- Acceptance: revert creates a new version and triggers projection rebuild.
+
+ELM-10 Migration/backfill
+- Add a backfill mutation in studio-console/convex/migrations.ts or a new module (example: studio-console/convex/elementSnapshotMigrations.ts).
+- For each project:
+  - Build snapshots from existing approved itemRevisions and current materialLines/workLines/tasks.
+  - Generate stable keys and fill tombstones as empty arrays.
+  - Set approvedRevisionId or activeVersionId accordingly.
+- Add a preview/validation tool to compare totals before and after projection rebuild.
+- Acceptance: projections match within tolerance and pilot projects can be enabled without data loss.
+
+ELM-11 Tests and docs
+- Unit tests:
+  - Tombstone add/restore
+  - Empty task auto-delete
+  - Purchase task delete -> needPurchase=false
+  - Conflict detection on approve
+- Update tests in studio-console/tests/lib/currentState.test.ts if headings change.
+- Update PROCESS_FLOW.md to reflect current knowledge and element snapshot as canonical.

@@ -88,11 +88,13 @@ function findApprovedRevision(revisions: Doc<"itemRevisions">[], approvedRevisio
 
 export function ItemEditorPanel() {
     const { projectId, selectedItemId, tabScope } = useItemsContext();
+    const project = useQuery(api.projects.getProject, { projectId });
     const itemData = useQuery(
         api.items.getItem,
         selectedItemId ? { itemId: selectedItemId } : "skip",
     );
-    const allFacts = useQuery(api.factsV2.listFacts, { projectId });
+    const factsEnabled = project?.features?.factsEnabled !== false;
+    const allFacts = useQuery(api.factsV2.listFacts, factsEnabled ? { projectId } : "skip");
     const upsertRevision = useMutation(api.items.upsertRevision);
     const populateFromFacts = useAction(api.agents.itemPopulator.populate);
 
@@ -195,6 +197,7 @@ export function ItemEditorPanel() {
 
     const handlePopulate = async () => {
         if (!selectedItemId) return;
+        if (!factsEnabled) return;
         setIsPopulating(true);
         try {
             await populateFromFacts({
@@ -227,14 +230,16 @@ export function ItemEditorPanel() {
                     >
                         Details
                     </button>
-                    <button
-                        type="button"
-                        className="text-sm px-3 py-2 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 flex items-center gap-1"
-                        onClick={handlePopulate}
-                        disabled={isPopulating}
-                    >
-                        {isPopulating ? "✨ Populating..." : "✨ Populate from Facts"}
-                    </button>
+                    {factsEnabled && (
+                        <button
+                            type="button"
+                            className="text-sm px-3 py-2 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 flex items-center gap-1"
+                            onClick={handlePopulate}
+                            disabled={isPopulating}
+                        >
+                            {isPopulating ? "✨ Populating..." : "✨ Populate from Facts"}
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="text-sm px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
@@ -255,40 +260,44 @@ export function ItemEditorPanel() {
                 />
             )}
 
-            <SectionTitle title="Linked facts" />
-            <div className="space-y-2">
-                {itemFacts.length === 0 ? (
-                    <div className="text-sm text-gray-500">No facts linked to this element yet.</div>
-                ) : (
+            {factsEnabled && (
+                <>
+                    <SectionTitle title="Linked facts" />
                     <div className="space-y-2">
-                        <ul className="space-y-1 text-xs text-gray-700 list-disc pl-4">
-                            {itemFacts.map((fact) => (
-                                <li key={fact._id}>
-                                    <div className="font-medium text-gray-800">{fact.factTextHe}</div>
-                                    {fact.key && (
-                                        <div className="text-[10px] text-gray-500">
-                                            {fact.key}
-                                            {fact.value !== undefined ? `: ${formatFactValue(fact.value)}` : ""}
-                                        </div>
-                                    )}
-                                </li>
-                            ))}
-                        </ul>
-                        <div className="flex items-center gap-2">
-                            <button
-                                type="button"
-                                className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
-                                onClick={applyFactsToAssumptions}
-                            >
-                                Apply to assumptions
-                            </button>
-                            <div className="text-[10px] text-gray-500">
-                                Adds linked facts into the Assumptions field below.
+                        {itemFacts.length === 0 ? (
+                            <div className="text-sm text-gray-500">No facts linked to this element yet.</div>
+                        ) : (
+                            <div className="space-y-2">
+                                <ul className="space-y-1 text-xs text-gray-700 list-disc pl-4">
+                                    {itemFacts.map((fact) => (
+                                        <li key={fact._id}>
+                                            <div className="font-medium text-gray-800">{fact.factTextHe}</div>
+                                            {fact.key && (
+                                                <div className="text-[10px] text-gray-500">
+                                                    {fact.key}
+                                                    {fact.value !== undefined ? `: ${formatFactValue(fact.value)}` : ""}
+                                                </div>
+                                            )}
+                                        </li>
+                                    ))}
+                                </ul>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50"
+                                        onClick={applyFactsToAssumptions}
+                                    >
+                                        Apply to assumptions
+                                    </button>
+                                    <div className="text-[10px] text-gray-500">
+                                        Adds linked facts into the Assumptions field below.
+                                    </div>
+                                </div>
                             </div>
-                        </div>
+                        )}
                     </div>
-                )}
-            </div>
+                </>
+            )}
 
             <SectionTitle title="Identity" />
             <div className="grid gap-3 md:grid-cols-2">

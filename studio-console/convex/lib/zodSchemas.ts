@@ -303,6 +303,157 @@ export const ItemSpecV2Schema = z.object({
     }).optional(),
 });
 
+const ElementKeySchema = z.string().regex(/^(tsk|mat|lab)_[a-f0-9]{8}$/);
+const ElementBucketKeySchema = z.string().min(1).max(80);
+
+const ElementMaterialLineSchema = z.object({
+    materialKey: ElementKeySchema,
+    name: z.string().min(1).max(200),
+    spec: z.string().max(1000),
+    qty: z.number().min(0),
+    unit: z.string().min(1).max(20),
+    unitCost: z.number().min(0).optional(),
+    totalCost: z.number().min(0).optional(),
+    bucketKey: ElementBucketKeySchema,
+    needPurchase: z.boolean(),
+    vendorRef: z.string().max(200).optional(),
+    notes: z.string().max(2000).optional(),
+}).strict();
+
+const ElementLaborLineSchema = z.object({
+    laborKey: ElementKeySchema,
+    role: z.string().min(1).max(120),
+    qty: z.number().min(0),
+    unit: z.string().min(1).max(20),
+    rate: z.number().min(0),
+    bucketKey: ElementBucketKeySchema,
+    notes: z.string().max(2000).optional(),
+}).strict();
+
+const ElementTaskLineSchema = z.object({
+    taskKey: ElementKeySchema,
+    title: z.string().min(1).max(200),
+    details: z.string().max(5000),
+    bucketKey: ElementBucketKeySchema,
+    taskType: z.enum(["normal", "purchase_material", "install", "build", "transport", "admin"]),
+    estimate: z.string().max(80).optional(),
+    dependencies: z.array(ElementKeySchema).default([]),
+    usesMaterialKeys: z.array(ElementKeySchema).default([]),
+    usesLaborKeys: z.array(ElementKeySchema).default([]),
+    materialKey: ElementKeySchema.optional(),
+}).strict().refine(
+    (value) => value.taskType !== "purchase_material" || Boolean(value.materialKey),
+    { message: "materialKey is required when taskType is purchase_material", path: ["materialKey"] }
+);
+
+export const ElementSnapshotSchema = z.object({
+    schemaVersion: z.literal("element-snapshot/v1"),
+    descriptions: z.object({
+        short: z.string().max(400),
+        long: z.string().max(20000),
+    }).strict(),
+    freeText: z.object({
+        preferences: z.string().max(20000),
+        risks: z.string().max(20000),
+        openQuestions: z.string().max(20000),
+        installation: z.string().max(20000),
+        building: z.string().max(20000),
+        constraints: z.string().max(20000),
+        notes: z.string().max(20000),
+    }).strict(),
+    materials: z.array(ElementMaterialLineSchema).max(2000),
+    labor: z.array(ElementLaborLineSchema).max(2000),
+    tasks: z.array(ElementTaskLineSchema).max(4000),
+    tombstones: z.object({
+        taskKeys: z.array(ElementKeySchema).max(10000),
+        materialKeys: z.array(ElementKeySchema).max(10000),
+        laborKeys: z.array(ElementKeySchema).max(10000),
+    }).strict(),
+}).strict();
+
+const ElementTextFieldPathSchema = z.enum([
+    "descriptions.short",
+    "descriptions.long",
+    "freeText.preferences",
+    "freeText.risks",
+    "freeText.openQuestions",
+    "freeText.installation",
+    "freeText.building",
+    "freeText.constraints",
+    "freeText.notes",
+]);
+
+const ElementSectionSchema = z.enum(["descriptions", "freeText", "materials", "labor", "tasks", "tombstones"]);
+
+const ElementPatchOpSetTextSchema = z.object({
+    op: z.literal("set_text"),
+    path: ElementTextFieldPathSchema,
+    value: z.string().max(20000),
+}).strict();
+
+const ElementPatchOpReplaceSectionSchema = z.object({
+    op: z.literal("replace_section"),
+    section: ElementSectionSchema,
+    value: z.union([
+        z.object({
+            short: z.string().max(400),
+            long: z.string().max(20000),
+        }).strict(),
+        z.object({
+            preferences: z.string().max(20000),
+            risks: z.string().max(20000),
+            openQuestions: z.string().max(20000),
+            installation: z.string().max(20000),
+            building: z.string().max(20000),
+            constraints: z.string().max(20000),
+            notes: z.string().max(20000),
+        }).strict(),
+        z.array(z.object({})).max(4000),
+        z.object({
+            taskKeys: z.array(ElementKeySchema),
+            materialKeys: z.array(ElementKeySchema),
+            laborKeys: z.array(ElementKeySchema),
+        }).strict(),
+    ]),
+}).strict();
+
+const ElementPatchOpUpsertLineSchema = z.object({
+    op: z.literal("upsert_line"),
+    entity: z.enum(["materials", "labor", "tasks"]),
+    key: ElementKeySchema,
+    value: z.record(z.any()),
+}).strict();
+
+const ElementPatchOpRemoveLineSchema = z.object({
+    op: z.literal("remove_line"),
+    entity: z.enum(["materials", "labor", "tasks"]),
+    key: ElementKeySchema,
+    reason: z.string().max(300),
+}).strict();
+
+const ElementPatchOpTombstoneAddSchema = z.object({
+    op: z.literal("tombstone_add"),
+    entity: z.enum(["materials", "labor", "tasks"]),
+    key: ElementKeySchema,
+    reason: z.string().max(300),
+}).strict();
+
+const ElementPatchOpTombstoneRestoreSchema = z.object({
+    op: z.literal("tombstone_restore"),
+    entity: z.enum(["materials", "labor", "tasks"]),
+    key: ElementKeySchema,
+    reason: z.string().max(300),
+}).strict();
+
+export const ElementPatchOpsSchema = z.array(z.union([
+    ElementPatchOpSetTextSchema,
+    ElementPatchOpReplaceSectionSchema,
+    ElementPatchOpUpsertLineSchema,
+    ElementPatchOpRemoveLineSchema,
+    ElementPatchOpTombstoneAddSchema,
+    ElementPatchOpTombstoneRestoreSchema,
+])).min(1).max(5000);
+
 export const ItemUpdateOutputSchema = z.object({
     itemId: z.string(),
     proposedData: ItemSpecV2Schema,
@@ -875,6 +1026,8 @@ export const QuoteAgentResultSchema = z.object({
 
 export type ItemSpecV2 = z.infer<typeof ItemSpecV2Schema>;
 export type ItemUpdateOutput = z.infer<typeof ItemUpdateOutputSchema>;
+export type ElementSnapshot = z.infer<typeof ElementSnapshotSchema>;
+export type ElementPatchOps = z.infer<typeof ElementPatchOpsSchema>;
 export type SolutionItemPlanV1 = z.infer<typeof SolutionItemPlanV1Schema>;
 export type ChangeSet = z.infer<typeof ChangeSetSchema>;
 export type ConceptPacket = z.infer<typeof ConceptPacketSchema>;
@@ -912,3 +1065,32 @@ export const StructuredAnswerSchema = z.object({
 export type StructuredQuestion = z.infer<typeof StructuredQuestionSchema>;
 export type StructuredQuestionsTurn = z.infer<typeof StructuredQuestionsTurnSchema>;
 export type StructuredAnswer = z.infer<typeof StructuredAnswerSchema>;
+
+export const AgentSuggestionOutputSchema = z.object({
+    schemaVersion: z.literal("agent-suggestions/v1"),
+    mode: z.enum(["ideation", "planning", "solutioning", "critique", "stress_test", "risk_scan", "improve", "dependencies"]),
+    suggestions: z.array(z.object({
+        suggestionId: z.string(),
+        action: z.enum(["create_element", "update_element"]),
+        tab: z.enum(["Ideation", "Planning", "Solutioning", "Accounting", "Tasks"]),
+        targetElementId: z.string().optional(),
+        baseVersionId: z.string().optional(),
+        title: z.string().min(1).max(120),
+        rationale: z.string().max(2000),
+        assumptions: z.string().max(2000),
+        replaceMask: z.array(ElementSectionSchema).min(1),
+        proposal: z.union([
+            z.object({
+                type: z.literal("fullSnapshot"),
+                snapshot: ElementSnapshotSchema
+            }),
+            z.object({
+                type: z.literal("patchOps"),
+                patchOps: ElementPatchOpsSchema
+            })
+        ]),
+        tombstonePolicy: z.literal("respect_tombstones").default("respect_tombstones"),
+    })).max(50)
+});
+
+export type AgentSuggestionOutput = z.infer<typeof AgentSuggestionOutputSchema>;

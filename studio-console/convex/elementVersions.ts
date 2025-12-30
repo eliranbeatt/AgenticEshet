@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalQuery } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isValidBucketKey, isValidFieldPath } from "./lib/elementRegistry";
@@ -64,6 +64,44 @@ export const listProjectVersions = query({
     },
 });
 
+export const listProjectElementVersions = query({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const versions = await ctx.db
+            .query("elementVersions")
+            .withIndex("by_project_createdAt", (q) => q.eq("projectId", args.projectId))
+            .collect();
+        return versions.sort((a, b) => b.createdAt - a.createdAt);
+    },
+});
+
+export const getActiveSnapshotsByItemIds = internalQuery({
+    args: { itemIds: v.array(v.id("projectItems")) },
+    handler: async (ctx, args) => {
+        const results: Array<{
+            itemId: Id<"projectItems">;
+            title: string;
+            typeKey: string;
+            snapshot: unknown | null;
+        }> = [];
+
+        for (const itemId of args.itemIds) {
+            const item = await ctx.db.get(itemId);
+            if (!item) continue;
+            const versionId = item.activeVersionId ?? item.publishedVersionId;
+            const version = versionId ? await ctx.db.get(versionId) : null;
+            results.push({
+                itemId,
+                title: item.title,
+                typeKey: item.typeKey,
+                snapshot: version?.snapshot ?? null,
+            });
+        }
+
+        return results;
+    },
+});
+
 export const getPendingElementUpdates = query({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
@@ -108,6 +146,10 @@ export const publishElementVersion = mutation({
     handler: async (ctx, args) => {
         const element = await ctx.db.get(args.elementId);
         if (!element) throw new Error("Element not found");
+        const project = await ctx.db.get(element.projectId);
+        if (project?.features?.factsEnabled === false || project?.features?.elementsCanonical) {
+            throw new Error("Facts publishing is disabled for this project.");
+        }
 
         const lastVersionId = element.publishedVersionId ?? null;
         const lastVersion = lastVersionId ? await ctx.db.get(lastVersionId) : null;
@@ -220,5 +262,54 @@ export const publishProjectVersion = mutation({
         });
 
         return { versionId };
+    },
+});
+
+export const revertElementVersion = mutation({
+    args: {
+        elementId: v.id("projectItems"),
+        versionId: v.id("elementVersions"),
+        createdBy: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        const element = await ctx.db.get(args.elementId);
+        if (!element) throw new Error("Element not found");
+
+        const targetVersion = await ctx.db.get(args.versionId);
+        if (!targetVersion) throw new Error("Version not found");
+        if (targetVersion.elementId !== element._id) {
+            throw new Error("Version does not belong to element");
+        }
+
+        const now = Date.now();
+        const createdBy = args.createdBy ?? "user";
+        const summary = targetVersion.summary
+            ? `Revert: ${targetVersion.summary}`
+            : `Revert to ${new Date(targetVersion.createdAt).toLocaleString()}`;
+
+        const newVersionId = await ctx.db.insert("elementVersions", {
+            projectId: element.projectId,
+            elementId: element._id,
+            createdAt: now,
+            createdBy,
+            basedOnVersionId: element.activeVersionId ?? element.publishedVersionId,
+            createdFrom: {
+                tab: "history",
+                source: "revert",
+            },
+            tags: ["revert", `revert:${args.versionId}`],
+            summary,
+            snapshot: targetVersion.snapshot ?? undefined,
+            changeStats: targetVersion.changeStats ?? undefined,
+        });
+
+        await ctx.db.patch(element._id, {
+            activeVersionId: newVersionId,
+            updatedAt: now,
+        });
+
+        await ctx.runMutation(api.projections.rebuildElement, { elementId: element._id });
+
+        return { versionId: newVersionId };
     },
 });

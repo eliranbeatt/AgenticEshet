@@ -1,6 +1,5 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { v } from "convex/values";
 import { buildSearchText } from "./lib/itemHelpers";
 import { getRegistryField, getBucketDefinition, isValidBucketKey, isValidFieldPath } from "./lib/elementRegistry";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -57,9 +56,40 @@ function normalizeConfidence(confidence?: number) {
     return Math.max(0, Math.min(confidence, 1));
 }
 
+async function isFactsEnabled(
+    ctx: { db: { get: (id: Id<"projects">) => Promise<Doc<"projects"> | null> } },
+    projectId: Id<"projects">
+) {
+    const project = await ctx.db.get(projectId);
+    return project?.features?.factsEnabled !== false;
+}
+
+function resolveKnowledgeSource(source?: string | null) {
+    if (source === "agent_inference") return "agent_summary" as const;
+    return "user_chat" as const;
+}
+
+function formatFactLog(args: {
+    categoryHe: string;
+    valueTextHe?: string;
+    valueTyped?: unknown;
+    fieldPath?: string;
+    bucketKey?: string;
+}) {
+    const valueText = typeof args.valueTextHe === "string" ? args.valueTextHe.trim() : "";
+    if (valueText) return `${args.categoryHe}: ${valueText}`;
+    if (args.valueTyped !== undefined && args.valueTyped !== null) {
+        return `${args.categoryHe}: ${String(args.valueTyped)}`;
+    }
+    if (args.fieldPath) return `${args.categoryHe}: ${args.fieldPath}`;
+    if (args.bucketKey) return `${args.categoryHe}: ${args.bucketKey}`;
+    return args.categoryHe;
+}
+
 export const listFacts = query({
     args: { projectId: v.id("projects"), status: v.optional(v.string()) },
     handler: async (ctx, args) => {
+        if (!(await isFactsEnabled(ctx, args.projectId))) return [];
         const facts = await ctx.db
             .query("facts")
             .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId))
@@ -72,6 +102,7 @@ export const listFacts = query({
 export const listFactsGrouped = query({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
+        if (!(await isFactsEnabled(ctx, args.projectId))) return [];
         const facts = await ctx.db
             .query("facts")
             .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId))
@@ -124,6 +155,17 @@ export const createFact = mutation({
         status: v.optional(v.union(v.literal("proposed"), v.literal("accepted"), v.literal("rejected"))),
     },
     handler: async (ctx, args) => {
+        if (!(await isFactsEnabled(ctx, args.projectId))) {
+            const text = formatFactLog(args);
+            if (text.trim()) {
+                await ctx.runMutation(api.projectKnowledge.appendLog, {
+                    projectId: args.projectId,
+                    text,
+                    source: resolveKnowledgeSource(args.source ?? null),
+                });
+            }
+            return { factId: null, skipped: true };
+        }
         const now = Date.now();
         const scope = resolveScope({ scope: args.scope, elementId: args.elementId ?? null });
         const legacyKey = resolveLegacyKey(args.fieldPath, args.bucketKey);
@@ -171,24 +213,37 @@ export const createFact = mutation({
 export const acceptFact = mutation({
     args: { factId: v.id("facts") },
     handler: async (ctx, args) => {
+        const fact = await ctx.db.get(args.factId);
+        if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
         await ctx.db.patch(args.factId, { status: "accepted", needsReview: false, updatedAt: Date.now() });
+        return { ok: true };
     },
 });
 
 export const rejectFact = mutation({
     args: { factId: v.id("facts") },
     handler: async (ctx, args) => {
+        const fact = await ctx.db.get(args.factId);
+        if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
         await ctx.db.patch(args.factId, { status: "rejected", needsReview: false, updatedAt: Date.now() });
+        return { ok: true };
     },
 });
 
 export const bulkAcceptFacts = mutation({
     args: { factIds: v.array(v.id("facts")) },
     handler: async (ctx, args) => {
+        if (args.factIds.length === 0) return { ok: true };
+        const firstFact = await ctx.db.get(args.factIds[0]);
+        if (!firstFact) return { ok: true };
+        if (!(await isFactsEnabled(ctx, firstFact.projectId))) return { ok: true, skipped: true };
         const now = Date.now();
         for (const factId of args.factIds) {
             await ctx.db.patch(factId, { status: "accepted", needsReview: false, updatedAt: now });
         }
+        return { ok: true };
     },
 });
 
@@ -197,6 +252,7 @@ export const upsertFactFromAtom = internalMutation({
     handler: async (ctx, args) => {
         const atom = await ctx.db.get(args.factAtomId);
         if (!atom || atom.status === "duplicate") return null;
+        if (!(await isFactsEnabled(ctx, atom.projectId))) return null;
 
         const existing = await ctx.db
             .query("facts")
@@ -242,13 +298,14 @@ export const upsertFactFromAtom = internalMutation({
             status,
         });
 
-        return result.factId;
+        return result.factId ?? null;
     },
 });
 
 export const backfillFromFactAtoms = mutation({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
+        if (!(await isFactsEnabled(ctx, args.projectId))) return { inserted: 0, skipped: true };
         const atoms = await ctx.db
             .query("factAtoms")
             .withIndex("by_project_item", (q) => q.eq("projectId", args.projectId))
@@ -277,6 +334,7 @@ export const updateFactMapping = mutation({
     handler: async (ctx, args) => {
         const fact = await ctx.db.get(args.factId);
         if (!fact) throw new Error("Fact not found");
+        if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
 
         if (args.fieldPath && !getRegistryField(args.fieldPath)) {
             throw new Error("Unknown fieldPath in registry");
@@ -308,6 +366,7 @@ export const updateFactMapping = mutation({
             value: legacyValue.value,
             updatedAt: Date.now(),
         });
+        return { ok: true };
     },
 });
 
@@ -360,6 +419,7 @@ export const applyMappings = mutation({
         })),
     },
     handler: async (ctx, args) => {
+        if (!(await isFactsEnabled(ctx, args.projectId))) return { ok: true, skipped: true };
         for (const mapping of args.mappings) {
             let elementId = mapping.elementId ?? null;
 

@@ -1,0 +1,244 @@
+# Canonical Elements & Knowledge Architecture - Implementation Plan
+
+## 1. Executive Summary
+This plan transitions the system from a "Facts-driven" architecture to a **Canonical Elements** architecture. 
+*   **Truth Source:** `elementVersions` (Snapshots) and `projectKnowledge` (Text) become the single source of truth. 
+*   **Facts Deprecation:** The complex "Facts" system will be hidden behind a feature flag (`features.elementsCanonical`) and eventually phased out.
+*   **Safety:** All edits to Accounting and Tasks move to a **Draft → Approve** workflow. No immediate destructive writes.
+*   **Projections:** `tasks`, `materialLines`, and `workLines` tables become read-only projections derived strictly from Element Snapshots.
+
+---
+
+## 2. Core Design & Feature Flags
+
+### 2.1 Feature Flags
+We will introduce `elementsCanonical` to `projects.features` object.
+*   **`false` (Default/Legacy):** Existing "Facts" pipeline runs. `elementVersions` are derived from facts. Accounting/Tasks edit tables directly.
+*   **`true` (Target):** 
+    *   Facts system (ingestion, extraction, graph) is **DISABLED**.
+    *   `projectKnowledge` is the context source.
+    *   Accounting/Tasks UIs enter "Read-Only Projection / Draft Edit" mode.
+    *   Agents generate `revisionChanges` instead of facts.
+
+### 2.2 Data Model Changes (`convex/schema.ts`)
+
+#### A. New Tables
+1.  **`revisions`** (Transaction Parent)
+    *   `projectId`: v.id("projects")
+    *   `status`: 'draft' | 'approved' | 'rejected'
+    *   `originTab`: 'planning' | 'accounting' | 'tasks' | 'solutioning'
+    *   `actionType`: 'manual_edit' | 'agent_suggestion'
+    *   `summary`: v.string()
+    *   `tags`: v.array(v.string())
+    *   `createdAt`: v.number()
+    *   `createdBy`: v.string()
+
+2.  **`revisionChanges`** (Atomic Edits)
+    *   `revisionId`: v.id("revisions")
+    *   `elementId`: v.id("projectItems")
+    *   `baseVersionId`: v.id("elementVersions") (Optimistic locking)
+    *   `patchOps`: v.array(v.any()) (JSON Patch operations)
+    *   `proposedSnapshot`: v.optional(v.any()) (For full replacements)
+    *   `diffPreview`: v.optional(v.any()) (Cached diff stats)
+
+3.  **`projectKnowledge`** (Replaces Facts Graph)
+    *   `projectId`: v.id("projects")
+    *   `currentText`: v.string() (The "Wiki" state)
+    *   `preferencesText`: v.optional(v.string())
+    *   `updatedAt`: v.number()
+
+4.  **`knowledgeLogEntries`** (Append-Only History)
+    *   `projectId`: v.id("projects")
+    *   `source`: 'ingestion' | 'chat' | 'agent'
+    *   `text`: v.string()
+    *   `createdAt`: v.number()
+
+#### B. Modified Tables
+1.  **`projectItems` (Elements)**
+    *   Add `activeVersionId`: v.id("elementVersions") (The pointer to current truth)
+    *   Add `elementStatus`: 'active' | 'archived' | 'suggested'
+
+2.  **`elementVersions`**
+    *   Strictly enforce `snapshot` structure (see Section 3).
+    *   Add `revisionId`: v.id("revisions")
+    *   Add `tombstones`: v.object({ taskKeys: [], ... })
+
+---
+
+## 3. The `ElementSnapshot` Schema
+This is the **canonical data structure** stored in `elementVersions.snapshot`.
+
+```typescript
+type ElementSnapshot = {
+  schemaVersion: "v1";
+  // 1. Descriptive
+  descriptions: { short: string; long: string };
+  freeText: {
+    preferences: string;
+    risks: string;
+    constraints: string;
+    notes: string;
+  };
+  
+  // 2. Canonical Lists (Stable Keys are Mandatory)
+  materials: Array<{
+    materialKey: string; // "mat_..."
+    name: string;
+    qty: number;
+    unit: string;
+    bucketKey: string;
+    needPurchase: boolean;
+    // ...
+  }>;
+  labor: Array<{
+    laborKey: string; // "lab_..."
+    role: string;
+    qty: number;
+    bucketKey: string;
+    // ...
+  }>;
+  tasks: Array<{
+    taskKey: string; // "tsk_..."
+    title: string;
+    details: string;
+    taskType: "normal" | "purchase" | "install";
+    dependencies: string[]; // ["tsk_A", "tsk_B"]
+    usesMaterialKeys: string[];
+    // ...
+  }>;
+
+  // 3. Deletion History
+  tombstones: {
+    taskKeys: string[];
+    materialKeys: string[];
+    laborKeys: string[];
+  };
+}
+```
+
+---
+
+## 4. Workflows & Epics
+
+### Epic 1: Knowledge & Facts Deprecation
+**Goal:** Replace the Facts UI with a simpler "Knowledge Wiki" and gate Facts logic.
+
+1.  **Backend (`convex/knowledge.ts`)**
+    *   Implement `updateCurrentKnowledge(projectId, text)`.
+    *   Implement `appendLog(projectId, text, source)`.
+    *   Update `ingestion.ts`: If `elementsCanonical` is true, write summary to `knowledgeLogEntries` instead of extracting facts.
+
+2.  **Frontend (`app/projects/[id]/knowledge/`)**
+    *   Check flag. If true, render `CurrentKnowledgeEditor`.
+    *   Editor allows rich text editing of `currentText` and `preferencesText`.
+    *   Shows chronological list of `knowledgeLogEntries`.
+
+3.  **Agent Context**
+    *   Update `getContext` helpers.
+    *   If flag is true: Load `projectKnowledge` + `elementSnapshots`. Ignore `facts`.
+    *   System Prompt: "Current Knowledge text is the absolute truth."
+
+### Epic 2: The Approval Pipeline
+**Goal:** Implement the backend logic for Draft -> Approve.
+
+1.  **Drafts (`convex/revisions.ts`)**
+    *   `createDraft(projectId, originTab)`: Returns active draft ID.
+    *   `patchElement(revisionId, elementId, ops)`: Appends to `revisionChanges`.
+        *   Validates `ops` against `PatchOp` schema.
+
+2.  **Approval Logic (`convex/revisions.ts`)**
+    *   `approve(revisionId)`:
+        *   **Conflict Check:** Ensure `change.baseVersionId` == `element.activeVersionId`.
+        *   **Apply:** Apply patches to create `newSnapshot`.
+        *   **Business Rules:**
+            *   Delete tasks with empty title/details.
+            *   If `purchase_material` task deleted -> `material.needPurchase = false`.
+            *   Add deleted keys to `tombstones`.
+        *   **Commit:** Insert `elementVersions`, update `projectItems.activeVersionId`.
+        *   **Trigger:** Call `projections.rebuild(projectId)`.
+
+### Epic 3: Projections Engine
+**Goal:** Derive read-only tables from canonical snapshots.
+
+1.  **Materialization (`convex/projections.ts`)**
+    *   `rebuild(projectId)`:
+        *   Fetch all active element snapshots.
+        *   **Tasks:** Delete all tasks for project (or diff/sync). Insert `Task` rows mapped from `snapshot.tasks`.
+        *   **Accounting:** Delete `materialLines`/`workLines`. Insert rows mapped from `snapshot.materials`/`snapshot.labor`.
+        *   **Quotes:** Re-calculate quote totals.
+
+### Epic 4: UI Editors (Draft Mode)
+**Goal:** Update Accounting and Tasks pages to edit drafts.
+
+1.  **Accounting UI**
+    *   Check flag. If true:
+    *   Grid is **Read-Only** by default.
+    *   "Edit" button creates/loads Draft.
+    *   Cell edits calling `revisions.patchElement` (op: `upsert_line` / `remove_line`).
+    *   "Approve" button calls `revisions.approve`.
+
+2.  **Tasks UI**
+    *   Check flag. If true:
+    *   Task creation/moves call `revisions.patchElement`.
+    *   UI shows "Draft Changes" indicator.
+
+### Epic 5: Suggested Elements Panel
+**Goal:** Agent interaction point.
+
+1.  **Agent Action (`convex/agents/suggestions.ts`)**
+    *   Input: `currentKnowledge`, `selectedElements`.
+    *   Output: `AgentSuggestionOutput` JSON (Schema aligned).
+    *   Writes to `revisions` (Action: `agent_suggestion`).
+
+2.  **Side Panel UI**
+    *   Lists generated revisions.
+    *   Shows diff (Old vs Proposed).
+    *   "Approve" commits the revision.
+    *   "Decline" deletes the revision.
+
+---
+
+## 5. Migration Strategy
+
+1.  **Backfill Script (`convex/migrations.ts`)**
+    *   Target: Projects where we want to enable `elementsCanonical`.
+    *   Logic:
+        *   Read existing `materialLines` / `workLines` / `tasks`.
+        *   Group by `itemId` (Element).
+        *   Construct `ElementSnapshot` for each item.
+        *   Generate stable keys (`mat_...`, `tsk_...`).
+        *   Insert `elementVersions` (v1).
+        *   Set `projectItems.activeVersionId`.
+        *   Initialize `projectKnowledge` from latest aggregated facts (optional text dump).
+        *   Set `features.elementsCanonical = true`.
+
+2.  **Rollout**
+    *   Deploy code with flag defaulted to `false`.
+    *   Manually enable on "Sandbox" project.
+    *   Run backfill on Sandbox.
+    *   Verify Projections match original data.
+
+---
+
+## 6. Implementation Checklist
+
+### Phase 1: Foundation
+- [ ] Update `schema.ts`: Add `revisions`, `revisionChanges`, `projectKnowledge`, `knowledgeLogEntries`.
+- [ ] Update `schema.ts`: Add `activeVersionId` to `projectItems`.
+- [ ] Create `convex/lib/elements/schema.ts` (Zod definitions).
+
+### Phase 2: Knowledge
+- [ ] Implement `convex/knowledge.ts`.
+- [ ] Create `CurrentKnowledgeEditor` component.
+- [ ] Switch `projects/[id]/knowledge/page.tsx` based on flag.
+
+### Phase 3: Logic
+- [ ] Implement `convex/revisions.ts` (Draft/Approve).
+- [ ] Implement `convex/projections.ts` (Rebuild).
+- [ ] Write unit tests for Approval Rules (Tombstones, Auto-delete).
+
+### Phase 4: UI & Agents
+- [ ] Update Accounting UI to Draft Mode.
+- [ ] Update Tasks UI to Draft Mode.
+- [ ] Create `SuggestedElementsPanel`.
+- [ ] Update Agents to write `revisionChanges`.

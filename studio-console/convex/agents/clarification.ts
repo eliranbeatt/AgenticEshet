@@ -8,6 +8,7 @@ import {
     summarizeItems,
     summarizeKnowledgeBlocks,
     summarizeKnowledgeDocs,
+    summarizeElementSnapshots,
 } from "../lib/contextSummary";
 
 function formatAssistantMessage(result: { openQuestions?: string[] }) {
@@ -192,10 +193,16 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 includeSummaries: true,
             });
 
-            const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
+            const factsContext = project.features?.factsEnabled === false
+                ? { bullets: "(facts disabled)" }
+                : await ctx.runAction(internal.factsV2.getFactsContext, {
+                    projectId: args.projectId,
+                    scopeType: "project",
+                    queryText: args.chatHistory.map((m) => m.content).join("\n").slice(0, 500),
+                });
+
+            const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
                 projectId: args.projectId,
-                scopeType: "project",
-                queryText: args.chatHistory.map((m) => m.content).join("\n").slice(0, 500),
             });
 
             const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -212,6 +219,15 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 projectId: args.projectId,
                 includeDrafts: true,
             });
+
+            const elementSnapshots = project.features?.elementsCanonical
+                ? await ctx.runQuery(internal.elementVersions.getActiveSnapshotsByItemIds, {
+                    itemIds: items.map((item) => item._id),
+                })
+                : [];
+            const elementSnapshotsSummary = project.features?.elementsCanonical
+                ? summarizeElementSnapshots(elementSnapshots, 20)
+                : "(none)";
 
             const planSnippet = activePlan ? activePlan.contentMarkdown.slice(0, 1500) : "No approved plan yet.";
 
@@ -257,6 +273,14 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 `Client: ${project.clientName}`,
                 `Current Notes: ${project.details.notes || "N/A"}`,
                 `Existing Summary: ${project.overviewSummary || "No summary captured yet."}`,
+                "",
+                "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
+                elementSnapshotsSummary,
+                "",
+                "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
+                currentKnowledge
+                    ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
+                    : "(none)",
                 "",
                 "KNOWN FACTS (accepted + high-confidence proposed):",
                 factsContext.bullets,

@@ -1,0 +1,157 @@
+# Canonical Elements & Knowledge Architecture - Implementation Plan
+
+## 1. Status Overview: What is Already Implemented
+
+We are building upon an existing solid foundation. The following components are already in place and will be reused or adapted:
+
+*   **Elements Entity:** `projectItems` table exists and serves as the Element entity.
+*   **Revisions System:** `itemRevisions` table exists and supports drafts (`state: 'proposed'`) and history (`state: 'approved'`).
+*   **Change Management:** `itemChangeSets` and `itemChangeSetOps` exist for agent-driven changes.
+*   **Schema Definitions:** `studio-console/convex/lib/zodSchemas.ts` already contains:
+    *   `ElementSnapshotSchema` (The target canonical structure).
+    *   `ElementPatchOpsSchema` (The edit operations).
+    *   `ItemSpecV2Schema` (The current legacy structure).
+*   **Projections:** `studio-console/convex/itemsProjection.ts` exists with `syncItemProjections`, syncing specs to `tasks`/`materialLines`.
+*   **Facts:** `facts` table and extraction logic exist (to be feature-flagged OFF).
+
+---
+
+## 2. Core Architecture & Feature Flags
+
+### 2.1 Feature Flags
+We will add a new flag to the `projects` table's `features` object:
+*   **`elementsCanonical` (boolean):**
+    *   **FALSE (Legacy):** Uses `ItemSpecV2`, `facts` extraction, and direct table edits.
+    *   **TRUE (Target):** Uses `ElementSnapshot`, `projectKnowledge`, and `Draft -> Approve` workflow.
+
+### 2.2 Data Model Updates (`convex/schema.ts`)
+
+#### A. New Tables (Knowledge)
+1.  **`projectKnowledge`**
+    *   `projectId`: v.id("projects")
+    *   `currentText`: v.string() (The "Wiki" state)
+    *   `preferencesText`: v.optional(v.string())
+    *   `updatedAt`: v.number()
+
+2.  **`knowledgeLogEntries`**
+    *   `projectId`: v.id("projects")
+    *   `source`: 'ingestion' | 'chat' | 'agent'
+    *   `text`: v.string()
+    *   `createdAt`: v.number()
+
+#### B. New Tables (Revisions - *Refinement*)
+*   *Note: We will prioritize using the existing `itemRevisions` table for drafts. However, if strict separation is preferred for the new JSON Patch flow, we can introduce `revisions`/`revisionChanges`. Given the existing `itemChangeSets` structure, we will use a hybrid approach:*
+    *   **Manual Drafts:** Stored in `itemRevisions` (with `data` matching `ElementSnapshot`).
+    *   **Agent/Complex Drafts:** Stored in `revisions` (transaction parent) + `revisionChanges` (atomic ops), which *apply* to `itemRevisions` upon approval.
+
+    **New `revisions` & `revisionChanges` tables** are required for the multi-element transaction support described in the plan.
+    *   `revisions`: `projectId`, `status`, `originTab`, `summary`, ...
+    *   `revisionChanges`: `revisionId`, `elementId`, `patchOps`, ...
+
+---
+
+## 3. Implementation Epics
+
+### Epic 1: Knowledge System (The "Facts" Replacement)
+**Goal:** Create the "Current Knowledge" source of truth and disable Facts for new projects.
+
+1.  **Backend (`convex/knowledge.ts`)**
+    *   `updateCurrentKnowledge(projectId, text)`: Upserts `projectKnowledge`.
+    *   `appendLog(projectId, text, source)`: Inserts `knowledgeLogEntries`.
+    *   **Integration:** Update `ingestion.ts` to check `elementsCanonical`. If true, bypass fact extraction and just call `appendLog`.
+
+2.  **Frontend (`app/projects/[id]/knowledge/`)**
+    *   Create `CurrentKnowledgeEditor` component.
+    *   In `page.tsx`, check `features.elementsCanonical`.
+        *   True: Render `CurrentKnowledgeEditor` (Wiki + Log).
+        *   False: Render existing Facts UI.
+
+### Epic 2: The Canonical Approval Pipeline
+**Goal:** Implement the "Draft -> Approve" logic for `ElementSnapshot`.
+
+1.  **Backend (`convex/revisions.ts`)**
+    *   `createDraft(projectId, originTab)`: Creates a `revisions` entry.
+    *   `patchElement(revisionId, elementId, ops)`: Inserts `revisionChanges` validated against `ElementPatchOpsSchema`.
+    *   **`approve(revisionId)` Mutation:**
+        *   Fetches all `revisionChanges`.
+        *   For each element:
+            *   Fetches current `activeVersionId` (from `projectItems`).
+            *   Applies `patchOps` to the base snapshot to generate `newSnapshot`.
+            *   **Business Rules:**
+                *   Filter out empty tasks.
+                *   If `purchase_material` task deleted -> set `needPurchase=false` on material.
+                *   Add deleted keys to `tombstones`.
+            *   Inserts new `elementVersions` row.
+            *   Updates `projectItems.activeVersionId`.
+        *   Triggers `projections.rebuild(projectId)`.
+
+2.  **Data Structure Migration (`ItemSpecV2` -> `ElementSnapshot`)**
+    *   We need a utility `convertSpecToSnapshot(spec: ItemSpecV2): ElementSnapshot`.
+    *   This allows us to support legacy items moving to the new flow.
+
+### Epic 3: Projections Engine (Read-Only Outputs)
+**Goal:** Ensure `tasks`, `materialLines`, etc., are strictly derived.
+
+1.  **Backend (`convex/projections.ts`)**
+    *   `rebuild(projectId)`:
+        *   Fetches all `projectItems` with `activeVersionId`.
+        *   Resolves all `ElementSnapshot`s.
+        *   **Tasks:**
+            *   Fetches existing tasks for project.
+            *   Matches by `taskKey` (stored in `tasks.itemSubtaskId`).
+            *   Upserts (Create/Update) based on snapshot.
+            *   Deletes tasks present in DB but missing in Snapshot (unless `tombstone` logic handles this, but strictly `projections` should mirror the snapshot).
+        *   **Accounting:**
+            *   Syncs `materialLines` and `workLines` from snapshot `materials` and `labor`.
+            *   Ensures `sectionId` alignment (create default "General" section if needed).
+
+### Epic 4: Draft Editors (UI)
+**Goal:** "Edit" button creates a draft; UI edits patch that draft.
+
+1.  **Accounting UI**
+    *   Wrapper component `AccountingView`.
+    *   Check `elementsCanonical`.
+    *   **True:**
+        *   Render `AccountingGrid` in Read-Only mode.
+        *   "Edit" button -> `revisions.createDraft("accounting")`.
+        *   Row Delete -> `revisions.patchElement(..., [{op: "remove_line", entity: "materials", ...}])`.
+        *   Cell Edit -> `revisions.patchElement(..., [{op: "upsert_line", ...}])`.
+        *   "Approve" -> `revisions.approve`.
+    *   **False:** Use existing direct-edit components.
+
+2.  **Tasks UI**
+    *   Similar logic. Direct Task Create/Edit is disabled; actions route to `patchElement`.
+
+### Epic 5: Suggested Elements (Agent Integration)
+**Goal:** Agents suggest changes via Revisions.
+
+1.  **Backend (`convex/agents/suggestions.ts`)**
+    *   Action `generateSuggestions`.
+    *   Reads `projectKnowledge` + `selectedElements`.
+    *   Generates `AgentSuggestionOutput` (JSON).
+    *   Converts output to `revisionChanges` (Action: `agent_suggestion`).
+
+2.  **UI (`SuggestedElementsPanel`)**
+    *   List revisions with `status: draft` and `actionType: agent_suggestion`.
+    *   Show Diff.
+    *   Approve/Decline.
+
+---
+
+## 4. Migration Strategy
+
+1.  **One-Time Backfill Script**
+    *   Select target project.
+    *   **Step 1:** Generate `projectKnowledge` text from existing accepted facts.
+    *   **Step 2:** For each `projectItem`:
+        *   If `approvedRevisionId` exists, read `ItemSpecV2`.
+        *   Convert to `ElementSnapshot` (generating stable keys for tasks/materials).
+        *   Insert new `elementVersions`.
+        *   Update `projectItems.activeVersionId`.
+    *   **Step 3:** Enable `elementsCanonical = true`.
+    *   **Step 4:** Run `projections.rebuild` to ensure tables align with new snapshots.
+
+2.  **Verification**
+    *   Check that "Facts" tab is replaced by "Knowledge".
+    *   Check that Accounting/Tasks are read-only until "Edit" is clicked.
+    *   Check that edits persist correctly after Approval.

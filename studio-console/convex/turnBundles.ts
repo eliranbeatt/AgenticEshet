@@ -1,4 +1,4 @@
-import { mutation, internalMutation, query } from "./_generated/server";
+import { internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { internal, api } from "./_generated/api";
 
@@ -77,6 +77,11 @@ function formatBundleText(args: {
   return lines.join("\n");
 }
 
+function resolveKnowledgeSource(sourceType: string) {
+  if (sourceType === "generation") return "agent_summary" as const;
+  return "user_chat" as const;
+}
+
 async function sha256(text: string): Promise<string> {
   const msgBuffer = new TextEncoder().encode(text);
   const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
@@ -151,6 +156,18 @@ export const createFromTurn = internalMutation({
     // 5. Trigger Parse (Phase 3)
     console.log("Scheduling parseTurnBundle for bundle", bundleId);
     const project = await ctx.runQuery(api.projects.getProject, { projectId: args.projectId });
+    if (project?.features?.factsEnabled === false) {
+      const logText = (args.freeChat ?? "").trim() || (args.agentOutput ?? "").trim() || bundleText;
+      if (logText.trim()) {
+        await ctx.runMutation(api.projectKnowledge.appendLog, {
+          projectId: args.projectId,
+          text: logText,
+          source: resolveKnowledgeSource(args.source.type),
+        });
+      }
+      return bundleId;
+    }
+
     if (project?.features?.factsV2 !== false) {
       await ctx.scheduler.runAfter(0, internal.factsV2.extractTurnBundle, { turnBundleId: bundleId });
     } else {

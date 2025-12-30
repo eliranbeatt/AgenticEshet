@@ -147,3 +147,79 @@ export function createEmptyItemSpec(title: string, typeKey: string): ItemSpecV2 
         quote: { includeInQuote: true },
     };
 }
+
+export type ElementSnapshot = {
+    schemaVersion: "element-snapshot/v1";
+    descriptions: {
+        short: string;
+        long: string;
+    };
+    freeText: {
+        preferences: string;
+        risks: string;
+        openQuestions: string;
+        installation: string;
+        building: string;
+        constraints: string;
+        notes: string;
+    };
+    materials: Array<{
+        materialKey: string;
+        name: string;
+        spec: string;
+        qty: number;
+        unit: string;
+        unitCost?: number;
+        totalCost?: number;
+        bucketKey: string;
+        needPurchase: boolean;
+        vendorRef?: string;
+        notes?: string;
+    }>;
+    labor: Array<{
+        laborKey: string;
+        role: string;
+        qty: number;
+        unit: string;
+        rate: number;
+        bucketKey: string;
+        notes?: string;
+    }>;
+    tasks: Array<{
+        taskKey: string;
+        title: string;
+        details: string;
+        bucketKey: string;
+        taskType: "normal" | "purchase_material" | "install" | "build" | "transport" | "admin";
+        estimate?: string;
+        dependencies: string[];
+        usesMaterialKeys: string[];
+        usesLaborKeys: string[];
+        materialKey?: string;
+    }>;
+    tombstones: {
+        taskKeys: string[];
+        materialKeys: string[];
+        laborKeys: string[];
+    };
+};
+
+export function createEmptyElementSnapshot(title: string): ElementSnapshot {
+    return {
+        schemaVersion: "element-snapshot/v1",
+        descriptions: { short: title, long: "" },
+        freeText: {
+            preferences: "",
+            risks: "",
+            openQuestions: "",
+            installation: "",
+            building: "",
+            constraints: "",
+            notes: "",
+        },
+        materials: [],
+        labor: [],
+        tasks: [],
+        tombstones: { taskKeys: [], materialKeys: [], laborKeys: [] },
+    };
+}

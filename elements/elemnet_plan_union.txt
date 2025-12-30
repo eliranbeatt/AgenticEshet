@@ -1,0 +1,575 @@
+Perfect — with those 4 decisions, we can lock the architecture and move from “ideas” to **dev-ready spec**.
+
+Below is the **full clean redesign plan** (English), with only studio/category/phase labels in **Hebrew**.
+
+---
+
+# 1) Final decisions baked in
+
+### Accounting sections
+
+* **By element** (each element owns its accounting rollup + its quote line).
+
+### Free-text buckets
+
+* Each publish **recomputes only the buckets that changed** (i.e., there are new/edited accepted facts mapped to that bucket since last publish).
+* Bucket value is **latest summary** (not a growing list).
+
+### Unmapped accepted facts
+
+* Stay **project-level** until mapped (no forced dumping into element notes).
+
+### Auto element creation
+
+* When facts imply a new element, the system **creates it automatically** (as “suggested/draft”), and routes the relevant facts into it.
+
+---
+
+# 2) One clean pipeline (state machine)
+
+## 2.1 The only “truth” layers
+
+1. **Facts** (everything the user/ingestion/agent learned)
+2. **ElementVersion** (approved structured snapshot per element)
+3. **ProjectVersion** (approved snapshot of all element versions)
+4. **Derived outputs** (tasks/materials/labor/accounting/quote) generated from versions
+
+## 2.2 Flow
+
+**Capture → Propose → Approve → Map → Apply to Draft → Publish Version → Derive Outputs (patch/replace) → Update UI**
+
+---
+
+# 3) Data model (Convex tables + key indexes)
+
+## 3.1 Core tables
+
+### `facts`
+
+* `projectId`
+* `scope`: `"project" | "element"`
+* `elementId?`
+* `categoryHe`, `subCategoryHe?`
+* `type`: `"field_update" | "free_text" | "decision" | "risk" | "preference" | "constraint" | "note"`
+* `fieldPath?` (only if mapped to schema)
+* `bucketKey?` (only if mapped to free-text bucket)
+* `valueTyped` (json)
+* `valueTextHe` (original)
+* `source`: `"user_chat" | "user_form" | "file_upload" | "agent_inference" | "manual_edit" | "migration"`
+* `sourceRef` (messageId/fileId/uiActionId)
+* `confidence` (0–1)
+* `status`: `"proposed" | "accepted" | "rejected"`
+* `createdAt`, `updatedAt`
+
+**Indexes**
+
+* by `projectId + status`
+* by `projectId + elementId + status`
+* by `projectId + categoryHe + status`
+* by `projectId + fieldPath + status` (for “last accepted wins”)
+
+---
+
+### `elements`
+
+* `projectId`
+* `title`
+* `typeKey` (English enum key)
+* `typeLabelHe` (display)
+* `status`: `"suggested" | "active" | "archived"`
+* `publishedVersionId?`
+* `createdAt`
+
+**Indexes**
+
+* by `projectId`
+* by `projectId + status`
+
+---
+
+### `elementVersions`
+
+* `projectId`
+* `elementId`
+* `createdAt`
+* `createdBy`
+* `basedOnVersionId?`
+* `appliedFactIds[]`
+* `data` (structured)
+* `freeText` (bucket summaries)
+* `hashes`:
+
+  * `dataHash`
+  * `freeTextHashByBucket` (map)
+* `diffSummaryHe`
+
+**Indexes**
+
+* by `elementId + createdAt`
+
+---
+
+### `projectVersions`
+
+* `projectId`
+* `createdAt`
+* `createdBy`
+* `publishedElementVersionIds[]`
+* `noteHe?`
+* `hash`
+
+**Indexes**
+
+* by `projectId + createdAt`
+
+---
+
+### `questionQueue`
+
+* `projectId`
+* `elementId?`
+* `categoryHe`
+* `questionKey` (dedupe key)
+* `questionTextHe`
+* `answerType`: `"text" | "number" | "date" | "select" | "multiselect" | "yesno"`
+* `optionsHe[]?`
+* `status`: `"open" | "answered" | "dismissed"`
+* `answeredByFactId?`
+* timestamps
+
+**Index**
+
+* unique-ish by `projectId + questionKey`
+
+---
+
+### `derivationRuns`
+
+* `projectId`
+* `triggerType`: `"elementVersion" | "projectVersion"`
+* `triggerId`
+* `mode`: `"patch" | "replace"`
+* `status`: `"proposed" | "applied" | "rejected" | "error"`
+* `changeSet` (ops)
+* timestamps
+
+---
+
+## 3.2 Derived tables (existing tables stay, but become “outputs”)
+
+Add to each row:
+
+* `origin`: `"generated" | "manual"`
+* `lock`: boolean
+* `derivedFrom`: `{ elementVersionId, projectVersionId?, derivationRunId }`
+
+This prevents “regen overwrote my manual work”.
+
+---
+
+# 4) SchemaRegistry v1 (element fields + category compatibility)
+
+## 4.1 Element types (v1)
+
+(English keys, Hebrew labels)
+
+* `studio_build` — `בניה של אלמנט בסטודיו`
+* `dressing_rental` — `דרסינג - השכרת פרופס וארט`
+* `transport` — `הובלה`
+* `installation` — `התקנה`
+* `shoot_day` — `יום צילום`
+* `dismantle` — `פירוק`
+* `pvc_floor` — `רצפת PVC`
+* `print_house` — `הדפסות בבית דפוס`
+* `subcontractor` — `ספקי משנה`
+
+> You can add types later without breaking anything.
+
+---
+
+## 4.2 Common structured fields (shared by all element types)
+
+Each field belongs to a Hebrew category for the Facts UI.
+
+### Meta
+
+* `meta.title` → `הערות`
+* `meta.typeKey` → `הערות`
+
+### Dimensions (`מידות`)
+
+* `dimensions.widthCm`
+* `dimensions.heightCm`
+* `dimensions.depthCm`
+* `dimensions.diameterCm`
+* `dimensions.weightKg`
+* `dimensions.quantity`
+
+### Location (`מיקום`)
+
+* `location.siteName`
+* `location.siteAddress`
+* `location.installArea` (free text)
+* `location.accessConstraints` (free text)
+
+### Schedule (`לו״ז`)
+
+* `schedule.installDate`
+* `schedule.shootDate`
+* `schedule.deadlineDate`
+
+### Budget & vendor hints (`קניות` / `ספקי משנה`)
+
+* `procurement.budgetCapNis`
+* `procurement.vendorName`
+* `procurement.vendorContact`
+* `procurement.purchaseNeeded` (bool)
+* `procurement.rentalNeeded` (bool)
+
+### Build/Install/Transport requirements (structured minimal)
+
+* `execution.requiresStudioWork` (bool) → `עבודה בסטודיו`
+* `execution.requiresInstallation` (bool) → `התקנה`
+* `execution.requiresTransport` (bool) → `הובלה`
+* `execution.requiresPrintHouse` (bool) → `הדפסות בבית דפוס`
+* `execution.requiresSubcontractor` (bool) → `ספקי משנה`
+
+### Materials summary (`חומרים`)
+
+* `materials.keyMaterialsSummary` (short text)
+* `materials.finishesSummary` (short text)
+
+> Keep this minimal; the detailed lists live in derived `materialLines` (generated + editable).
+
+---
+
+## 4.3 Free-text buckets (latest summaries)
+
+Buckets are also categorized for UI:
+
+* `freeText.designNotes` → `העדפות`
+* `freeText.constraints` → `הערות`
+* `freeText.risks` → `סיכונים`
+* `freeText.assumptions` → `הערות`
+* `freeText.openQuestions` → `הערות`
+* `freeText.generalNotes` → `הערות`
+
+Rule: bucket summary is recomputed only if its mapped facts changed.
+
+---
+
+## 4.4 “Required fields” (tiny)
+
+Only:
+
+* `meta.title`
+* `meta.typeKey`
+
+Everything else can be unknown and still functional.
+
+---
+
+# 5) Agent contracts (strict JSON)
+
+All Hebrew text must be Hebrew, except proper nouns. Units normalized (cm/kg/NIS, ISO dates).
+
+## 5.1 FactsExtractor (from chat / files)
+
+```json
+{
+  "factCandidates": [
+    {
+      "categoryHe": "מידות",
+      "subCategoryHe": "בסיס",
+      "type": "field_update",
+      "proposedFieldPath": "dimensions.widthCm",
+      "valueTyped": 120,
+      "valueTextHe": "רוחב 120 ס\"מ",
+      "scopeHint": "element",
+      "elementHint": { "titleHe": "דלפק כניסה", "typeKeyHint": "studio_build" },
+      "confidence": 0.86,
+      "rationaleHe": "מספר ומידה מפורשים"
+    }
+  ]
+}
+```
+
+## 5.2 FactMapper (map facts to existing or new elements + schema paths)
+
+```json
+{
+  "mappings": [
+    {
+      "factCandidateRef": "idx:0",
+      "action": "map_to_field",
+      "elementResolution": {
+        "mode": "existing",
+        "elementId": "el_123"
+      },
+      "fieldPath": "dimensions.widthCm",
+      "categoryHe": "מידות",
+      "confidence": 0.84
+    },
+    {
+      "factCandidateRef": "idx:3",
+      "action": "create_element_and_map",
+      "elementResolution": {
+        "mode": "create",
+        "titleHe": "רצפת PVC לבנה",
+        "typeKey": "pvc_floor"
+      },
+      "fieldPath": "materials.keyMaterialsSummary",
+      "confidence": 0.72
+    },
+    {
+      "factCandidateRef": "idx:5",
+      "action": "keep_project_level_unmapped",
+      "confidence": 0.60
+    }
+  ]
+}
+```
+
+## 5.3 QuestionGenerator (deduped structured questions)
+
+```json
+{
+  "questions": [
+    {
+      "questionKey": "el_123.dimensions.heightCm",
+      "elementId": "el_123",
+      "categoryHe": "מידות",
+      "questionTextHe": "מה הגובה הסופי בס״מ?",
+      "answerType": "number"
+    },
+    {
+      "questionKey": "el_123.location.installArea",
+      "elementId": "el_123",
+      "categoryHe": "מיקום",
+      "questionTextHe": "איפה בדיוק האלמנט יותקן? (תיאור קצר)",
+      "answerType": "text"
+    }
+  ]
+}
+```
+
+## 5.4 ElementPublisher (apply accepted facts → draft → publish version)
+
+```json
+{
+  "publishPlan": {
+    "elementId": "el_123",
+    "basedOnVersionId": "ver_010",
+    "appliedFactIds": ["fact_77", "fact_81"],
+    "updatedData": {
+      "dimensions": { "widthCm": 120, "heightCm": 95 }
+    },
+    "updatedFreeText": {
+      "risks": "יש סיכון לשבירה בהובלה אם לא נארוז בקשיחות."
+    },
+    "diffSummaryHe": "עודכנו מידות והתווסף סיכון הובלה."
+  }
+}
+```
+
+## 5.5 DerivationPlanner (patch/replace ChangeSet)
+
+```json
+{
+  "mode": "patch",
+  "elementId": "el_123",
+  "reasonHe": "נוספו מידות; התאמת הערכת זמן וחומרים",
+  "ops": {
+    "tasks": [
+      {
+        "op": "update",
+        "taskId": "t_55",
+        "patch": { "estimateMinutes": 240 }
+      },
+      {
+        "op": "add",
+        "tempId": "tmp_t1",
+        "task": {
+          "phaseHe": "עבודה בסטודיו",
+          "titleHe": "חיתוך פלטות לפי מידות",
+          "detailsHe": "התאמה לרוחב 120 ס״מ",
+          "estimateMinutes": 90
+        }
+      }
+    ],
+    "materials": [
+      {
+        "op": "add",
+        "tempId": "tmp_m1",
+        "line": {
+          "categoryHe": "חומרים",
+          "descriptionHe": "פלטת עץ 18 מ״מ",
+          "qty": 2,
+          "unit": "יח׳",
+          "unitCostNis": 0
+        }
+      }
+    ],
+    "accounting": [
+      {
+        "op": "recompute_element_rollup",
+        "elementId": "el_123"
+      }
+    ]
+  }
+}
+```
+
+Replace mode must explicitly delete generated unlocked rows:
+
+```json
+{
+  "mode": "replace",
+  "elementId": "el_123",
+  "reasonHe": "שינוי שיטת ביצוע → החלפת סט מלא של משימות/חומרים",
+  "ops": {
+    "tasks": [{ "op": "delete_all_generated_for_element" }],
+    "materials": [{ "op": "delete_all_generated_for_element" }],
+    "accounting": [{ "op": "recompute_element_rollup" }]
+  }
+}
+```
+
+---
+
+# 6) Accounting engine (by element)
+
+## 6.1 Element rollup model
+
+For each element:
+
+* Sum:
+
+  * generated+manual materials
+  * generated+manual labor/work lines (role-based)
+  * vendors/subcontractors
+  * transport/install costs if attached to that element
+* Then apply:
+
+  * `overheadPct` (default 15%)
+  * `riskPct` (default 10%)
+  * `profitPct` (default 30%)
+    All editable per project.
+
+## 6.2 Excluding management from accounting
+
+Keep tasks in plan, but accounting uses flags:
+
+* `billableExecution=true/false`
+* `includedInMargin=true/false`
+
+So “management/admin” can exist in plan without being double-counted.
+
+---
+
+# 7) UI behavior (what the user experiences)
+
+### Always-on right panel: Facts
+
+* Grouped by `categoryHe`
+* Shows mapping target inline (`Element → fieldPath` editable)
+* Approve/reject
+* Bulk accept high-confidence
+
+### Structured questions panel
+
+* Populated from `questionQueue`
+* Answering creates accepted facts (or proposed if low confidence)
+* Dedupe via `questionKey`
+
+### Element tree
+
+* Shows “pending updates” badge if accepted facts mapped but not published into a new version
+* “Publish update” button creates new `elementVersion`
+* After publish → triggers derivation → Tasks/Accounting/Quote update immediately
+
+---
+
+# 8) Migration plan (from current messy system)
+
+## 8.1 Strategy: convert everything into the new truth model
+
+For each existing project:
+
+1. Create `elements` from existing item list
+2. For each element field you currently store:
+
+   * create an **accepted fact** with `source="migration"` and correct mapping
+3. Create baseline `elementVersion` per element
+4. Create baseline `projectVersion`
+5. Convert existing tasks/materials/accounting rows:
+
+   * if they were user-edited or important → set `origin="manual"`, `lock=true`
+   * otherwise → mark as generated and re-derive cleanly after publish
+
+## 8.2 After migration
+
+* Disable old element flow + old facts mechanisms behind feature flag
+* Only new pipeline runs
+
+---
+
+# 9) Dev execution plan (epics + acceptance criteria)
+
+## Epic A — Core tables + Facts UI
+
+* Create `facts`, `elements`, `elementVersions`, `questionQueue`, `projectVersions`, `derivationRuns`
+* Facts panel grouping + approve/reject + source linking
+  **AC:** every user input produces fact candidates; user can accept and see grouped lists update.
+
+## Epic B — SchemaRegistry + mapping editor
+
+* Implement registry v1 (types + fields + buckets)
+* FactMapper agent + mapping editor inline
+* Auto element creation (`status="suggested"`)
+  **AC:** mapping is visible/editable; new implied elements auto-appear.
+
+## Epic C — Element publish + versions
+
+* Draft computation from accepted facts
+* Publish creates `elementVersion` + diff summary
+* Project publish creates `projectVersion`
+  **AC:** publish updates element version and is visible immediately.
+
+## Epic D — Derivation engine (patch + replace)
+
+* ChangeSet format + validators
+* Apply ops with lock rules
+* Recompute element accounting rollups
+  **AC:** publish triggers patch; replace works; locked rows are never deleted.
+
+## Epic E — Tasks/Materials/Labor UX hardening
+
+* Show generated vs manual + lock toggle
+* “Replace plan” button available from Solutioning
+  **AC:** user can safely edit and keep overrides through regen.
+
+## Epic F — Quote + doc generation
+
+* QuoteComposer uses projectVersion rollups
+* Generate quote document (logo + ordered sections)
+  **AC:** one click generates consistent quote from latest published snapshot.
+
+## Epic G — Migration + deletion of bloat
+
+* Migration scripts
+* Feature flag old flows off
+* Remove dead code/agents/routes
+  **AC:** zero split-brain paths remain.
+
+---
+
+# 10) Last small confirmations (so dev doesn’t guess wrong)
+
+Answer these and I’ll finalize the SchemaRegistry field list per type (beyond the shared fields):
+
+1. For `הדפסות בבית דפוס`: do you want structured fields for `print.width/height`, `substrate`, `lamination`, `qty` — or keep them as facts + derived materials only?
+2. For `ספקי משנה`: do you want a structured `vendor.scopeSummary` field, or purely free-text + cost line items?
+3. When auto-creating an element, should it immediately appear as an “active” element, or as “suggested” until you approve?
+
+If you answer, I’ll output the **full per-type schema fields** (paths + Hebrew labels + mapping synonyms) as a single JSON file your dev can drop into the codebase.

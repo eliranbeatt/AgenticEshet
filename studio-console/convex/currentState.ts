@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { buildDerivedCurrentState } from "./lib/currentState";
 import { api, internal } from "./_generated/api";
+import { summarizeItems } from "./lib/contextSummary";
 
 const PROPOSED_CONTEXT_THRESHOLD = 0.85;
 
@@ -115,6 +116,21 @@ export const getDerived = query({
             scope: item!.scope,
         }));
 
+        if (project?.features?.factsEnabled === false) {
+            const knowledge = await ctx.db
+                .query("projectKnowledge")
+                .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+                .unique();
+            const markdown = [
+                "# Current Knowledge",
+                knowledge?.currentText?.trim() ? knowledge.currentText : "(none)",
+                "",
+                "## Items",
+                summarizeItems(filteredItems),
+            ].join("\n");
+            return { markdown };
+        }
+
         const knowledgeBlocks = await ctx.db
             .query("knowledgeBlocks")
             .withIndex("by_scope_block", (q) => q.eq("projectId", args.projectId))
@@ -226,6 +242,17 @@ export const submitCurrentStateText = mutation({
     handler: async (ctx, args) => {
         const project = await ctx.db.get(args.projectId);
         if (!project) throw new Error("Project not found");
+        if (project.features?.factsEnabled === false) {
+            const trimmed = args.text.trim();
+            if (trimmed) {
+                await ctx.runMutation(api.projectKnowledge.appendLog, {
+                    projectId: args.projectId,
+                    text: trimmed,
+                    source: "agent_summary",
+                });
+            }
+            return { ok: true, skippedFacts: true };
+        }
 
         const itemRefs = await ctx.runQuery(internal.items.getItemRefs, {
             projectId: args.projectId,

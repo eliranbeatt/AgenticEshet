@@ -32,6 +32,18 @@ type KnowledgeDoc = {
     keyPoints?: string[];
 };
 
+type ElementSnapshotSummary = {
+    itemId?: string;
+    title?: string;
+    typeKey?: string;
+    snapshot?: {
+        descriptions?: { short?: string; long?: string };
+        tasks?: unknown[];
+        materials?: unknown[];
+        labor?: unknown[];
+    } | null;
+};
+
 function formatValue(value: unknown): string {
     if (value === null || value === undefined) return "";
     if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
@@ -41,6 +53,11 @@ function formatValue(value: unknown): string {
     } catch {
         return String(value);
     }
+}
+
+function truncateText(value: string, maxLen = 160) {
+    if (value.length <= maxLen) return value;
+    return `${value.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
 export function summarizeFacts(facts: FactEntry[], limit = 30): string {
@@ -105,5 +122,20 @@ export function summarizeKnowledgeDocs(docs: KnowledgeDoc[], limit = 8): string 
             ? ` Key points: ${doc.keyPoints.slice(0, 4).join("; ")}`
             : "";
         return `- [${source}] ${title}${summary ? `: ${summary}` : ""}${keyPoints}`;
+    }).join("\n");
+}
+
+export function summarizeElementSnapshots(items: ElementSnapshotSummary[], limit = 12): string {
+    if (!items.length) return "(none)";
+    return items.slice(0, limit).map((item) => {
+        const title = item.title ?? "Untitled element";
+        const typeKey = item.typeKey ?? "unknown";
+        const snapshot = item.snapshot ?? null;
+        const tasks = Array.isArray(snapshot?.tasks) ? snapshot?.tasks.length : 0;
+        const materials = Array.isArray(snapshot?.materials) ? snapshot?.materials.length : 0;
+        const labor = Array.isArray(snapshot?.labor) ? snapshot?.labor.length : 0;
+        const description = snapshot?.descriptions?.short || snapshot?.descriptions?.long || "";
+        const descText = description ? ` | ${truncateText(formatValue(description), 120)}` : "";
+        return `- ${title} [${typeKey}] tasks=${tasks} materials=${materials} labor=${labor}${descText}`;
     }).join("\n");
 }

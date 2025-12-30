@@ -18,6 +18,8 @@ type DetailsFormState = {
     budgetCap: string;
     location: string;
     notes: string;
+    elementsCanonical: boolean;
+    factsEnabled: boolean;
 };
 
 type RecentDocUpload = {
@@ -81,6 +83,8 @@ export default function ProjectOverviewPage() {
         budgetCap: "",
         location: "",
         notes: "",
+        elementsCanonical: false,
+        factsEnabled: true,
     });
     const [isSaving, setIsSaving] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
@@ -103,6 +107,8 @@ export default function ProjectOverviewPage() {
                 budgetCap: project.details.budgetCap ? String(project.details.budgetCap) : "",
                 location: project.details.location || "",
                 notes: project.details.notes || "",
+                elementsCanonical: project.features?.elementsCanonical ?? false,
+                factsEnabled: project.features?.factsEnabled !== false,
             });
         }
     }, [project]);
@@ -142,6 +148,11 @@ export default function ProjectOverviewPage() {
                 defaultLanguage: formState.defaultLanguage,
                 projectTypes: formState.projectTypes,
                 relatedPastProjectIds: formState.relatedPastProjectIds,
+                features: {
+                    ...project.features,
+                    elementsCanonical: formState.elementsCanonical,
+                    factsEnabled: formState.factsEnabled,
+                },
                 details: {
                     eventDate: formState.eventDate || undefined,
                     budgetCap: formState.budgetCap ? Number(formState.budgetCap) : undefined,
@@ -504,6 +515,32 @@ export default function ProjectOverviewPage() {
                                 className="w-full border rounded px-3 py-2 text-sm"
                                 placeholder="Additional constraints, contacts, etc."
                             />
+                        </div>
+                        <div className="border-t pt-4 space-y-3">
+                            <div className="text-xs font-semibold uppercase text-gray-500 tracking-wide">Feature Flags</div>
+                            <label className="flex items-center gap-2 text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={formState.elementsCanonical}
+                                    onChange={(e) =>
+                                        setFormState((prev) => ({ ...prev, elementsCanonical: e.target.checked }))
+                                    }
+                                />
+                                <span>Elements canonical</span>
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={formState.factsEnabled}
+                                    onChange={(e) =>
+                                        setFormState((prev) => ({ ...prev, factsEnabled: e.target.checked }))
+                                    }
+                                />
+                                <span>Facts enabled</span>
+                            </label>
+                            <p className="text-xs text-gray-500">
+                                Disable facts when using Current Knowledge and canonical elements.
+                            </p>
                         </div>
                         {formError && <p className="text-xs text-red-600">{formError}</p>}
                         <button

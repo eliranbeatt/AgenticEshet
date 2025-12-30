@@ -8,6 +8,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 const HIGH_CONFIDENCE = 0.85;
 
 export function FactsPanel({ projectId }: { projectId: Id<"projects"> }) {
+    const project = useQuery(api.projects.getProject, { projectId });
     const grouped = useQuery(api.factsPipeline.listFactsGrouped, { projectId });
     const itemsTree = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
     const registry = useQuery(api.registry.getElementRegistry, {});
@@ -33,6 +34,10 @@ export function FactsPanel({ projectId }: { projectId: Id<"projects"> }) {
         () => filteredFacts.filter((fact) => fact.status === "proposed" && (fact.confidence ?? 0) >= HIGH_CONFIDENCE),
         [filteredFacts],
     );
+
+    if (project?.features?.factsEnabled === false) {
+        return <div className="text-xs text-gray-500 p-3">Facts are disabled for this project.</div>;
+    }
 
     if (!grouped || !itemsTree || !registry) {
         return <div className="text-xs text-gray-500">Loading facts...</div>;

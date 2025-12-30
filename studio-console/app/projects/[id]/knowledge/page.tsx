@@ -27,6 +27,8 @@ type KnowledgeSearchResult = {
     };
 };
 
+import { CurrentKnowledgeEditor } from "../_components/knowledge/CurrentKnowledgeEditor";
+
 const jobStatusStyles: Record<Doc<"ingestionJobs">["status"], string> = {
     created: "bg-gray-100 text-gray-700",
     queued: "bg-gray-200 text-gray-800",
@@ -52,8 +54,11 @@ export default function KnowledgePage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
 
+    const project = useQuery(api.projects.getProject, { projectId });
     const docs = useQuery(api.knowledge.listDocs, { projectId });
     const ingestionJobs = useQuery(api.ingestion.listJobs, { projectId });
+    const currentKnowledge = useQuery(api.projectKnowledge.getCurrent, { projectId });
+    const knowledgeLog = useQuery(api.projectKnowledge.listLog, { projectId, limit: 100 });
 
     const createJob = useMutation(api.ingestion.createJob);
     const generateUploadUrl = useMutation(api.ingestion.generateUploadUrl);
@@ -61,8 +66,9 @@ export default function KnowledgePage() {
     const retryFile = useMutation(api.ingestion.retryFile);
     const runJob = useAction(api.ingestion.runJob);
     const searchKnowledge = useAction(api.knowledge.dynamicSearch);
+    const updateCurrentKnowledge = useMutation(api.projectKnowledge.updateCurrent);
 
-    const [activeTab, setActiveTab] = useState<"docs" | "upload" | "search">("docs");
+    const [activeTab, setActiveTab] = useState<"current" | "docs" | "upload" | "search">("docs");
     const [uploading, setUploading] = useState(false);
     const [jobName, setJobName] = useState(() => `Import ${new Date().toLocaleTimeString()}`);
     const [jobContext, setJobContext] = useState("");
@@ -79,6 +85,12 @@ export default function KnowledgePage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const refreshJobName = () => setJobName(`Import ${new Date().toLocaleTimeString()}`);
+
+    useEffect(() => {
+        if (!project?.features?.elementsCanonical) return;
+        if (activeTab !== "docs") return;
+        setActiveTab("current");
+    }, [project, activeTab]);
 
     const handleUpload = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -185,7 +197,12 @@ export default function KnowledgePage() {
     return (
         <div className="flex flex-col h-[calc(100vh-12rem)]">
             <div className="flex space-x-4 border-b px-4 bg-white">
-                {(["docs", "upload", "search"] as const).map((tab) => (
+                {([
+                    ...(project?.features?.elementsCanonical ? (["current"] as const) : []),
+                    "docs",
+                    "upload",
+                    "search",
+                ] as const).map((tab) => (
                     <button
                         key={tab}
                         onClick={() => setActiveTab(tab)}
@@ -193,6 +210,7 @@ export default function KnowledgePage() {
                             activeTab === tab ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500"
                         }`}
                     >
+                        {tab === "current" && "Current Knowledge"}
                         {tab === "docs" && "Documents"}
                         {tab === "upload" && "Ingestion & Upload"}
                         {tab === "search" && "Search"}
@@ -201,6 +219,9 @@ export default function KnowledgePage() {
             </div>
 
             <div className="flex-1 overflow-auto p-6 space-y-8">
+                {activeTab === "current" && (
+                    <CurrentKnowledgeEditor projectId={projectId} />
+                )}
                 {activeTab === "docs" && (
                     <>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

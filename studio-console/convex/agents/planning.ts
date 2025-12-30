@@ -11,6 +11,7 @@ import {
   planningPrompt,
   sharedContextContract,
 } from "../prompts/itemsPromptPack";
+import { summarizeElementSnapshots } from "../lib/contextSummary";
 
 // 1. DATA ACCESS
 export const getContext: ReturnType<typeof internalQuery> = internalQuery({
@@ -152,6 +153,19 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         includeSummaries: true,
       });
 
+      const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+        projectId: args.projectId,
+      });
+
+      const elementSnapshots = project.features?.elementsCanonical
+        ? await ctx.runQuery(internal.elementVersions.getActiveSnapshotsByItemIds, {
+          itemIds: items.map((item) => item._id),
+        })
+        : [];
+      const elementSnapshotsSummary = project.features?.elementsCanonical
+        ? summarizeElementSnapshots(elementSnapshots, 20)
+        : "(none)";
+
       const clarificationSection = latestClarification
         ? latestClarification.contentMarkdown.slice(0, 1200)
         : "No clarification summary recorded.";
@@ -238,6 +252,10 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         existingPlansCount: existingPlans.length,
         recentUploads: uploadedDocsSection,
         knowledgeSection,
+        elementSnapshotsSummary,
+        currentKnowledge: currentKnowledge
+          ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
+          : "(none)",
       };
 
       if (agentRunId) {

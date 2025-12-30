@@ -42,6 +42,14 @@ const FactOpsResponseSchema = z.object({
   ops: z.array(FactOpSchema),
 });
 
+async function isFactsEnabled(
+  ctx: { db: { get: (id: Id<"projects">) => Promise<Doc<"projects"> | null> } },
+  projectId: Id<"projects">
+) {
+  const project = await ctx.db.get(projectId);
+  return project?.features?.factsEnabled !== false;
+}
+
 export const parseTurnBundle = internalAction({
   args: {
     turnBundleId: v.id("turnBundles"),
@@ -50,6 +58,9 @@ export const parseTurnBundle = internalAction({
     console.log("parseTurnBundle started for bundle", args.turnBundleId);
     const bundle = await ctx.runQuery(internal.facts.getBundle, { turnBundleId: args.turnBundleId });
     if (!bundle) throw new Error("Bundle not found");
+    if (!(await isFactsEnabled(ctx, bundle.projectId))) {
+      return { skipped: true };
+    }
 
     const agentRunId = await ctx.runMutation(internal.agentRuns.createRun, {
       projectId: bundle.projectId,
@@ -220,6 +231,7 @@ export const acceptFact = mutation({
   handler: async (ctx, args) => {
     const fact = await ctx.db.get(args.factId);
     if (!fact) throw new Error("Fact not found");
+    if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
     
     let existingFact = null;
     if (fact.scopeType === "project") {
@@ -278,6 +290,9 @@ export const acceptFact = mutation({
 export const rejectFact = mutation({
   args: { factId: v.id("facts") },
   handler: async (ctx, args) => {
+    const fact = await ctx.db.get(args.factId);
+    if (!fact) throw new Error("Fact not found");
+    if (!(await isFactsEnabled(ctx, fact.projectId))) return { ok: true, skipped: true };
     await ctx.db.patch(args.factId, { status: "rejected", needsReview: false });
   },
 });
@@ -285,6 +300,7 @@ export const rejectFact = mutation({
 export const acceptPendingFacts = mutation({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    if (!(await isFactsEnabled(ctx, args.projectId))) return { accepted: 0, skipped: true };
     const pendingFacts = await ctx.db
       .query("facts")
       .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", "proposed"))
@@ -357,6 +373,7 @@ export const acceptPendingFacts = mutation({
 export const listFacts = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    if (!(await isFactsEnabled(ctx, args.projectId))) return [];
     const facts = await ctx.db
       .query("facts")
       .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId))
@@ -370,6 +387,7 @@ export const listFacts = query({
 export const listBlocks = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    if (!(await isFactsEnabled(ctx, args.projectId))) return [];
     const blocks = await ctx.db
       .query("knowledgeBlocks")
       .withIndex("by_scope_block", (q) => q.eq("projectId", args.projectId))
@@ -381,6 +399,7 @@ export const listBlocks = query({
 export const rebuildBlocks = mutation({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    if (!(await isFactsEnabled(ctx, args.projectId))) return { blocksRebuilt: false, factsUsed: 0, skipped: true };
     const acceptedFacts = await ctx.db
       .query("facts")
       .withIndex("by_project_status", (q) =>
@@ -424,6 +443,7 @@ export const resolveConflict = mutation({
     chosenFactId: v.id("facts")
   },
   handler: async (ctx, args) => {
+    if (!(await isFactsEnabled(ctx, args.projectId))) return { ok: true, skipped: true };
     // 1. Get all facts for this key
     let facts = [];
     if (args.scopeType === "project") {

@@ -6,6 +6,8 @@ export const getItemProjection = query({
   handler: async (ctx, args) => {
     const item = await ctx.db.get(args.itemId);
     if (!item) return null;
+    const project = await ctx.db.get(item.projectId);
+    if (project?.features?.factsEnabled === false) return null;
 
     const facts = await ctx.db
       .query("facts")

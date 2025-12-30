@@ -1,0 +1,168 @@
+Element Canonical Plan (Codex Latest) - aligned to repo
+
+0) Goals (unchanged)
+- Elements are canonical for tasks/materials/labor/quote inputs.
+- Accounting and Tasks edits go through Draft -> Approve; no immediate destructive writes.
+- Stable keys, tombstones, version tags/summary/change stats.
+- Suggested Elements workflow with action buttons (Ideation, Planning, Solutioning, Critique, Stress test, Dependencies).
+- Current Knowledge replaces Facts; precedence: element snapshot -> current knowledge -> chat.
+- Facts canceled by default; keep behind a feature flag if not too complex.
+
+1) What is already implemented (by reading code)
+Backend/data model
+- projects.features.elementsCanonical and factsEnabled exist: studio-console/convex/schema.ts.
+- revisions + revisionChanges tables exist: studio-console/convex/schema.ts.
+- elementVersions stores snapshot + revision metadata: studio-console/convex/schema.ts.
+- ElementSnapshot + patchOps schemas exist: studio-console/convex/lib/zodSchemas.ts.
+- applyPatchOps enforces tombstones, empty task auto-delete, purchase-task rule: studio-console/convex/lib/elementSnapshots.ts.
+- revisions.createDraft / patchElement / approve / discardDraft exist: studio-console/convex/revisions.ts.
+- Projections exist: per-element rebuild in studio-console/convex/lib/elementProjections.ts and project rebuild in studio-console/convex/projections.ts.
+- projectKnowledge + knowledgeLogEntries tables and CRUD: studio-console/convex/projectKnowledge.ts.
+- factsEnabled gate used for turn bundle extraction: studio-console/convex/turnBundles.ts.
+- ChangeSets apply canonical path to revisions when elementsCanonical is true: studio-console/convex/changeSets.ts.
+
+UI
+- Current Knowledge panel and page exist and are shown when elementsCanonical: studio-console/app/projects/[id]/knowledge/page.tsx and CurrentKnowledgePanel.
+- Flow right panel switches to Current Knowledge and hides Facts when factsEnabled is false: studio-console/app/projects/[id]/_components/flow/FlowWorkbench.tsx.
+- Suggested Elements panel exists with action buttons and auto-opens ChangeSet review: studio-console/app/projects/[id]/_components/flow/SuggestedElementsPanel.tsx.
+- Accounting and Tasks pages have draft edit toggles and call revisions.patchElement: studio-console/app/projects/[id]/accounting/page.tsx and studio-console/app/projects/[id]/tasks/page.tsx.
+- TaskModal patches revisions when elementsCanonical: studio-console/app/projects/[id]/tasks/_components/TaskModal.tsx.
+- Facts UI is gated by factsEnabled: FactsPanel and ItemEditorPanel.
+
+2) Gaps and conflicts to resolve
+- Draft lifecycle is incomplete: getDraft/listDrafts and stronger one-draft-per-tab guard are missing; createDraft assumes single draft but not enforced in UI. (convex/revisions.ts)
+- Draft editors still write directly to tasks/materialLines/workLines for preview, which violates no-immediate-write requirement. (accounting tabs, tasks page, TaskModal)
+- Facts pipeline still active in multiple modules even when elementsCanonical should disable it (factsV2, factsPipeline, currentState, elementVersions.publishElementVersion, itemPopulator, etc.).
+- elementVersions.publishElementVersion still fact-based and conflicts with canonical snapshot approvals.
+- Projection logic is duplicated and inconsistent (projections.ts vs elementProjections.ts), and dependency mapping is not consistent in project rebuild.
+- Quote generation still depends on accounting tables as truth and uses a missing API name in quotes.ts.
+- History UI still shows itemRevisions instead of elementVersions with tags/summary/changeStats.
+- Agents (taskRefiner/taskEditor/architect) operate on tasks table and do not write patchOps into drafts.
+- AccountingLine canonical mapping creates new snapshot keys each ChangeSet, causing duplicates across runs.
+
+3) Target architecture (no goal changes)
+3.1 Canonical storage
+- projectItems are Elements.
+- elementVersions.snapshot (ElementSnapshot v1) is canonical for tasks/materials/labor/freeText.
+- revisions + revisionChanges are the Draft layer.
+- itemRevisions remains legacy for ItemSpecV2 editor until migrated.
+
+3.2 Draft editing and approval
+- Draft edits write patchOps or proposedSnapshot only.
+- Approve validates, applies business rules, writes new elementVersions, and rebuilds projections.
+- Conflicts detected via baseVersionId and surfaced.
+
+3.3 Projections
+- Single projection engine builds tasks/materialLines/workLines from snapshots.
+- Dependencies mapped from taskKey to tasks._id.
+- generated/manual/lock fields honored per rules.
+
+3.4 Facts cancellation behind flag
+- factsEnabled=false disables extraction, UI, and fact-based publishing.
+- factsEnabled can be toggled to re-enable later if needed.
+
+3.5 Current Knowledge precedence
+- Agent context order: element snapshot -> projectKnowledge -> chat history.
+
+3.6 Suggested Elements workflow
+- Suggestions become revisionChanges (patchOps/proposedSnapshot).
+- UI lists, previews, approves, declines without direct mutations.
+
+4) Detailed execution plan (phased, code-aligned)
+
+Phase 0 - Facts behind feature flag (hard gates)
+Tasks
+- Gate every facts pipeline entry point with factsEnabled=false (factsV2 extraction, factsPipeline, currentState.submitCurrentStateText, elementVersions.publishElementVersion, itemPopulator facts reads).
+- Ensure all Facts UI entry points are hidden when factsEnabled=false.
+- Add fallback: when facts disabled, append to knowledgeLogEntries instead of facts.
+Requirements
+- factsEnabled=false causes no new fact rows and hides Facts UI.
+- Existing facts remain untouched.
+
+Phase 1 - Draft lifecycle completion
+Tasks
+- Add revisions.getDraft and revisions.listDrafts with by_project_tab_status index.
+- Enforce single active draft per (projectId, originTab) unless forceNew.
+- Add updateSummary/tags endpoint for draft metadata (optional but recommended).
+Requirements
+- UI can fetch existing draft and reuse it.
+- Draft ownership consistent across tabs.
+
+Phase 2 - Projection engine consolidation
+Tasks
+- Choose elementProjections as the source of truth and have projections.ts call it per element or replace projections.ts entirely.
+- Ensure dependency mapping from taskKey -> tasks._id for all rebuild paths.
+- Fix quote generation to use element snapshots as truth; ensure correct rebuild call from quotes.ts.
+Requirements
+- Rebuild is deterministic and idempotent.
+- Quote totals match snapshot-derived projections.
+
+Phase 3 - Accounting draft editor (no immediate writes)
+Tasks
+- Remove direct writes when elementsCanonical+editMode. Store patchOps only.
+- Provide draft preview in UI by reading snapshot + draft patch (server-side preview helper).
+- Approve applies snapshot and rebuilds projections.
+Requirements
+- No materialLines/workLines mutations before approval.
+- After approval, projections reflect snapshot.
+
+Phase 4 - Tasks draft editor and dependencies
+Tasks
+- Remove direct writes when elementsCanonical+editMode; patchOps only.
+- Ensure TaskModal edits write patchOps only.
+- Update taskRefiner/taskEditor to write into drafts (or disable if no draft).
+Requirements
+- Tasks do not change until approval.
+- Dependencies persist in elementVersions.snapshot.
+
+Phase 5 - Suggested Elements (agent proposals to revisions)
+Tasks
+- Define agent output schema aligned to ElementSnapshot (patchOps/proposedSnapshot).
+- Update suggestions agent to write revisionChanges directly (or convert ChangeSet -> revisionChanges with stable keys).
+- Add UI listing draft suggestions with diff preview and approve/decline.
+Requirements
+- One-click generation produces reviewable suggestions without direct mutations.
+- Approve produces new elementVersions.
+
+Phase 6 - Version history + revert
+Tasks
+- Update history UI to show elementVersions (tags/summary/changeStats).
+- Add revert mutation: create new version from older snapshot and rebuild projections.
+Requirements
+- Users can inspect version history and revert safely.
+
+Phase 7 - Migration/backfill
+Tasks
+- Build migration that converts existing items/tasks/materials to ElementSnapshot (generate stable keys).
+- Set projectItems.publishedVersionId and elementStatus.
+- Validate projections before/after.
+Requirements
+- Pilot project can be migrated with minimal drift.
+
+Phase 8 - Tests and docs
+Tasks
+- Unit tests: tombstones, empty task auto-delete, purchase task delete, conflict detection.
+- Integration: accounting/tasks draft -> approve -> projections.
+- Update PROCESS_FLOW.md to describe canonical elements and facts flag.
+Requirements
+- Tests cover business rules and draft approval path.
+
+5) Non-negotiable requirements (from plan)
+- Canonical truth is elementVersions.snapshot.
+- Draft -> Approve only, no immediate destructive writes.
+- Tombstones prevent re-add unless explicit restore.
+- Current Knowledge overrides chat.
+- Facts disabled by default, optional re-enable via flag.
+
+6) Open decisions (need confirmation)
+- Keep ItemSpecV2 editor in parallel vs migrate to ElementSnapshot editor.
+- Preserve manual rows in projections (generation/lock rules) vs full replace.
+- Whether to create stable keys for accounting lines to avoid duplicates when mapping ChangeSets.
+
+7) Acceptance checklist
+- elementsCanonical=true and factsEnabled=false results in zero new facts extraction.
+- Accounting and Tasks edits have no effect until approval.
+- Approval creates new elementVersions with correct metadata and projections rebuilt.
+- Suggested Elements produce revision-based drafts and approve cleanly.
+- Current Knowledge is used in agent prompts with explicit precedence.
+

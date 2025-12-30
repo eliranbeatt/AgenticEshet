@@ -10,9 +10,13 @@ import { ItemEditorPanel } from "../items/ItemEditorPanel";
 type TabKey = "specs" | "tasks" | "costs" | "history";
 
 export function ElementsInspectorPanel() {
-    const { selectedItemId } = useItemsContext();
+    const { selectedItemId, projectId } = useItemsContext();
     const [activeTab, setActiveTab] = useState<TabKey>("specs");
     const publishElementVersion = useMutation(api.elementVersions.publishElementVersion);
+    const revertElementVersion = useMutation(api.elementVersions.revertElementVersion);
+    const project = useQuery(api.projects.getProject, { projectId });
+    const factsEnabled = project?.features?.factsEnabled !== false;
+    const elementsCanonical = project?.features?.elementsCanonical ?? false;
 
     const details = useQuery(
         api.items.getItemDetails,
@@ -34,6 +38,11 @@ export function ElementsInspectorPanel() {
         const { item, tasks, materialLines, workLines, accountingLines, revisions } = details;
         return { item, tasks, materialLines, workLines, accountingLines, revisions };
     }, [details]);
+
+    const elementVersions = useQuery(
+        api.elementVersions.listElementVersions,
+        selectedItemId && elementsCanonical ? { elementId: selectedItemId as Id<"projectItems"> } : "skip",
+    );
 
     if (!selectedItemId) {
         return (
@@ -58,16 +67,18 @@ export function ElementsInspectorPanel() {
                     )}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <button
-                        type="button"
-                        onClick={() => {
-                            if (!content?.item) return;
-                            void publishElementVersion({ elementId: content.item._id, createdBy: "user" });
-                        }}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-full border border-blue-600 text-blue-700 hover:bg-blue-50"
-                    >
-                        Publish update
-                    </button>
+                    {factsEnabled && !elementsCanonical && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (!content?.item) return;
+                                void publishElementVersion({ elementId: content.item._id, createdBy: "user" });
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold rounded-full border border-blue-600 text-blue-700 hover:bg-blue-50"
+                        >
+                            Publish update
+                        </button>
+                    )}
                     <TabButton tab="specs" activeTab={activeTab} onClick={setActiveTab}>
                         Specs
                     </TabButton>
@@ -147,10 +158,46 @@ export function ElementsInspectorPanel() {
                 {activeTab === "history" && (
                     <div className="p-4 space-y-3">
                         {!content && <div className="text-sm text-gray-500">Loading element history...</div>}
-                        {content && content.revisions.length === 0 && (
+                        {elementsCanonical && elementVersions && elementVersions.length === 0 && (
+                            <div className="text-sm text-gray-500">No element versions yet.</div>
+                        )}
+                        {!elementsCanonical && content && content.revisions.length === 0 && (
                             <div className="text-sm text-gray-500">No revisions yet.</div>
                         )}
-                        {content && content.revisions.length > 0 && (
+                        {elementsCanonical && elementVersions && elementVersions.length > 0 && content?.item && (
+                            <div className="space-y-2 text-xs text-gray-600">
+                                {elementVersions.map((version) => {
+                                    const isActive = version._id === content?.item.activeVersionId;
+                                    const tags = (version.tags ?? []).join(", ");
+                                    const stats = version.changeStats ? JSON.stringify(version.changeStats) : "";
+                                    return (
+                                        <div key={version._id} className="border rounded p-2 bg-gray-50">
+                                            <div className="font-semibold text-gray-700 flex items-center justify-between gap-2">
+                                                <span>{version.summary ?? "Element version"}</span>
+                                                {isActive && <span className="text-[10px] text-green-700">Active</span>}
+                                            </div>
+                                            <div>{new Date(version.createdAt).toLocaleString()}</div>
+                                            {tags && <div className="text-[10px] text-gray-500">Tags: {tags}</div>}
+                                            {stats && <div className="text-[10px] text-gray-500">Stats: {stats}</div>}
+                                            {!isActive && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void revertElementVersion({
+                                                        elementId: content?.item._id as Id<"projectItems">,
+                                                        versionId: version._id as Id<"elementVersions">,
+                                                        createdBy: "user",
+                                                    })}
+                                                    className="mt-2 text-[10px] bg-white border border-gray-300 rounded px-2 py-1 hover:bg-gray-100"
+                                                >
+                                                    Revert to this version
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                        {!elementsCanonical && content && content.revisions.length > 0 && (
                             <div className="space-y-2 text-xs text-gray-600">
                                 {content.revisions
                                     .slice()

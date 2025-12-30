@@ -1,12 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useMutation, useAction } from "convex/react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { Plus, Wand2, Save, Pencil, Trash2, X, Lock, Unlock } from "lucide-react";
 import { type ProjectAccountingData, type ProjectAccountingSection } from "./AccountingTypes";
 import { type CostingOptions } from "@/src/lib/costing";
+import type { ElementSnapshot } from "@/convex/lib/zodSchemas";
+
+type WorkLineView = {
+  id: string;
+  laborKey: string;
+  itemId?: Id<"projectItems">;
+  itemLaborId?: string;
+  workType?: string;
+  role: string;
+  rateType: string;
+  plannedQuantity: number;
+  plannedUnitCost: number;
+  actualQuantity?: number;
+  actualUnitCost?: number;
+  status?: string;
+  description?: string;
+  quoteVisibility?: "include" | "exclude" | "optional";
+  isManagement?: boolean;
+  generation?: Doc<"workLines">["generation"];
+  lock?: boolean;
+  isPreview: boolean;
+};
 
 export default function LaborTab({
   data,
@@ -15,6 +37,10 @@ export default function LaborTab({
   includeManagement,
   includeOptional,
   respectVisibility,
+  editMode,
+  draftRevisionId,
+  elementsById,
+  allowInlineEdits,
 }: {
   data: ProjectAccountingData;
   projectId: Id<"projects">;
@@ -22,6 +48,10 @@ export default function LaborTab({
   includeManagement: boolean;
   includeOptional: boolean;
   respectVisibility: boolean;
+  editMode: boolean;
+  draftRevisionId: Id<"revisions"> | null;
+  elementsById: Map<string, Doc<"projectItems">>;
+  allowInlineEdits: boolean;
 }) {
   const addWorkLine = useMutation(api.accounting.addWorkLine);
   const updateWorkLine = useMutation(api.accounting.updateWorkLine);
@@ -29,11 +59,54 @@ export default function LaborTab({
   const estimateSection = useAction(api.agents.estimator.run);
   const syncApproved = useMutation(api.items.syncApproved);
   const syncFromAccounting = useMutation(api.items.syncFromAccountingSection);
+  const patchElement = useMutation(api.revisions.patchElement);
 
   const [filterSection, setFilterSection] = useState<string>("all");
   const [estimatingIds, setEstimatingIds] = useState<Set<string>>(new Set());
+  const draftOnlyMode = Boolean(editMode);
+  const allowInlineEditsSafe = allowInlineEdits && (!editMode || Boolean(draftRevisionId));
+
+  const elementIds = useMemo(() => {
+    const ids = new Set<string>();
+    data.sections.forEach((entry) => {
+      if (entry.section.itemId) ids.add(String(entry.section.itemId));
+    });
+    return Array.from(ids) as Id<"projectItems">[];
+  }, [data.sections]);
+
+  const previewSnapshots = useQuery(
+    api.revisions.previewSnapshots,
+    draftOnlyMode && draftRevisionId ? { revisionId: draftRevisionId, elementIds } : "skip",
+  ) as Array<{ elementId: Id<"projectItems">; snapshot: ElementSnapshot }> | undefined;
+
+  const previewByElementId = useMemo(() => {
+    const map = new Map<string, ElementSnapshot>();
+    (previewSnapshots ?? []).forEach((entry) => {
+      map.set(String(entry.elementId), entry.snapshot);
+    });
+    return map;
+  }, [previewSnapshots]);
+
+  const createElementKey = (prefix: "mat" | "lab" | "tsk") => {
+    const suffix = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+    return `${prefix}_${suffix}`;
+  };
+
+  const buildLaborValue = (line: WorkLineView) => ({
+    laborKey: line.laborKey || createElementKey("lab"),
+    role: line.role,
+    qty: line.plannedQuantity,
+    unit: line.rateType,
+    rate: line.plannedUnitCost,
+    bucketKey: line.workType ?? "studio",
+    notes: line.description ?? undefined,
+  });
 
   const handleEstimate = async (sectionId: string) => {
+    if (draftOnlyMode) {
+        alert("Auto-estimate is disabled while editing a draft. Approve the draft first.");
+        return;
+    }
     if (!confirm("This will generate new material and labor lines using AI. Continue?")) return;
     setEstimatingIds(prev => new Set(prev).add(sectionId));
     try {
@@ -66,22 +139,70 @@ export default function LaborTab({
       : baseSections.filter((s: ProjectAccountingSection) => s.section._id === filterSection);
 
   const handleAddLine = async (sectionId: Id<"sections">) => {
+    const elementId = data.sections.find((s) => s.section._id === sectionId)?.section.itemId ?? undefined;
+    if (editMode && (!draftRevisionId || !elementId)) {
+        alert("Draft edits require a linked element.");
+        return;
+    }
+    const itemLaborId = createElementKey("lab");
+    if (draftOnlyMode && draftRevisionId && elementId) {
+        const element = elementsById.get(String(elementId));
+        const baseVersionId = element?.publishedVersionId ?? undefined;
+        const value = {
+            laborKey: itemLaborId,
+            role: "Art worker",
+            qty: 1,
+            unit: "hour",
+            rate: 100,
+            bucketKey: "studio",
+            notes: undefined,
+        };
+        await patchElement({
+            revisionId: draftRevisionId,
+            elementId,
+            baseVersionId,
+            patchOps: [{ op: "upsert_line", entity: "labor", key: value.laborKey, value }],
+        });
+        return;
+    }
+
     await addWorkLine({
       projectId,
       sectionId,
-      itemId: data.sections.find((s) => s.section._id === sectionId)?.section.itemId ?? undefined,
+      itemId: elementId,
+      itemLaborId,
       workType: "studio",
       role: "Art worker",
       rateType: "hour",
       plannedQuantity: 1,
       plannedUnitCost: 100,
-      status: "planned"
+      status: "planned",
     });
   };
 
-  const handleDeleteLine = async (lineId: Id<"workLines">) => {
+  const handleDeleteLine = async (line: WorkLineView) => {
     if (!confirm("Delete this labor line?")) return;
-    await deleteWorkLine({ id: lineId });
+    if (draftOnlyMode && !draftRevisionId) {
+        alert("Draft edits require an active draft.");
+        return;
+    }
+    if (draftOnlyMode && draftRevisionId) {
+        if (!line.itemId || !line.itemLaborId) {
+            alert("Draft edits require a linked element and labor key.");
+            return;
+        }
+        const element = elementsById.get(String(line.itemId));
+        const baseVersionId = element?.publishedVersionId ?? undefined;
+        await patchElement({
+            revisionId: draftRevisionId,
+            elementId: line.itemId,
+            baseVersionId,
+            patchOps: [{ op: "remove_line", entity: "labor", key: line.itemLaborId, reason: "User deleted line" }],
+        });
+        return;
+    }
+
+    await deleteWorkLine({ id: line.id as Id<"workLines"> });
   };
 
   return (
@@ -105,7 +226,48 @@ export default function LaborTab({
       <div className="space-y-6">
         {filteredSections.map((item) => {
             const { section } = item;
-            const work = item.work.filter((line) => {
+            const previewSnapshot = section.itemId ? previewByElementId.get(String(section.itemId)) : undefined;
+            const workViews: WorkLineView[] = draftOnlyMode && previewSnapshot
+                ? previewSnapshot.labor.map((line) => ({
+                    id: line.laborKey,
+                    laborKey: line.laborKey,
+                    itemId: section.itemId ?? undefined,
+                    itemLaborId: line.laborKey,
+                    workType: line.bucketKey,
+                    role: line.role,
+                    rateType: line.unit,
+                    plannedQuantity: line.qty,
+                    plannedUnitCost: line.rate,
+                    status: "planned",
+                    description: line.notes,
+                    quoteVisibility: "include",
+                    isManagement: false,
+                    generation: "generated",
+                    lock: false,
+                    isPreview: true,
+                }))
+                : item.work.map((line) => ({
+                    id: String(line._id),
+                    laborKey: line.itemLaborId ?? String(line._id),
+                    itemId: line.itemId ?? undefined,
+                    itemLaborId: line.itemLaborId ?? undefined,
+                    workType: line.workType,
+                    role: line.role,
+                    rateType: line.rateType,
+                    plannedQuantity: line.plannedQuantity,
+                    plannedUnitCost: line.plannedUnitCost,
+                    actualQuantity: line.actualQuantity,
+                    actualUnitCost: line.actualUnitCost,
+                    status: line.status,
+                    description: line.description,
+                    quoteVisibility: line.quoteVisibility,
+                    isManagement: line.isManagement,
+                    generation: line.generation,
+                    lock: line.lock,
+                    isPreview: false,
+                }));
+
+            const work = workViews.filter((line) => {
                 if (!options.includeManagement && line.isManagement) return false;
                 if (!options.respectVisibility) return true;
                 const visibility = line.quoteVisibility ?? "include";
@@ -126,7 +288,7 @@ export default function LaborTab({
                              <button 
                                 className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded flex items-center hover:bg-purple-200 disabled:opacity-50"
                                 onClick={() => handleEstimate(section._id)}
-                                disabled={estimatingIds.has(section._id)}
+                                disabled={estimatingIds.has(section._id) || draftOnlyMode}
                              >
                                 <Wand2 className={`w-3 h-3 mr-1 ${estimatingIds.has(section._id) ? "animate-spin" : ""}`} /> 
                                 {estimatingIds.has(section._id) ? "Estimating..." : "Auto-Estimate"}
@@ -137,6 +299,7 @@ export default function LaborTab({
                                         className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200"
                                         onClick={() => syncFromAccounting({ itemId: item.item!._id, sectionId: section._id })}
                                         title="Sync item from accounting"
+                                        disabled={draftOnlyMode}
                                     >
                                         Sync from accounting
                                     </button>
@@ -144,6 +307,7 @@ export default function LaborTab({
                                         className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200"
                                         onClick={() => syncApproved({ itemId: item.item!._id })}
                                         title="Sync accounting from item"
+                                        disabled={draftOnlyMode}
                                     >
                                         Sync to accounting
                                     </button>
@@ -151,7 +315,8 @@ export default function LaborTab({
                              )}
                              <button 
                                 onClick={() => handleAddLine(section._id)}
-                                className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 flex items-center"
+                                className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 flex items-center disabled:opacity-50"
+                                disabled={!allowInlineEditsSafe}
                              >
                                 <Plus className="w-3 h-3 mr-1" /> Add Task
                              </button>
@@ -179,12 +344,41 @@ export default function LaborTab({
                                 <tbody className="divide-y divide-gray-200 bg-white">
                                     {work.map((w) => (
                                         <WorkRow 
-                                            key={w._id} 
+                                            key={w.laborKey} 
                                             line={w} 
                                             update={async (args) => {
-                                                await updateWorkLine(args);
+                                                if (draftOnlyMode && !draftRevisionId) {
+                                                    alert("Draft edits require an active draft.");
+                                                    return;
+                                                }
+                                                if (draftOnlyMode && draftRevisionId) {
+                                                    const elementId = w.itemId;
+                                                    if (!elementId) {
+                                                        alert("Draft edits require a linked element.");
+                                                        return;
+                                                    }
+                                                    const element = elementsById.get(String(elementId));
+                                                    const baseVersionId = element?.publishedVersionId ?? undefined;
+                                                    const nextLine = { ...w, ...args.updates };
+                                                    const laborKey = nextLine.laborKey || createElementKey("lab");
+                                                    const value = buildLaborValue({ ...nextLine, laborKey });
+                                                    await patchElement({
+                                                        revisionId: draftRevisionId,
+                                                        elementId,
+                                                        baseVersionId,
+                                                        patchOps: [{ op: "upsert_line", entity: "labor", key: laborKey, value }],
+                                                    });
+                                                    return;
+                                                }
+
+                                                await updateWorkLine({
+                                                    id: args.id as Id<"workLines">,
+                                                    updates: args.updates,
+                                                });
                                             }}
-                                            onDelete={() => handleDeleteLine(w._id)}
+                                            onDelete={() => handleDeleteLine(w)}
+                                            allowInlineEdits={allowInlineEditsSafe}
+                                            allowLockToggle={!draftOnlyMode}
                                         />
                                     ))}
                                 </tbody>
@@ -203,10 +397,12 @@ function WorkRow({
     line,
     update,
     onDelete,
+    allowInlineEdits,
+    allowLockToggle,
 }: {
-    line: Doc<"workLines">;
+    line: WorkLineView;
     update: (args: {
-        id: Id<"workLines">;
+        id: string;
         updates: {
             workType?: string;
             role?: string;
@@ -221,6 +417,8 @@ function WorkRow({
         };
     }) => Promise<void>;
     onDelete: () => void;
+    allowInlineEdits: boolean;
+    allowLockToggle: boolean;
 }) {
     const [isEditing, setIsEditing] = useState(false);
     const [draft, setDraft] = useState({
@@ -272,7 +470,7 @@ function WorkRow({
 
     const handleSave = async () => {
         await update({
-            id: line._id,
+            id: line.id,
             updates: {
                 role: draft.role || line.role,
                 description: draft.description || undefined,
@@ -458,6 +656,7 @@ function WorkRow({
                             className="text-blue-600 hover:text-blue-700"
                             title="Edit"
                             onClick={() => setIsEditing(true)}
+                            disabled={!allowInlineEdits}
                         >
                             <Pencil className="w-4 h-4" />
                         </button>
@@ -465,7 +664,8 @@ function WorkRow({
                     <button
                         className="text-gray-500 hover:text-amber-600"
                         title={line.lock ? "Unlock line" : "Lock line"}
-                        onClick={() => update({ id: line._id, updates: { lock: !line.lock } })}
+                        onClick={() => update({ id: line.id, updates: { lock: !line.lock } })}
+                        disabled={!allowInlineEdits || !allowLockToggle}
                     >
                         {line.lock ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
                     </button>
@@ -473,6 +673,7 @@ function WorkRow({
                         className="text-red-500 hover:text-red-600"
                         title="Delete"
                         onClick={onDelete}
+                        disabled={!allowInlineEdits}
                     >
                         <Trash2 className="w-4 h-4" />
                     </button>

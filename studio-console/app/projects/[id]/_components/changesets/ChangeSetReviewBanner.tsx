@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../../convex/_generated/dataModel";
@@ -20,9 +20,11 @@ type Phase =
 export function ChangeSetReviewBanner({
     projectId,
     phase,
+    openSignal,
 }: {
     projectId: Id<"projects">;
     phase: Phase;
+    openSignal?: number;
 }) {
     const pending = useQuery(api.changeSets.listByProject, { projectId, phase, status: "pending" }) as
         | Array<Doc<"itemChangeSets">>
@@ -52,6 +54,17 @@ export function ChangeSetReviewBanner({
         }
         return groups;
     }, [activeDetail]);
+
+    useEffect(() => {
+        if (!openSignal) return;
+        if (!pending || pending.length === 0) return;
+        if (activeId && pending.some((item) => item._id === activeId)) {
+            setIsOpen(true);
+            return;
+        }
+        setActiveId(pending[0]?._id ?? null);
+        setIsOpen(true);
+    }, [openSignal, pending, activeId]);
 
     if (!pending) return null;
 

@@ -17,18 +17,27 @@ export function TaskModal({
     projectId,
     task,
     onClose,
+    elementsCanonical = false,
+    draftRevisionId = null,
+    elementsById,
 }: {
     projectId: Id<"projects">;
     task: Doc<"tasks">;
     onClose: () => void;
+    elementsCanonical?: boolean;
+    draftRevisionId?: Id<"revisions"> | null;
+    elementsById?: Map<string, Doc<"projectItems">>;
 }) {
     const ensureThread = useMutation(api.chat.ensureThread);
     const updateTask = useMutation(api.tasks.updateTask);
+    const patchElement = useMutation(api.revisions.patchElement);
     const sendAiPatch = useAction(api.agents.taskEditor.send);
     const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
+    const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
     const quests = useQuery(api.quests.list, { projectId });
 
     const [threadId, setThreadId] = useState<Id<"chatThreads"> | null>(null);
+    const draftOnlyMode = elementsCanonical && Boolean(draftRevisionId);
 
     const [title, setTitle] = useState(task.title);
     const [description, setDescription] = useState(task.description ?? "");
@@ -57,6 +66,37 @@ export function TaskModal({
     );
 
     const itemOptions = useMemo(() => itemsData?.items ?? [], [itemsData?.items]);
+    const taskKeyById = useMemo(() => {
+        const map = new Map<string, string>();
+        (tasks ?? []).forEach((row) => {
+            if (row.itemSubtaskId && /^tsk_[a-f0-9]{8}$/.test(row.itemSubtaskId)) {
+                map.set(String(row._id), row.itemSubtaskId);
+            }
+        });
+        return map;
+    }, [tasks]);
+
+    const isElementTaskKey = (value?: string | null) => Boolean(value && /^tsk_[a-f0-9]{8}$/.test(value));
+    const createTaskKey = () => {
+        const suffix = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+        return `tsk_${suffix}`;
+    };
+    const buildTaskValue = (nextTask: Doc<"tasks">, taskKey: string) => {
+        const dependencies = (nextTask.dependencies ?? [])
+            .map((id) => taskKeyById.get(String(id)))
+            .filter((key): key is string => Boolean(key));
+        return {
+            taskKey,
+            title: nextTask.title,
+            details: nextTask.description ?? "",
+            bucketKey: "general",
+            taskType: "normal",
+            estimate: "",
+            dependencies,
+            usesMaterialKeys: [],
+            usesLaborKeys: [],
+        };
+    };
 
     const approvedSpec = useMemo<ItemSpecV2 | null>(() => {
         if (!itemData) return null;
@@ -139,20 +179,80 @@ export function TaskModal({
         const estimated =
             estimatedMinutes.trim().length === 0 ? null : Number.isFinite(Number(estimatedMinutes)) ? Number(estimatedMinutes) : null;
 
-        await updateTask({
-            taskId: task._id,
+        const previousElementId = task.itemId;
+        const nextElementId = linkedItemId || undefined;
+        const previousTaskKey = isElementTaskKey(task.itemSubtaskId) ? task.itemSubtaskId : undefined;
+        const ensureTaskKey = elementsCanonical && draftRevisionId && nextElementId
+            ? previousTaskKey ?? createTaskKey()
+            : undefined;
+        const nextSubtaskId = elementsCanonical ? (ensureTaskKey ?? previousTaskKey) : (linkedSubtaskId || undefined);
+
+        if (!draftOnlyMode) {
+            await updateTask({
+                taskId: task._id,
+                title: title.trim() || task.title,
+                description: description.trim() ? description : undefined,
+                status,
+                category,
+                priority,
+                questId: questId || undefined,
+                itemId: linkedItemId || undefined,
+                itemSubtaskId: nextSubtaskId,
+                estimatedMinutes: estimated,
+                steps,
+                subtasks,
+                assignee: assignee.trim() ? assignee.trim() : null,
+            });
+        }
+
+        if (!elementsCanonical || !draftRevisionId) return;
+        const elementMap = elementsById ?? new Map();
+        if (previousElementId && previousElementId !== nextElementId && previousTaskKey) {
+            const previousElement = elementMap.get(String(previousElementId));
+            const baseVersionId = previousElement?.publishedVersionId ?? undefined;
+            await patchElement({
+                revisionId: draftRevisionId,
+                elementId: previousElementId,
+                baseVersionId,
+                patchOps: [{ op: "remove_line", entity: "tasks", key: previousTaskKey, reason: "Moved task to another element" }],
+            });
+        }
+        if (previousElementId && !nextElementId && previousTaskKey) {
+            const previousElement = elementMap.get(String(previousElementId));
+            const baseVersionId = previousElement?.publishedVersionId ?? undefined;
+            await patchElement({
+                revisionId: draftRevisionId,
+                elementId: previousElementId,
+                baseVersionId,
+                patchOps: [{ op: "remove_line", entity: "tasks", key: previousTaskKey, reason: "Unlinked task from element" }],
+            });
+        }
+        if (!nextElementId) return;
+        const taskKey = isElementTaskKey(nextSubtaskId) ? nextSubtaskId : ensureTaskKey;
+        if (!taskKey) return;
+        const nextTask: Doc<"tasks"> = {
+            ...task,
             title: title.trim() || task.title,
             description: description.trim() ? description : undefined,
             status,
             category,
             priority,
             questId: questId || undefined,
-            itemId: linkedItemId || undefined,
-            itemSubtaskId: linkedSubtaskId || undefined,
+            itemId: nextElementId,
+            itemSubtaskId: taskKey,
             estimatedMinutes: estimated,
             steps,
             subtasks,
             assignee: assignee.trim() ? assignee.trim() : null,
+        };
+        const element = elementMap.get(String(nextElementId));
+        const baseVersionId = element?.publishedVersionId ?? undefined;
+        const value = buildTaskValue(nextTask, taskKey);
+        await patchElement({
+            revisionId: draftRevisionId,
+            elementId: nextElementId,
+            baseVersionId,
+            patchOps: [{ op: "upsert_line", entity: "tasks", key: taskKey, value }],
         });
     }
 
@@ -169,6 +269,11 @@ export function TaskModal({
                     <div>
                         <div className="text-xs text-gray-500">Task #{task.taskNumber ?? "?"}</div>
                         <div className="text-lg font-semibold text-gray-900">Edit task</div>
+                        {draftOnlyMode && (
+                            <div className="text-xs text-amber-700 mt-1">
+                                Draft mode: only title, description, and element link are saved to the snapshot.
+                            </div>
+                        )}
                     </div>
                     <div className="flex items-center gap-2">
                         <button
@@ -214,6 +319,7 @@ export function TaskModal({
                                     className="w-full border rounded px-3 py-2 text-sm bg-white"
                                     value={status}
                                     onChange={(e) => setStatus(e.target.value as Doc<"tasks">["status"])}
+                                    disabled={draftOnlyMode}
                                 >
                                     {statusOptions.map((s) => (
                                         <option key={s} value={s}>
@@ -231,6 +337,7 @@ export function TaskModal({
                                     className="w-full border rounded px-3 py-2 text-sm bg-white"
                                     value={category}
                                     onChange={(e) => setCategory(e.target.value as Doc<"tasks">["category"])}
+                                    disabled={draftOnlyMode}
                                 >
                                     {categoryOptions.map((c) => (
                                         <option key={c} value={c}>
@@ -248,6 +355,7 @@ export function TaskModal({
                                     className="w-full border rounded px-3 py-2 text-sm bg-white"
                                     value={priority}
                                     onChange={(e) => setPriority(e.target.value as Doc<"tasks">["priority"])}
+                                    disabled={draftOnlyMode}
                                 >
                                     {priorityOptions.map((p) => (
                                         <option key={p} value={p}>
@@ -265,6 +373,7 @@ export function TaskModal({
                                     className="w-full border rounded px-3 py-2 text-sm bg-white"
                                     value={questId}
                                     onChange={(e) => setQuestId(e.target.value as Id<"quests"> | "")}
+                                    disabled={draftOnlyMode}
                                 >
                                     <option value="">Unassigned</option>
                                     {quests?.map((q) => (
@@ -285,6 +394,7 @@ export function TaskModal({
                                     value={estimatedMinutes}
                                     onChange={(e) => setEstimatedMinutes(e.target.value)}
                                     placeholder="e.g. 90"
+                                    disabled={draftOnlyMode}
                                 />
                             </div>
 
@@ -314,19 +424,25 @@ export function TaskModal({
                                 <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
                                     Linked subtask
                                 </label>
-                                <select
-                                    className="w-full border rounded px-3 py-2 text-sm bg-white"
-                                    value={linkedSubtaskId}
-                                    onChange={(e) => setLinkedSubtaskId(e.target.value)}
-                                    disabled={!linkedItemId || availableSubtasks.length === 0}
-                                >
-                                    <option value="">Unassigned</option>
-                                    {availableSubtasks.map((subtask) => (
-                                        <option key={subtask.id} value={subtask.id}>
-                                            {subtask.title}
-                                        </option>
-                                    ))}
-                                </select>
+                                {elementsCanonical ? (
+                                    <div className="text-xs text-gray-500 border rounded px-3 py-2 bg-gray-50">
+                                        Subtask linking is disabled while elements are canonical.
+                                    </div>
+                                ) : (
+                                    <select
+                                        className="w-full border rounded px-3 py-2 text-sm bg-white"
+                                        value={linkedSubtaskId}
+                                        onChange={(e) => setLinkedSubtaskId(e.target.value)}
+                                        disabled={!linkedItemId || availableSubtasks.length === 0}
+                                    >
+                                        <option value="">Unassigned</option>
+                                        {availableSubtasks.map((subtask) => (
+                                            <option key={subtask.id} value={subtask.id}>
+                                                {subtask.title}
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
                             </div>
 
                             <div className="md:col-span-2">
@@ -338,6 +454,7 @@ export function TaskModal({
                                     value={assignee}
                                     onChange={(e) => setAssignee(e.target.value)}
                                     placeholder="Name"
+                                    disabled={draftOnlyMode}
                                 />
                             </div>
 
@@ -360,6 +477,7 @@ export function TaskModal({
                                 value={stepsText}
                                 onChange={(e) => setStepsText(e.target.value)}
                                 placeholder={"One step per line\n1) ...\n2) ..."}
+                                disabled={draftOnlyMode}
                             />
                         </div>
 
@@ -371,7 +489,7 @@ export function TaskModal({
                                 <button
                                     type="button"
                                     className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
-                                    disabled={!newSubtaskTitle.trim()}
+                                    disabled={!newSubtaskTitle.trim() || draftOnlyMode}
                                     onClick={() => {
                                         const title = newSubtaskTitle.trim();
                                         if (!title) return;
@@ -388,6 +506,7 @@ export function TaskModal({
                                     value={newSubtaskTitle}
                                     onChange={(e) => setNewSubtaskTitle(e.target.value)}
                                     placeholder="New subtask title"
+                                    disabled={draftOnlyMode}
                                 />
                             </div>
                             {subtasks.length === 0 ? (
@@ -404,6 +523,7 @@ export function TaskModal({
                                                     next[idx] = { ...st, done: e.target.checked };
                                                     setSubtasks(next);
                                                 }}
+                                                disabled={draftOnlyMode}
                                             />
                                             <input
                                                 className="flex-1 border rounded px-3 py-2 text-sm"
@@ -413,11 +533,13 @@ export function TaskModal({
                                                     next[idx] = { ...st, title: e.target.value };
                                                     setSubtasks(next);
                                                 }}
+                                                disabled={draftOnlyMode}
                                             />
                                             <button
                                                 type="button"
                                                 className="text-xs text-red-600 hover:text-red-800"
                                                 onClick={() => setSubtasks(subtasks.filter((_, i) => i !== idx))}
+                                                disabled={draftOnlyMode}
                                             >
                                                 Remove
                                             </button>

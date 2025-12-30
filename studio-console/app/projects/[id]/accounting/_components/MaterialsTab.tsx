@@ -1,13 +1,39 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useMutation, useAction } from "convex/react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { Save, Plus, Wand2, Pencil, Trash2, X, ShoppingCart, Lock, Unlock } from "lucide-react";
 import { BuyingAssistantPanel } from "../../quote/_components/BuyingAssistantPanel";
 import { type ProjectAccountingData, type ProjectAccountingSection } from "./AccountingTypes";
 import { type CostingOptions } from "@/src/lib/costing";
+import type { ElementSnapshot } from "@/convex/lib/zodSchemas";
+
+type MaterialLineView = {
+    id: string;
+    materialKey: string;
+    itemId?: Id<"projectItems">;
+    itemMaterialId?: string;
+    label: string;
+    category?: string;
+    description?: string;
+    procurement?: "in_stock" | "local" | "abroad" | "either";
+    vendorName?: string;
+    unit: string;
+    plannedQuantity: number;
+    plannedUnitCost: number;
+    actualQuantity?: number;
+    actualUnitCost?: number;
+    status?: string;
+    note?: string;
+    quoteVisibility?: "include" | "exclude" | "optional";
+    isManagement?: boolean;
+    origin?: Doc<"materialLines">["origin"];
+    generation?: Doc<"materialLines">["generation"];
+    lock?: boolean;
+    isPreview: boolean;
+};
 
 export default function MaterialsTab({
     data,
@@ -16,6 +42,10 @@ export default function MaterialsTab({
     includeManagement,
     includeOptional,
     respectVisibility,
+    editMode,
+    draftRevisionId,
+    elementsById,
+    allowInlineEdits,
 }: {
     data: ProjectAccountingData;
     projectId: Id<"projects">;
@@ -23,6 +53,10 @@ export default function MaterialsTab({
     includeManagement: boolean;
     includeOptional: boolean;
     respectVisibility: boolean;
+    editMode: boolean;
+    draftRevisionId: Id<"revisions"> | null;
+    elementsById: Map<string, Doc<"projectItems">>;
+    allowInlineEdits: boolean;
 }) {
     const addMaterialLine = useMutation(api.accounting.addMaterialLine);
     const updateMaterialLine = useMutation(api.accounting.updateMaterialLine);
@@ -31,11 +65,57 @@ export default function MaterialsTab({
     const estimateSection = useAction(api.agents.estimator.run);
     const syncApproved = useMutation(api.items.syncApproved);
     const syncFromAccounting = useMutation(api.items.syncFromAccountingSection);
+    const patchElement = useMutation(api.revisions.patchElement);
 
     const [filterSection, setFilterSection] = useState<string>("all");
     const [estimatingIds, setEstimatingIds] = useState<Set<string>>(new Set());
+    const draftOnlyMode = Boolean(editMode);
+    const allowInlineEditsSafe = allowInlineEdits && (!editMode || Boolean(draftRevisionId));
+
+    const elementIds = useMemo(() => {
+        const ids = new Set<string>();
+        data.sections.forEach((entry) => {
+            if (entry.section.itemId) ids.add(String(entry.section.itemId));
+        });
+        return Array.from(ids) as Id<"projectItems">[];
+    }, [data.sections]);
+
+    const previewSnapshots = useQuery(
+        api.revisions.previewSnapshots,
+        draftOnlyMode && draftRevisionId ? { revisionId: draftRevisionId, elementIds } : "skip",
+    ) as Array<{ elementId: Id<"projectItems">; snapshot: ElementSnapshot }> | undefined;
+
+    const previewByElementId = useMemo(() => {
+        const map = new Map<string, ElementSnapshot>();
+        (previewSnapshots ?? []).forEach((entry) => {
+            map.set(String(entry.elementId), entry.snapshot);
+        });
+        return map;
+    }, [previewSnapshots]);
+
+    const createElementKey = (prefix: "mat" | "lab" | "tsk") => {
+        const suffix = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+        return `${prefix}_${suffix}`;
+    };
+
+    const buildMaterialValue = (line: MaterialLineView) => ({
+        materialKey: line.materialKey || createElementKey("mat"),
+        name: line.label,
+        spec: line.description ?? "",
+        qty: line.plannedQuantity,
+        unit: line.unit,
+        unitCost: line.plannedUnitCost,
+        bucketKey: line.category ?? "General",
+        needPurchase: (line.procurement ?? "either") !== "in_stock",
+        vendorRef: line.vendorName ?? undefined,
+        notes: line.note ?? undefined,
+    });
 
     const handleEstimate = async (sectionId: string) => {
+        if (draftOnlyMode) {
+            alert("Auto-estimate is disabled while editing a draft. Approve the draft first.");
+            return;
+        }
         if (!confirm("This will generate new material and labor lines using AI. Continue?")) return;
         setEstimatingIds(prev => new Set(prev).add(sectionId));
         try {
@@ -68,31 +148,85 @@ export default function MaterialsTab({
             : baseSections.filter((s: ProjectAccountingSection) => s.section._id === filterSection);
 
     const handleAddLine = async (sectionId: Id<"sections">) => {
+        const elementId = data.sections.find((s) => s.section._id === sectionId)?.section.itemId ?? undefined;
+        if (editMode && (!draftRevisionId || !elementId)) {
+            alert("Draft edits require a linked element.");
+            return;
+        }
+        const itemMaterialId = createElementKey("mat");
+        if (draftOnlyMode && draftRevisionId && elementId) {
+            const element = elementsById.get(String(elementId));
+            const baseVersionId = element?.publishedVersionId ?? undefined;
+            const value = {
+                materialKey: itemMaterialId,
+                name: "New Material",
+                spec: "",
+                qty: 1,
+                unit: "unit",
+                unitCost: 0,
+                bucketKey: "General",
+                needPurchase: true,
+                vendorRef: undefined,
+                notes: undefined,
+            };
+            await patchElement({
+                revisionId: draftRevisionId,
+                elementId,
+                baseVersionId,
+                patchOps: [{ op: "upsert_line", entity: "materials", key: value.materialKey, value }],
+            });
+            return;
+        }
+
         await addMaterialLine({
             projectId,
             sectionId,
-            itemId: data.sections.find((s) => s.section._id === sectionId)?.section.itemId ?? undefined,
+            itemId: elementId,
+            itemMaterialId,
             category: "General",
             label: "New Material",
             unit: "unit",
             plannedQuantity: 1,
             plannedUnitCost: 0,
-            status: "planned"
+            status: "planned",
         });
     };
 
-    const handleDeleteLine = async (lineId: Id<"materialLines">) => {
+    const handleDeleteLine = async (line: MaterialLineView) => {
         if (!confirm("Delete this material line?")) return;
-        await deleteMaterialLine({ id: lineId });
+        if (draftOnlyMode && !draftRevisionId) {
+            alert("Draft edits require an active draft.");
+            return;
+        }
+        if (draftOnlyMode && draftRevisionId) {
+            if (!line.itemId || !line.itemMaterialId) {
+                alert("Draft edits require a linked element and material key.");
+                return;
+            }
+            const element = elementsById.get(String(line.itemId));
+            const baseVersionId = element?.publishedVersionId ?? undefined;
+            await patchElement({
+                revisionId: draftRevisionId,
+                elementId: line.itemId,
+                baseVersionId,
+                patchOps: [{ op: "remove_line", entity: "materials", key: line.itemMaterialId, reason: "User deleted line" }],
+            });
+            return;
+        }
+
+        await deleteMaterialLine({ id: line.id as Id<"materialLines"> });
     };
 
-    const handleSaveToCatalog = async (line: Doc<"materialLines">) => {
+    const handleSaveToCatalog = async (line: MaterialLineView) => {
+        if (draftOnlyMode) {
+            alert("Catalog saves are disabled while editing a draft.");
+            return;
+        }
         await saveToCatalog({
-            category: line.category,
+            category: line.category ?? "General",
             name: line.label,
             defaultUnit: line.unit,
             lastPrice: line.actualUnitCost || line.plannedUnitCost,
-            vendorId: line.vendorId
         });
         alert("Saved to catalog!");
     };
@@ -118,7 +252,55 @@ export default function MaterialsTab({
             <div className="space-y-6">
                 {filteredSections.map((item) => {
                     const { section } = item;
-                    const materials = item.materials.filter((line) => {
+                    const previewSnapshot = section.itemId ? previewByElementId.get(String(section.itemId)) : undefined;
+                    const materialViews: MaterialLineView[] = draftOnlyMode && previewSnapshot
+                        ? previewSnapshot.materials.map((line) => ({
+                            id: line.materialKey,
+                            materialKey: line.materialKey,
+                            itemId: section.itemId ?? undefined,
+                            itemMaterialId: line.materialKey,
+                            label: line.name,
+                            category: line.bucketKey,
+                            description: line.spec,
+                            procurement: line.needPurchase ? "local" : "in_stock",
+                            vendorName: line.vendorRef,
+                            unit: line.unit,
+                            plannedQuantity: line.qty,
+                            plannedUnitCost: line.unitCost ?? 0,
+                            status: "planned",
+                            note: line.notes,
+                            quoteVisibility: "include",
+                            isManagement: false,
+                            generation: "generated",
+                            lock: false,
+                            isPreview: true,
+                        }))
+                        : item.materials.map((line) => ({
+                            id: String(line._id),
+                            materialKey: line.itemMaterialId ?? String(line._id),
+                            itemId: line.itemId ?? undefined,
+                            itemMaterialId: line.itemMaterialId ?? undefined,
+                            label: line.label,
+                            category: line.category,
+                            description: line.description,
+                            procurement: line.procurement,
+                            vendorName: line.vendorName,
+                            unit: line.unit,
+                            plannedQuantity: line.plannedQuantity,
+                            plannedUnitCost: line.plannedUnitCost,
+                            actualQuantity: line.actualQuantity,
+                            actualUnitCost: line.actualUnitCost,
+                            status: line.status,
+                            note: line.note,
+                            quoteVisibility: line.quoteVisibility,
+                            isManagement: line.isManagement,
+                            origin: line.origin,
+                            generation: line.generation,
+                            lock: line.lock,
+                            isPreview: false,
+                        }));
+
+                    const materials = materialViews.filter((line) => {
                         if (!options.includeManagement && line.isManagement) return false;
                         if (!options.respectVisibility) return true;
                         const visibility = line.quoteVisibility ?? "include";
@@ -140,7 +322,7 @@ export default function MaterialsTab({
                                         className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded flex items-center hover:bg-purple-200 disabled:opacity-50"
                                         title="Use AI to estimate materials"
                                         onClick={() => handleEstimate(section._id)}
-                                        disabled={estimatingIds.has(section._id)}
+                                        disabled={estimatingIds.has(section._id) || draftOnlyMode}
                                     >
                                         <Wand2 className={`w-3 h-3 mr-1 ${estimatingIds.has(section._id) ? "animate-spin" : ""}`} />
                                         {estimatingIds.has(section._id) ? "Estimating..." : "Auto-Estimate"}
@@ -151,6 +333,7 @@ export default function MaterialsTab({
                                                 className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200"
                                                 onClick={() => syncFromAccounting({ itemId: item.item!._id, sectionId: section._id })}
                                                 title="Sync item from accounting"
+                                                disabled={draftOnlyMode}
                                             >
                                                 Sync from accounting
                                             </button>
@@ -158,6 +341,7 @@ export default function MaterialsTab({
                                                 className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200"
                                                 onClick={() => syncApproved({ itemId: item.item!._id })}
                                                 title="Sync accounting from item"
+                                                disabled={draftOnlyMode}
                                             >
                                                 Sync to accounting
                                             </button>
@@ -165,7 +349,8 @@ export default function MaterialsTab({
                                     )}
                                     <button
                                         onClick={() => handleAddLine(section._id)}
-                                        className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 flex items-center"
+                                        className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 flex items-center disabled:opacity-50"
+                                        disabled={!allowInlineEditsSafe}
                                     >
                                         <Plus className="w-3 h-3 mr-1" /> Add Item
                                     </button>
@@ -192,15 +377,44 @@ export default function MaterialsTab({
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-200 bg-white">
-                                            {materials.map((m) => (
-                                                <MaterialRow
-                                                    key={m._id}
+                                    {materials.map((m) => (
+                                        <MaterialRow
+                                                    key={m.materialKey}
                                                     line={m}
                                                     update={async (args) => {
-                                                        await updateMaterialLine(args);
+                                                        if (draftOnlyMode && !draftRevisionId) {
+                                                            alert("Draft edits require an active draft.");
+                                                            return;
+                                                        }
+                                                        if (draftOnlyMode && draftRevisionId) {
+                                                            const elementId = m.itemId;
+                                                            if (!elementId) {
+                                                                alert("Draft edits require a linked element.");
+                                                                return;
+                                                            }
+                                                            const element = elementsById.get(String(elementId));
+                                                            const baseVersionId = element?.publishedVersionId ?? undefined;
+                                                            const nextLine = { ...m, ...args.updates };
+                                                            const materialKey = nextLine.materialKey || createElementKey("mat");
+                                                            const value = buildMaterialValue({ ...nextLine, materialKey });
+                                                            await patchElement({
+                                                                revisionId: draftRevisionId,
+                                                                elementId,
+                                                                baseVersionId,
+                                                                patchOps: [{ op: "upsert_line", entity: "materials", key: materialKey, value }],
+                                                            });
+                                                            return;
+                                                        }
+
+                                                        await updateMaterialLine({
+                                                            id: args.id as Id<"materialLines">,
+                                                            updates: args.updates,
+                                                        });
                                                     }}
                                                     onSaveCatalog={() => handleSaveToCatalog(m)}
-                                                    onDelete={() => handleDeleteLine(m._id)}
+                                                    onDelete={() => handleDeleteLine(m)}
+                                                    allowInlineEdits={allowInlineEditsSafe}
+                                                    allowLockToggle={!draftOnlyMode}
                                                 />
                                             ))}
                                         </tbody>
@@ -220,10 +434,12 @@ function MaterialRow({
     update,
     onSaveCatalog,
     onDelete,
+    allowInlineEdits,
+    allowLockToggle,
 }: {
-    line: Doc<"materialLines">;
+    line: MaterialLineView;
     update: (args: {
-        id: Id<"materialLines">;
+        id: string;
         updates: {
             category?: string;
             label?: string;
@@ -242,6 +458,8 @@ function MaterialRow({
     }) => Promise<void>;
     onSaveCatalog: () => void;
     onDelete: () => void;
+    allowInlineEdits: boolean;
+    allowLockToggle: boolean;
 }) {
     const [isEditing, setIsEditing] = useState(false);
     const [showAssistant, setShowAssistant] = useState(false);
@@ -294,7 +512,7 @@ function MaterialRow({
 
     const handleSave = async () => {
         await update({
-            id: line._id,
+            id: line.id,
             updates: {
                 label: draft.label || line.label,
                 category: draft.category || "General",
@@ -333,7 +551,7 @@ function MaterialRow({
         setDraft((prev) => ({ ...prev, procurement: next }));
         if (!isEditing) {
             await update({
-                id: line._id,
+                id: line.id,
                 updates: { procurement: next },
             });
         }
@@ -511,6 +729,7 @@ function MaterialRow({
                                 onClick={() => setIsEditing(true)}
                                 className="text-blue-600 hover:text-blue-700"
                                 title="Edit line"
+                                disabled={!allowInlineEdits}
                             >
                                 <Pencil className="w-4 h-4" />
                             </button>
@@ -519,6 +738,7 @@ function MaterialRow({
                             onClick={() => setShowAssistant(!showAssistant)}
                             className={`hover:text-blue-600 ${showAssistant ? "text-blue-600" : "text-gray-500"}`}
                             title="Buying Assistant"
+                            disabled={!allowInlineEdits}
                         >
                             <ShoppingCart className="w-4 h-4" />
                         </button>
@@ -526,13 +746,15 @@ function MaterialRow({
                             onClick={onSaveCatalog}
                             className="text-gray-500 hover:text-blue-600"
                             title="Save to Catalog"
+                            disabled={!allowInlineEdits}
                         >
                             <Save className="w-4 h-4" />
                         </button>
                         <button
-                            onClick={() => update({ id: line._id, updates: { lock: !line.lock } })}
+                            onClick={() => update({ id: line.id, updates: { lock: !line.lock } })}
                             className="text-gray-500 hover:text-amber-600"
                             title={line.lock ? "Unlock line" : "Lock line"}
+                            disabled={!allowInlineEdits || !allowLockToggle}
                         >
                             {line.lock ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
                         </button>
@@ -540,6 +762,7 @@ function MaterialRow({
                             onClick={onDelete}
                             className="text-red-500 hover:text-red-600"
                             title="Delete line"
+                            disabled={!allowInlineEdits}
                         >
                             <Trash2 className="w-4 h-4" />
                         </button>

@@ -3,7 +3,6 @@ import { action, mutation, query } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ChangeSetSchema } from "./lib/zodSchemas";
-import { ChangeSetSchema } from "./lib/zodSchemas";
 import { recomputeRollups } from "./lib/itemRollups";
 import { buildBaseItemSpec } from "./lib/itemHelpers";
 
@@ -46,6 +45,26 @@ function resolveTaskRef(
         return resolved;
     }
     return undefined;
+}
+
+function isElementKey(value: string | undefined | null, prefix: "tsk" | "mat" | "lab") {
+    if (!value) return false;
+    const regex = new RegExp(`^${prefix}_[a-f0-9]{8}$`);
+    return regex.test(value);
+}
+
+function createElementKey(prefix: "tsk" | "mat" | "lab") {
+    const suffix = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+    return `${prefix}_${suffix}`;
+}
+
+function toOriginTab(phase: Doc<"itemChangeSets">["phase"]) {
+    if (phase === "planning") return "Planning";
+    if (phase === "solutioning") return "Solutioning";
+    if (phase === "accounting") return "Accounting";
+    if (phase === "tasks") return "Tasks";
+    if (phase === "convert") return "Ideation";
+    return "Planning";
 }
 
 export const listByProject = query({
@@ -317,6 +336,21 @@ export const apply = mutation({
         const changeSet = await ctx.db.get(args.changeSetId);
         if (!changeSet) throw new Error("ChangeSet not found");
         if (changeSet.status !== "pending") throw new Error("ChangeSet already decided");
+
+        const project = await ctx.db.get(changeSet.projectId);
+        if (project?.features?.elementsCanonical) {
+            const ops = await ctx.db
+                .query("itemChangeSetOps")
+                .withIndex("by_changeSet", (q) => q.eq("changeSetId", args.changeSetId))
+                .collect();
+
+            await applyChangeSetCanonical(ctx, {
+                changeSet,
+                ops,
+                decidedBy: args.decidedBy,
+            });
+            return { applied: true };
+        }
 
         const ops = await ctx.db
             .query("itemChangeSetOps")
@@ -800,3 +834,467 @@ export const reject = mutation({
         return { rejected: true };
     },
 });
+
+async function applyChangeSetCanonical(
+    ctx: {
+        db: any;
+        runMutation: (ref: unknown, args: unknown) => Promise<unknown>;
+    },
+    args: {
+        changeSet: Doc<"itemChangeSets">;
+        ops: Array<Doc<"itemChangeSetOps">>;
+        decidedBy?: string;
+    },
+) {
+    const { changeSet, ops, decidedBy } = args;
+    const tempItemMap = new Map<string, Id<"projectItems">>();
+    const tempTaskKeyMap = new Map<string, { elementId: Id<"projectItems">; taskKey: string }>();
+    const patchOpsByElement = new Map<Id<"projectItems">, Array<Record<string, unknown>>>();
+
+    const now = Date.now();
+
+    const itemCreateOps = ops.filter((op) => op.entityType === "item" && op.opType === "create");
+    for (const op of itemCreateOps) {
+        const payload = JSON.parse(op.payloadJson) as {
+            tempId: string;
+            parentTempId?: string | null;
+            parentItemId?: string | null;
+            sortKey: string;
+            kind: string;
+            category: string;
+            name: string;
+            description?: string;
+            flags?: Record<string, unknown>;
+            scope?: Record<string, unknown>;
+            quoteDefaults?: Record<string, unknown>;
+            templateId?: string;
+            templateVersion?: number;
+        };
+
+        const parentItemId = payload.parentItemId
+            ? (payload.parentItemId as Id<"projectItems">)
+            : payload.parentTempId
+                ? tempItemMap.get(payload.parentTempId) ?? null
+                : null;
+
+        let template: any = null;
+        if (payload.templateId) {
+            if (payload.templateVersion) {
+                template = await ctx.db.query("templateDefinitions")
+                    .withIndex("by_templateId_version", (q) => q.eq("templateId", payload.templateId!).eq("version", payload.templateVersion!))
+                    .first();
+            } else {
+                const templates = await ctx.db.query("templateDefinitions")
+                    .withIndex("by_templateId_version", (q) => q.eq("templateId", payload.templateId!))
+                    .collect();
+                template = templates.sort((a: any, b: any) => b.version - a.version)[0];
+            }
+        }
+
+        const itemId = await ctx.db.insert("projectItems", {
+            projectId: changeSet.projectId,
+            parentItemId,
+            sortKey: payload.sortKey,
+            kind: payload.kind,
+            category: payload.category,
+            name: payload.name,
+            title: payload.name,
+            typeKey: payload.category,
+            description: payload.description || (template?.quotePattern || undefined),
+            flags: payload.flags,
+            scope: payload.scope,
+            quoteDefaults: payload.quoteDefaults,
+            searchText: buildSearchText({
+                name: payload.name,
+                description: payload.description,
+                category: payload.category,
+            }),
+            status: "approved",
+            createdFrom: payload.templateId ? { source: "template", sourceId: payload.templateId } : { source: "agent", sourceId: changeSet._id },
+            latestRevisionNumber: 1,
+            createdAt: now,
+            updatedAt: now,
+        });
+
+        const spec = buildBaseItemSpec(payload.name, payload.category, payload.description || template?.quotePattern);
+        await ctx.db.insert("itemRevisions", {
+            projectId: changeSet.projectId,
+            itemId,
+            tabScope: "planning",
+            phase: changeSet.phase,
+            source: "agent",
+            agentName: changeSet.agentName,
+            runId: changeSet.runId ?? undefined,
+            revisionType: "snapshot",
+            snapshotJson: serializePayload(spec),
+            changeSetId: changeSet._id,
+            revisionNumber: 1,
+            state: "approved",
+            data: spec,
+            createdBy: { kind: "agent" },
+            createdAt: now,
+        });
+
+        tempItemMap.set(payload.tempId, itemId);
+    }
+
+    const itemPatchOps = ops.filter((op) => op.entityType === "item" && op.opType === "patch");
+    for (const op of itemPatchOps) {
+        const payload = JSON.parse(op.payloadJson) as { itemId: string; patch: Record<string, unknown> };
+        const itemId = payload.itemId as Id<"projectItems">;
+        const item = await ctx.db.get(itemId);
+        if (!item) continue;
+
+        const name = (payload.patch.name as string | undefined) ?? item.name ?? item.title;
+        const description = (payload.patch.description as string | undefined) ?? item.description;
+        const category = (payload.patch.category as string | undefined) ?? item.category ?? item.typeKey;
+
+        await ctx.db.patch(itemId, {
+            ...payload.patch,
+            title: payload.patch.name ?? item.title,
+            typeKey: payload.patch.category ?? item.typeKey,
+            searchText: buildSearchText({ name, description, category }),
+            updatedAt: now,
+        });
+
+        await ctx.db.insert("itemRevisions", {
+            projectId: changeSet.projectId,
+            itemId,
+            tabScope: "planning",
+            phase: changeSet.phase,
+            source: "agent",
+            agentName: changeSet.agentName,
+            runId: changeSet.runId ?? undefined,
+            revisionType: "patch",
+            patchJson: op.payloadJson,
+            changeSetId: changeSet._id,
+            revisionNumber: (item.latestRevisionNumber ?? 0) + 1,
+            state: "approved",
+            data: payload,
+            createdBy: { kind: "agent" },
+            createdAt: now,
+        });
+
+        await ctx.db.patch(itemId, {
+            latestRevisionNumber: (item.latestRevisionNumber ?? 0) + 1,
+            updatedAt: now,
+        });
+    }
+
+    const itemDeleteOps = ops.filter((op) => op.entityType === "item" && op.opType === "delete");
+    for (const op of itemDeleteOps) {
+        const payload = JSON.parse(op.payloadJson) as { itemId: string };
+        await ctx.db.patch(payload.itemId as Id<"projectItems">, {
+            deleteRequestedAt: now,
+            deleteRequestedBy: changeSet.agentName,
+            deletedAt: undefined,
+            updatedAt: now,
+        });
+    }
+
+    const upsertTaskOp = (elementId: Id<"projectItems">, taskKey: string, value: Record<string, unknown>) => {
+        const opsList = patchOpsByElement.get(elementId) ?? [];
+        const existing = opsList.find((op) => op.op === "upsert_line" && op.entity === "tasks" && op.key === taskKey);
+        if (existing) {
+            existing.value = value;
+        } else {
+            opsList.push({ op: "upsert_line", entity: "tasks", key: taskKey, value });
+        }
+        patchOpsByElement.set(elementId, opsList);
+    };
+
+    const upsertMaterialOp = (elementId: Id<"projectItems">, materialKey: string, value: Record<string, unknown>) => {
+        const opsList = patchOpsByElement.get(elementId) ?? [];
+        const existing = opsList.find((op) => op.op === "upsert_line" && op.entity === "materials" && op.key === materialKey);
+        if (existing) {
+            existing.value = value;
+        } else {
+            opsList.push({ op: "upsert_line", entity: "materials", key: materialKey, value });
+        }
+        patchOpsByElement.set(elementId, opsList);
+    };
+
+    const upsertLaborOp = (elementId: Id<"projectItems">, laborKey: string, value: Record<string, unknown>) => {
+        const opsList = patchOpsByElement.get(elementId) ?? [];
+        const existing = opsList.find((op) => op.op === "upsert_line" && op.entity === "labor" && op.key === laborKey);
+        if (existing) {
+            existing.value = value;
+        } else {
+            opsList.push({ op: "upsert_line", entity: "labor", key: laborKey, value });
+        }
+        patchOpsByElement.set(elementId, opsList);
+    };
+
+    const taskCreateOps = ops.filter((op) => op.entityType === "task" && op.opType === "create");
+    for (const op of taskCreateOps) {
+        const payload = JSON.parse(op.payloadJson) as {
+            tempId: string;
+            itemRef: { itemId?: string | null; itemTempId?: string | null };
+            title: string;
+            description?: string;
+            durationHours: number;
+            category?: string;
+        };
+
+        const itemId = resolveItemRef(payload.itemRef, tempItemMap);
+        if (!itemId) continue;
+        const taskKey = createElementKey("tsk");
+        const value = {
+            taskKey,
+            title: payload.title,
+            details: payload.description ?? "",
+            bucketKey: (payload.category ?? "general").toLowerCase(),
+            taskType: "normal",
+            estimate: payload.durationHours ? `${payload.durationHours}h` : "",
+            dependencies: [],
+            usesMaterialKeys: [],
+            usesLaborKeys: [],
+        };
+        tempTaskKeyMap.set(payload.tempId, { elementId: itemId, taskKey });
+        upsertTaskOp(itemId, taskKey, value);
+    }
+
+    const taskPatchOps = ops.filter((op) => op.entityType === "task" && op.opType === "patch");
+    for (const op of taskPatchOps) {
+        const payload = JSON.parse(op.payloadJson) as { taskId: string; patch: Record<string, unknown> };
+        const task = await ctx.db.get(payload.taskId as Id<"tasks">);
+        if (!task || !task.itemId) continue;
+        const elementId = task.itemId;
+        const taskKey = isElementKey(task.itemSubtaskId, "tsk") ? (task.itemSubtaskId as string) : createElementKey("tsk");
+        const durationHours = payload.patch.durationHours as number | undefined;
+        const value = {
+            taskKey,
+            title: (payload.patch.title as string | undefined) ?? task.title,
+            details: (payload.patch.description as string | undefined) ?? task.description ?? "",
+            bucketKey: (task.category ?? "general").toLowerCase(),
+            taskType: "normal",
+            estimate: durationHours ? `${durationHours}h` : "",
+            dependencies: [],
+            usesMaterialKeys: [],
+            usesLaborKeys: [],
+        };
+        tempTaskKeyMap.set(String(task._id), { elementId, taskKey });
+        upsertTaskOp(elementId, taskKey, value);
+    }
+
+    const dependencyOps = ops.filter((op) => op.entityType === "dependency");
+    for (const op of dependencyOps) {
+        const payload = JSON.parse(op.payloadJson) as {
+            fromTaskRef: { taskId?: string | null; taskTempId?: string | null };
+            toTaskRef: { taskId?: string | null; taskTempId?: string | null };
+        };
+        const fromRef = payload.fromTaskRef?.taskTempId
+            ? tempTaskKeyMap.get(payload.fromTaskRef.taskTempId)
+            : payload.fromTaskRef?.taskId
+                ? tempTaskKeyMap.get(payload.fromTaskRef.taskId)
+                : undefined;
+        const toRef = payload.toTaskRef?.taskTempId
+            ? tempTaskKeyMap.get(payload.toTaskRef.taskTempId)
+            : payload.toTaskRef?.taskId
+                ? tempTaskKeyMap.get(payload.toTaskRef.taskId)
+                : undefined;
+
+        if (!fromRef || !toRef) continue;
+        if (fromRef.elementId !== toRef.elementId) continue;
+
+        const opsList = patchOpsByElement.get(toRef.elementId) ?? [];
+        const existing = opsList.find((entry) => entry.op === "upsert_line" && entry.entity === "tasks" && entry.key === toRef.taskKey);
+        if (!existing) continue;
+        const value = existing.value as { dependencies?: string[] };
+        const dependencies = new Set(value.dependencies ?? []);
+        dependencies.add(fromRef.taskKey);
+        value.dependencies = Array.from(dependencies);
+        existing.value = value;
+        patchOpsByElement.set(toRef.elementId, opsList);
+    }
+
+    const materialCreateOps = ops.filter((op) => op.entityType === "materialLine" && op.opType === "create");
+    for (const op of materialCreateOps) {
+        const payload = JSON.parse(op.payloadJson) as {
+            itemRef?: { itemId?: string | null; itemTempId?: string | null };
+            category: string;
+            label: string;
+            description?: string;
+            unit: string;
+            plannedQuantity: number;
+            plannedUnitCost: number;
+            procurement?: string;
+            supplierName?: string;
+        };
+        const itemId = payload.itemRef ? resolveItemRef(payload.itemRef, tempItemMap) : undefined;
+        if (!itemId) continue;
+        const materialKey = createElementKey("mat");
+        const value = {
+            materialKey,
+            name: payload.label,
+            spec: payload.description ?? "",
+            qty: payload.plannedQuantity,
+            unit: payload.unit,
+            unitCost: payload.plannedUnitCost,
+            bucketKey: payload.category || "General",
+            needPurchase: payload.procurement ? payload.procurement !== "in_stock" : true,
+            vendorRef: payload.supplierName ?? undefined,
+            notes: undefined,
+        };
+        upsertMaterialOp(itemId, materialKey, value);
+    }
+
+    const materialPatchOps = ops.filter((op) => op.entityType === "materialLine" && op.opType === "patch");
+    for (const op of materialPatchOps) {
+        const payload = JSON.parse(op.payloadJson) as { lineId: string; patch: Record<string, unknown> };
+        const line = await ctx.db.get(payload.lineId as Id<"materialLines">);
+        if (!line || !line.itemId) continue;
+        const elementId = line.itemId;
+        const materialKey = isElementKey(line.itemMaterialId, "mat") ? (line.itemMaterialId as string) : createElementKey("mat");
+        const value = {
+            materialKey,
+            name: (payload.patch.label as string | undefined) ?? line.label,
+            spec: (payload.patch.description as string | undefined) ?? line.description ?? "",
+            qty: (payload.patch.plannedQuantity as number | undefined) ?? line.plannedQuantity,
+            unit: line.unit,
+            unitCost: (payload.patch.plannedUnitCost as number | undefined) ?? line.plannedUnitCost,
+            bucketKey: (payload.patch.category as string | undefined) ?? line.category ?? "General",
+            needPurchase: (line.procurement ?? "either") !== "in_stock",
+            vendorRef: line.vendorName ?? undefined,
+            notes: undefined,
+        };
+        upsertMaterialOp(elementId, materialKey, value);
+    }
+
+    const materialDeleteOps = ops.filter((op) => op.entityType === "materialLine" && op.opType === "delete");
+    for (const op of materialDeleteOps) {
+        const payload = JSON.parse(op.payloadJson) as { lineId: string };
+        const line = await ctx.db.get(payload.lineId as Id<"materialLines">);
+        if (!line || !line.itemId) continue;
+        if (!isElementKey(line.itemMaterialId, "mat")) continue;
+        const elementId = line.itemId;
+        const opsList = patchOpsByElement.get(elementId) ?? [];
+        opsList.push({ op: "remove_line", entity: "materials", key: line.itemMaterialId, reason: "ChangeSet delete" });
+        patchOpsByElement.set(elementId, opsList);
+    }
+
+    const accountingCreateOps = ops.filter((op) => op.entityType === "accountingLine" && op.opType === "create");
+    for (const op of accountingCreateOps) {
+        const payload = JSON.parse(op.payloadJson) as {
+            itemRef: { itemId?: string | null; itemTempId?: string | null };
+            lineType: string;
+            title: string;
+            notes?: string;
+            quantity?: number;
+            unit?: string;
+            unitCost?: number;
+            vendorNameFreeText?: string;
+        };
+        const itemId = resolveItemRef(payload.itemRef, tempItemMap);
+        if (!itemId) continue;
+
+        if (payload.lineType === "material") {
+            const materialKey = createElementKey("mat");
+            const value = {
+                materialKey,
+                name: payload.title,
+                spec: payload.notes ?? "",
+                qty: payload.quantity ?? 1,
+                unit: payload.unit ?? "unit",
+                unitCost: payload.unitCost ?? 0,
+                bucketKey: "Accounting",
+                needPurchase: true,
+                vendorRef: payload.vendorNameFreeText ?? undefined,
+                notes: undefined,
+            };
+            upsertMaterialOp(itemId, materialKey, value);
+        }
+
+        if (payload.lineType === "labor") {
+            const laborKey = createElementKey("lab");
+            const value = {
+                laborKey,
+                role: payload.title,
+                qty: payload.quantity ?? 1,
+                unit: payload.unit ?? "hour",
+                rate: payload.unitCost ?? 0,
+                bucketKey: "Accounting",
+                notes: payload.notes ?? undefined,
+            };
+            upsertLaborOp(itemId, laborKey, value);
+        }
+    }
+
+    const accountingPatchOps = ops.filter((op) => op.entityType === "accountingLine" && op.opType === "patch");
+    for (const op of accountingPatchOps) {
+        const payload = JSON.parse(op.payloadJson) as { lineId: string; patch: Record<string, unknown> };
+        const line = await ctx.db.get(payload.lineId as Id<"accountingLines">);
+        if (!line) continue;
+        if (!line.itemId) continue;
+
+        if (line.lineType === "material") {
+            const materialKey = createElementKey("mat");
+            const value = {
+                materialKey,
+                name: (payload.patch.title as string | undefined) ?? line.title,
+                spec: (payload.patch.notes as string | undefined) ?? line.notes ?? "",
+                qty: (payload.patch.quantity as number | undefined) ?? line.quantity ?? 1,
+                unit: (payload.patch.unit as string | undefined) ?? line.unit ?? "unit",
+                unitCost: (payload.patch.unitCost as number | undefined) ?? line.unitCost ?? 0,
+                bucketKey: "Accounting",
+                needPurchase: true,
+                vendorRef: (payload.patch.vendorNameFreeText as string | undefined) ?? line.vendorNameFreeText ?? undefined,
+                notes: undefined,
+            };
+            upsertMaterialOp(line.itemId, materialKey, value);
+        }
+
+        if (line.lineType === "labor") {
+            const laborKey = createElementKey("lab");
+            const value = {
+                laborKey,
+                role: (payload.patch.title as string | undefined) ?? line.title,
+                qty: (payload.patch.quantity as number | undefined) ?? line.quantity ?? 1,
+                unit: (payload.patch.unit as string | undefined) ?? line.unit ?? "hour",
+                rate: (payload.patch.unitCost as number | undefined) ?? line.unitCost ?? 0,
+                bucketKey: "Accounting",
+                notes: (payload.patch.notes as string | undefined) ?? line.notes ?? undefined,
+            };
+            upsertLaborOp(line.itemId, laborKey, value);
+        }
+    }
+
+    let revisionId: Id<"revisions"> | null = null;
+    if (patchOpsByElement.size > 0) {
+        revisionId = await ctx.db.insert("revisions", {
+            projectId: changeSet.projectId,
+            status: "draft",
+            originTab: toOriginTab(changeSet.phase),
+            actionType: "agent_suggestions",
+            tags: [],
+            summary: changeSet.title ?? "ChangeSet suggestions",
+            affectedElementIds: [],
+            createdAt: Date.now(),
+            createdBy: decidedBy ?? changeSet.agentName,
+        });
+
+        for (const [elementId, patchOps] of patchOpsByElement.entries()) {
+            const element = await ctx.db.get(elementId);
+            if (!element) continue;
+            await ctx.runMutation(api.revisions.patchElement, {
+                revisionId,
+                elementId,
+                baseVersionId: element.publishedVersionId ?? undefined,
+                patchOps,
+            });
+        }
+
+        await ctx.runMutation(api.revisions.approve, {
+            revisionId,
+            approvedBy: decidedBy ?? changeSet.agentName,
+        });
+    }
+
+    await ctx.db.patch(changeSet._id, {
+        status: "approved",
+        decidedAt: now,
+        decidedBy,
+    });
+
+    await recomputeRollups(ctx, { projectId: changeSet.projectId });
+}

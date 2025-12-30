@@ -1,0 +1,182 @@
+# Elements Implementation Plan (Gemini Latest)
+
+**Date:** 2024-12-29
+**Goal:** Implement the "Elements as Canonical" architecture, replacing the complex "Facts V2" system with a streamlined "Current Knowledge" and "Accepted Facts" pipeline.
+**Constraint:** Do not delete code; use Feature Flags (`elementsCanonical`) to gate new functionality. Hide "Facts V2" (`factAtoms`) behind flags/deprecation.
+
+---
+
+## 1. Architecture Overview
+
+The system transitions from a "Bag of Facts" model to a **Structured Element Model**.
+
+### Core Truth Layers
+1.  **Facts (Input Layer):** Simple, discrete inputs (user chat, forms, ingestion). Mapped to elements/fields.
+    *   *Status:* Proposed -> Accepted -> Rejected.
+    *   *Storage:* `facts` table (simplified).
+2.  **Elements (Canonical Layer):** The source of truth for the project.
+    *   *Storage:* `projectItems` table (acting as Elements).
+    *   *Versioning:* `elementVersions` (immutable snapshots).
+3.  **Projections (Derived Layer):** Read-only views generated *from* Elements.
+    *   *Storage:* `tasks`, `materialLines`, `accountingLines`, `quotes`.
+    *   *Rule:* No direct edits to these tables in the new flow. Edits happen via Drafts -> Approval -> Re-projection.
+
+---
+
+## 2. Data Model & Schema Mapping
+
+We will use existing tables where possible, refactoring `projectItems` to serve as "Elements".
+
+### 2.1 Feature Flags (`projects.features`)
+*   `elementsCanonical`: **Enable** to switch to this new architecture.
+*   `factsV2`: **Disable** (or ignore) to "cancel" the old complex facts system.
+
+### 2.2 Elements (`projectItems`)
+*   **Concept:** Represents a "Canonical Element" (Studio Build, Transport, etc.).
+*   **Existing Fields Used:** `projectId`, `title`, `typeKey`, `status`, `sortOrder`.
+*   **New/Refined Fields:**
+    *   `activeVersionId`: Points to the current `elementVersions` doc.
+    *   `publishedVersionId`: (Same as active for now, or used for public sharing).
+    *   `elementStatus`: `"suggested" | "active" | "archived"`.
+
+### 2.3 Element Versions (`elementVersions`)
+*   **Concept:** Immutable snapshot of an element at a point in time.
+*   **Fields:**
+    *   `projectId`, `elementId` (`projectItems` Id).
+    *   `snapshot`: The full JSON blob of the element state (Requirements, Tasks, Materials, Accounting, etc.).
+    *   `createdFrom`: `{ tab: string, source: string }`.
+    *   `tags`: `string[]` (e.g., "manual_edit", "agent_suggestion").
+    *   `summary`: Text summary of changes.
+    *   `changeStats`: JSON stats.
+
+### 2.4 Revisions & Drafts (`revisions`, `revisionChanges`)
+*   **Concept:** The "Editing Buffer". User edits in UI create/update a Draft Revision.
+*   **Flow:**
+    1.  User clicks "Edit" in Accounting/Tasks.
+    2.  System checks for existing `draft` Revision for that scope.
+    3.  Edits are saved as `patchOps` in `revisionChanges`.
+    4.  "Approve" applies patches -> Creates `elementVersions` -> Rebuilds Projections.
+
+### 2.5 Facts (New Simplified `facts`)
+*   **Concept:** Replaces `factAtoms`. Stores specific, atomic pieces of info mapped to elements.
+*   **Table:** `facts` (Already exists in schema, lines 803+).
+*   **Usage:**
+    *   `scopeType`: `"project" | "element"`.
+    *   `itemId`: Link to `projectItems` (Element).
+    *   `categoryHe`: Hebrew category (e.g., "מידות", "חומרים").
+    *   `fieldPath`: Dot-notation path to the field in `ElementSnapshot` (e.g., `dimensions.widthCm`).
+    *   `bucketKey`: For free-text grouping (e.g., `constraints`).
+    *   `valueTyped`: The actual value (JSON).
+    *   `status`: `"proposed" | "accepted" | "rejected"`.
+
+---
+
+## 3. Implementation Plan (Epics & Tasks)
+
+### Epic 1: Foundations & Cleanup
+**Goal:** Prepare the DB and flags without breaking current `factsV2` users.
+
+*   [ ] **Task 1.1:** Verify `elementsCanonical` flag logic in `projects.ts`.
+*   [ ] **Task 1.2:** Audit `facts` table (schema lines 803+). Ensure it is decoupled from `factAtoms` logic.
+    *   *Action:* Create `convex/factsNew.ts` (or similar) to handle the *new* simple facts logic, distinct from `factsV2.ts`.
+*   [ ] **Task 1.3:** Create `ElementSnapshot` Zod schema in `convex/lib/elements/schema.ts`.
+    *   *Details:* Must match the strict structure: `meta`, `dimensions`, `location`, `schedule`, `procurement`, `materials` (summary), `freeText` (buckets).
+
+### Epic 2: The Element Core
+**Goal:** Make `projectItems` behave like Elements.
+
+*   [ ] **Task 2.1:** Implement `elements.create` (wraps `projectItems.insert`).
+    *   *Logic:* Sets `elementStatus="suggested"`, creates initial `elementVersions`.
+*   [ ] **Task 2.2:** Implement `elements.publishVersion`.
+    *   *Logic:* Takes a draft/snapshot, writes to `elementVersions`, updates `projectItems.activeVersionId`.
+*   [ ] **Task 2.3:** Implement `elements.getSnapshot`.
+    *   *Logic:* Returns `activeVersionId` data or falls back to `projectItems` fields for legacy.
+
+### Epic 3: The "New Facts" Pipeline
+**Goal:** Ingest info into the simplified `facts` table.
+
+*   [ ] **Task 3.1:** Implement `factsNew.propose`.
+    *   *Input:* `projectId`, text/value, category, inferred `fieldPath`.
+    *   *Output:* Insert into `facts` with `status="proposed"`.
+*   [ ] **Task 3.2:** Implement `factsNew.accept`.
+    *   *Logic:* Set `status="accepted"`.
+    *   *Trigger:* If mapped to `fieldPath`, suggest an update to the relevant Element Draft.
+
+### Epic 4: Draft & Revision Workflow
+**Goal:** The "Safe Editing" mechanism.
+
+*   [ ] **Task 4.1:** Update `revisions.ts` to support `patchOps` for the new `ElementSnapshot` structure.
+*   [ ] **Task 4.2:** Implement `revisions.applyDraft`.
+    *   *Logic:*
+        1.  Load base `elementVersion`.
+        2.  Apply `patchOps`.
+        3.  Validate against `ElementSnapshot` schema.
+        4.  Write new `elementVersion`.
+        5.  Update `projectItems.activeVersionId`.
+
+### Epic 5: Projection Engine
+**Goal:** Derive Tasks/Accounting from Elements.
+
+*   [ ] **Task 5.1:** Create `convex/projections.ts`.
+*   [ ] **Task 5.2:** Implement `projections.materializeTasks`.
+    *   *Logic:* Read `elementVersions` -> Generate/Update `tasks` table rows.
+    *   *Key:* Use `taskKey` to maintain stability.
+*   [ ] **Task 5.3:** Implement `projections.materializeAccounting`.
+    *   *Logic:* Read `elementVersions` -> Generate/Update `materialLines`/`workLines`.
+    *   *Constraint:* Must respect `elementsCanonical` flag. If Off, do nothing.
+
+### Epic 6: UI Adjustments
+**Goal:** Expose the new model to the user.
+
+*   [ ] **Task 6.1:** "Current Knowledge" Panel.
+    *   *Location:* Right sidebar (replacing old Facts UI).
+    *   *Data:* Reads from `facts` (New) table. Grouped by Category.
+*   [ ] **Task 6.2:** "Element History" View.
+    *   *View:* List of `elementVersions`.
+*   [ ] **Task 6.3:** "Draft Mode" Banner.
+    *   *UI:* When in Accounting/Tasks, if `elementsCanonical` is ON, show "You are editing a Draft". Save button -> "Approve & Publish".
+
+---
+
+## 4. Feature Flag Strategy details
+
+*   **Code:**
+    ```typescript
+    // convex/lib/flags.ts
+    export async function useElementsCanonical(ctx: QueryCtx, projectId: Id<"projects">) {
+      const project = await ctx.db.get(projectId);
+      return !!project?.features?.elementsCanonical;
+    }
+    ```
+*   **Facts V2 Cancellation:**
+    *   We do not delete `factsV2.ts` or `factAtoms`.
+    *   We simply stop calling `factsV2.extractTurnBundle` in the new flow.
+    *   The new `factsNew.ts` module will be used exclusively when `elementsCanonical` is True.
+
+## 5. Schema Requirements (Zod)
+
+**`ElementSnapshot` (Abbreviated)**
+```typescript
+z.object({
+  schemaVersion: z.literal("v1"),
+  meta: z.object({ title: z.string(), typeKey: z.string() }),
+  dimensions: z.object({ widthCm: z.number().optional(), ... }),
+  location: z.object({ siteArea: z.string().optional(), ... }),
+  // ... other structured sections ...
+  freeText: z.record(z.string()), // Buckets: "constraints": "..."
+  tasks: z.array(z.object({
+    taskKey: z.string(), // STABLE ID
+    title: z.string(),
+    // ...
+  })),
+  materials: z.array(z.object({
+    materialKey: z.string(), // STABLE ID
+    name: z.string(),
+    qty: z.number(),
+    // ...
+  }))
+})
+```
+
+---
+**End of Plan**

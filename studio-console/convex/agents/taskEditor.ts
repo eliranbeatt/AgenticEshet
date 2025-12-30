@@ -12,6 +12,21 @@ const FALLBACK_SYSTEM_PROMPT = [
     "Default to the project's default language unless the user explicitly requests otherwise.",
 ].join("\n");
 
+function isElementTaskKey(value?: string | null) {
+    return Boolean(value && /^tsk_[a-f0-9]{8}$/.test(value));
+}
+
+function formatEstimateFromMinutes(minutes?: number | null) {
+    if (minutes === null) return "";
+    if (typeof minutes !== "number" || !Number.isFinite(minutes)) return undefined;
+    if (minutes >= 60) {
+        const hours = minutes / 60;
+        const trimmed = hours % 1 === 0 ? `${hours.toFixed(0)}` : `${hours.toFixed(2)}`;
+        return `${trimmed}h`;
+    }
+    return `${Math.max(0, Math.round(minutes))}m`;
+}
+
 function updateSubtaskById(
     subtasks: ItemSpecV2["breakdown"]["subtasks"],
     subtaskId: string,
@@ -96,10 +111,55 @@ export const applyPatch = internalMutation({
         }),
     },
     handler: async (ctx, args) => {
+        const task = await ctx.db.get(args.taskId);
+        if (!task) throw new Error("Task not found");
+
+        const project = await ctx.db.get(task.projectId);
+        if (project?.features?.elementsCanonical) {
+            const draft = await ctx.db
+                .query("revisions")
+                .withIndex("by_project_tab_status", (q) =>
+                    q.eq("projectId", task.projectId).eq("originTab", "Tasks").eq("status", "draft")
+                )
+                .order("desc")
+                .first();
+            if (!draft) return { ok: true, skipped: true };
+            if (!task.itemId || !isElementTaskKey(task.itemSubtaskId)) return { ok: true, skipped: true };
+
+            const element = await ctx.db.get(task.itemId);
+            if (!element) return { ok: true, skipped: true };
+            const baseVersionId = element.activeVersionId ?? element.publishedVersionId;
+            const version = baseVersionId ? await ctx.db.get(baseVersionId) : null;
+            const snapshot = version?.snapshot as { tasks?: any[] } | null;
+            const existingLine = snapshot?.tasks?.find((line) => line.taskKey === task.itemSubtaskId) ?? null;
+
+            const nextLine = {
+                taskKey: task.itemSubtaskId,
+                title: args.patch.title ?? existingLine?.title ?? task.title,
+                details: args.patch.description ?? existingLine?.details ?? task.description ?? "",
+                bucketKey: existingLine?.bucketKey ?? "general",
+                taskType: existingLine?.taskType ?? "normal",
+                estimate: args.patch.estimatedMinutes !== undefined
+                    ? formatEstimateFromMinutes(args.patch.estimatedMinutes)
+                    : existingLine?.estimate,
+                dependencies: existingLine?.dependencies ?? [],
+                usesMaterialKeys: existingLine?.usesMaterialKeys ?? [],
+                usesLaborKeys: existingLine?.usesLaborKeys ?? [],
+                materialKey: existingLine?.materialKey,
+            };
+
+            await ctx.runMutation(api.revisions.patchElement, {
+                revisionId: draft._id,
+                elementId: task.itemId,
+                baseVersionId,
+                patchOps: [{ op: "upsert_line", entity: "tasks", key: task.itemSubtaskId, value: nextLine }],
+            });
+            return { ok: true, revisionId: draft._id };
+        }
+
         await ctx.db.patch(args.taskId, { ...args.patch, updatedAt: Date.now() });
 
-        const task = await ctx.db.get(args.taskId);
-        if (!task?.itemId || !task.itemSubtaskId) return;
+        if (!task.itemId || !task.itemSubtaskId) return;
 
         const item = await ctx.db.get(task.itemId);
         if (!item) return;

@@ -222,6 +222,8 @@ export default defineSchema({
             changeSetFlow: v.optional(v.boolean()),
             accountingLinesV1: v.optional(v.boolean()),
             factsV2: v.optional(v.boolean()),
+            elementsCanonical: v.optional(v.boolean()),
+            factsEnabled: v.optional(v.boolean()),
         })),
         rootItemId: v.optional(v.id("projectItems")),
         overviewSummary: v.optional(v.string()),
@@ -443,6 +445,7 @@ export default defineSchema({
             v.literal("archived")
         )),
         publishedVersionId: v.optional(v.id("elementVersions")),
+        activeVersionId: v.optional(v.id("elementVersions")),
         createdFrom: v.object({
             source: v.union(
                 v.literal("manual"),
@@ -530,6 +533,46 @@ export default defineSchema({
         .index("by_project_phase", ["projectId", "phase"])
         .index("by_changeSet", ["changeSetId"])
         .index("by_item", ["itemId"]),
+
+    revisions: defineTable({
+        projectId: v.id("projects"),
+        status: v.union(v.literal("draft"), v.literal("approved"), v.literal("rejected")),
+        originTab: v.union(
+            v.literal("Ideation"),
+            v.literal("Planning"),
+            v.literal("Solutioning"),
+            v.literal("Accounting"),
+            v.literal("Tasks")
+        ),
+        actionType: v.union(
+            v.literal("manual_edit"),
+            v.literal("agent_suggestions"),
+            v.literal("dependency_calc"),
+            v.literal("critique"),
+            v.literal("stress_test"),
+            v.literal("risk_scan"),
+            v.literal("improve")
+        ),
+        tags: v.array(v.string()),
+        summary: v.string(),
+        affectedElementIds: v.array(v.id("projectItems")),
+        createdAt: v.number(),
+        createdBy: v.string(),
+    })
+        .index("by_project_status", ["projectId", "status"])
+        .index("by_project_tab_status", ["projectId", "originTab", "status"]),
+
+    revisionChanges: defineTable({
+        revisionId: v.id("revisions"),
+        elementId: v.id("projectItems"),
+        baseVersionId: v.optional(v.id("elementVersions")),
+        replaceMask: v.array(v.string()),
+        patchOps: v.optional(v.any()),
+        proposedSnapshot: v.optional(v.any()),
+        diffPreview: v.optional(v.any()),
+    })
+        .index("by_revision", ["revisionId"])
+        .index("by_revision_element", ["revisionId", "elementId"]),
 
     itemChangeSets: defineTable({
         projectId: v.id("projects"),
@@ -643,17 +686,27 @@ export default defineSchema({
         elementId: v.id("projectItems"),
         createdAt: v.number(),
         createdBy: v.string(),
+        revisionId: v.optional(v.id("revisions")),
+        createdFrom: v.optional(v.object({
+            tab: v.optional(v.string()),
+            source: v.optional(v.string()),
+        })),
+        tags: v.optional(v.array(v.string())),
+        summary: v.optional(v.string()),
+        changeStats: v.optional(v.any()),
         basedOnVersionId: v.optional(v.id("elementVersions")),
-        appliedFactIds: v.array(v.id("facts")),
-        data: v.any(),
-        freeText: v.any(),
-        hashes: v.object({
+        appliedFactIds: v.optional(v.array(v.id("facts"))),
+        data: v.optional(v.any()),
+        freeText: v.optional(v.any()),
+        hashes: v.optional(v.object({
             dataHash: v.string(),
             freeTextHashByBucket: v.any(),
-        }),
-        diffSummaryHe: v.string(),
+        })),
+        diffSummaryHe: v.optional(v.string()),
+        snapshot: v.optional(v.any()),
     })
-        .index("by_element_createdAt", ["elementId", "createdAt"]),
+        .index("by_element_createdAt", ["elementId", "createdAt"])
+        .index("by_project_createdAt", ["projectId", "createdAt"]),
 
     projectVersions: defineTable({
         projectId: v.id("projects"),
@@ -1850,4 +1903,25 @@ export default defineSchema({
         updatedBy: v.object({ type: v.union(v.literal("system"), v.literal("user"), v.literal("agent")), refId: v.optional(v.string()) }),
     })
         .index("by_scope_block", ["projectId", "scopeType", "itemId", "blockKey"]),
+
+    projectKnowledge: defineTable({
+        projectId: v.id("projects"),
+        currentText: v.string(),
+        preferencesText: v.optional(v.string()),
+        updatedAt: v.number(),
+        updatedBy: v.string(),
+    }).index("by_project", ["projectId"]),
+
+    knowledgeLogEntries: defineTable({
+        projectId: v.id("projects"),
+        createdAt: v.number(),
+        source: v.union(
+            v.literal("ingestion"),
+            v.literal("user_chat"),
+            v.literal("agent_summary")
+        ),
+        text: v.string(),
+        linkedDocId: v.optional(v.id("knowledgeDocs")),
+        linkedMessageId: v.optional(v.string()),
+    }).index("by_project_createdAt", ["projectId", "createdAt"]),
 });

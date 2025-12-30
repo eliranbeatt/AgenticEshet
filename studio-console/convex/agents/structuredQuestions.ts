@@ -11,6 +11,7 @@ import {
     summarizeItems,
     summarizeKnowledgeBlocks,
     summarizeKnowledgeDocs,
+    summarizeElementSnapshots,
 } from "../lib/contextSummary";
 
 
@@ -68,10 +69,16 @@ export const run = action({
         const project = await ctx.runQuery(api.projects.getProject, { projectId: args.projectId });
         if (!project) throw new Error("Project not found");
 
-        const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
+        const factsContext = project.features?.factsEnabled === false
+            ? { bullets: "(facts disabled)" }
+            : await ctx.runAction(internal.factsV2.getFactsContext, {
+                projectId: args.projectId,
+                scopeType: "project",
+                queryText: project?.name ?? "",
+            });
+
+        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
             projectId: args.projectId,
-            scopeType: "project",
-            queryText: project?.name ?? "",
         });
 
         const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -89,9 +96,22 @@ export const run = action({
             includeDrafts: true,
         });
 
+        const elementSnapshots = project.features?.elementsCanonical
+            ? await ctx.runQuery(internal.elementVersions.getActiveSnapshotsByItemIds, {
+                itemIds: items.map((item) => item._id),
+            })
+            : [];
+        const elementSnapshotsSummary = project.features?.elementsCanonical
+            ? summarizeElementSnapshots(elementSnapshots, 20)
+            : "(none)";
+
         // 2. Build Prompt
         const systemPrompt = buildSystemPrompt(args.stage, project);
         const userPrompt = buildUserPrompt(turns, {
+            elementSnapshotsSummary,
+            currentKnowledge: currentKnowledge
+                ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
+                : "(none)",
             factsSummary: factsContext.bullets,
             knowledgeBlocksSummary: summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
             knowledgeDocsSummary: summarizeKnowledgeDocs(knowledgeDocs ?? []),
@@ -475,6 +495,8 @@ REQUIRED HANDLING:
 
 
 function buildUserPrompt(turns: any[], context: {
+    elementSnapshotsSummary: string;
+    currentKnowledge: string;
     factsSummary: string;
     knowledgeBlocksSummary: string;
     knowledgeDocsSummary: string;
@@ -483,6 +505,12 @@ function buildUserPrompt(turns: any[], context: {
     if (turns.length === 0) {
         return [
             "Start the questioning session. Ask the most critical initial questions.",
+            "",
+            "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
+            context.elementSnapshotsSummary,
+            "",
+            "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
+            context.currentKnowledge,
             "",
             "KNOWN FACTS (accepted):",
             context.factsSummary,
@@ -521,6 +549,12 @@ User Instructions: ${t.userInstructions || "None"}`;
         "Here is the history of the session so far:",
         "",
         history,
+        "",
+        "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
+        context.elementSnapshotsSummary,
+        "",
+        "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
+        context.currentKnowledge,
         "",
         "KNOWN FACTS (accepted):",
         context.factsSummary,

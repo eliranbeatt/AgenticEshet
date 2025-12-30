@@ -15,6 +15,7 @@ import {
     summarizeItems,
     summarizeKnowledgeBlocks,
     summarizeKnowledgeDocs,
+    summarizeElementSnapshots,
 } from "../lib/contextSummary";
 
 function parseItemSpec(data: unknown): ItemSpecV2 | null {
@@ -118,11 +119,17 @@ export const send = action({
             projectId: project._id,
         });
 
-        const factsContext = await ctx.runAction(internal.factsV2.getFactsContext, {
+        const factsContext = project.features?.factsEnabled === false
+            ? { bullets: "(facts disabled)" }
+            : await ctx.runAction(internal.factsV2.getFactsContext, {
+                projectId: project._id,
+                scopeType: args.itemId ? "item" : "project",
+                itemIds: args.itemId ? [args.itemId] : undefined,
+                queryText: args.userContent,
+            });
+
+        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
             projectId: project._id,
-            scopeType: args.itemId ? "item" : "project",
-            itemIds: args.itemId ? [args.itemId] : undefined,
-            queryText: args.userContent,
         });
 
         const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
@@ -140,7 +147,25 @@ export const send = action({
             includeDrafts: true,
         });
 
+        const scopeItemIds = args.itemId ? [args.itemId] : items.map((item) => item._id);
+        const elementSnapshots = project.features?.elementsCanonical
+            ? await ctx.runQuery(internal.elementVersions.getActiveSnapshotsByItemIds, {
+                itemIds: scopeItemIds,
+            })
+            : [];
+        const elementSnapshotsSummary = project.features?.elementsCanonical
+            ? summarizeElementSnapshots(elementSnapshots, 12)
+            : "(none)";
+
         const currentStateSummary = [
+            "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
+            elementSnapshotsSummary,
+            "",
+            "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
+            currentKnowledge
+                ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
+                : "(none)",
+            "",
             "KNOWN FACTS (accepted + high-confidence proposed):",
             factsContext.bullets,
             "",

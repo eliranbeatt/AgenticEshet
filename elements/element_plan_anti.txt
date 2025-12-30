@@ -1,0 +1,244 @@
+# Elements Implementation Plan (Anti-Gravity Version)
+
+This plan implements the "Elements are Canonical" architecture, replacing the "Facts" system with "Current Knowledge" and a strict Draft -> Approve workflow.
+
+## 0. Key Architecture Decisions
+
+1.  **Mapping to Existing Schema**:
+    *   **Elements** = `projectItems` table. We will continue using `projectItems` to preserve existing IDs and references, but logically treat it as the "Elements" table.
+    *   **Revisions** (Drafts) = `itemRevisions` table. Used for "Draft" state (status: `proposed`) and "Approved" history (status: `approved`).
+    *   **Element Versions** (Snapshots) = `elementVersions` table. Immutable snapshots created upon approval.
+    *   **Revision Changes** = New `revisionChanges` table (or reuse `itemChangeSetOps` if aligned, but plan calls for specific structure). We will create `revisionChanges` to strictly follow the plan's schema (`patchOps` / `proposedSnapshot`).
+
+2.  **Feature Flagging "Facts"**:
+    *   We will introduce a project-level feature flag: `features.elementsCanonical: boolean`.
+    *   **If TRUE**:
+        *   The "Facts" system (ingestion -> extraction -> `facts` table -> applied to items) is **DISABLED**.
+        *   `publishElementVersion` logic will **STOP** reading from `facts`. It will instead take the `proposedSnapshot` from the approved `revision`.
+        *   The "Current Knowledge" module is enabled.
+    *   **If FALSE** (Legacy projects):
+        *   Old behavior persists (Facts drive element updates).
+
+---
+
+# 1. Schema & Data Model
+
+## 1.1 Elements (`projectItems`)
+Extended to support canonical status and versions.
+```typescript
+// Existing table: projectItems
+{
+  // ... existing fields
+  activeVersionId: v.optional(v.id("elementVersions")), // Points to the current canonical snapshot
+  
+  // Clean up / Deprecate usage of:
+  // - projectionCache (will be replaced by robust projection engine)
+  // - manualOverrides (edits go to Revisions now)
+}
+```
+
+## 1.2 Element Versions (`elementVersions`)
+Canonical immutable snapshots.
+```typescript
+// Existing table: elementVersions
+{
+  projectId: v.id("projects"),
+  elementId: v.id("projectItems"), // Mapped to projectItems
+  revisionId: v.id("itemRevisions"), // Link to the revision that created this version
+  createdAt: v.number(),
+  createdBy: v.string(), // user or agent
+  
+  // Metadata
+  originTab: v.string(), // Planning, Solutioning, Views...
+  tags: v.array(v.string()), 
+  summary: v.string(),
+  changeStats: v.object({
+    tasksAdded: v.number(),
+    tasksRemoved: v.number(),
+    // ...
+  }),
+
+  // The Canonical Snapshot
+  snapshot: v.object({ // Structure defined in Elements Schema
+    schemaVersion: v.string(),
+    descriptions: v.object({ short: v.string(), long: v.string() }),
+    freeText: v.any(), // preferences, risks, etc.
+    materials: v.array(v.any()), // MaterialLine[] with stable keys
+    labor: v.array(v.any()), // LaborLine[] with stable keys
+    tasks: v.array(v.any()), // TaskLine[] with stable keys
+    tombstones: v.object({ 
+       taskKeys: v.array(v.string()),
+       materialKeys: v.array(v.string()), 
+       laborKeys: v.array(v.string())
+    })
+  })
+}
+```
+
+## 1.3 Revisions (`itemRevisions` / `revisions`)
+Drafts and history. We will start strictly using `itemRevisions` for this.
+```typescript
+// Existing table: itemRevisions
+{
+    // ... existing fields
+    status: v.union("draft", "approved", "rejected"), // Map "proposed" -> "draft"
+    originTab: v.string(), 
+    actionType: v.string(), // manual_edit, agent_suggestion, dependency_calc
+    
+    // Summary & Tags
+    summary: v.string(),
+    tags: v.array(v.string()),
+    
+    affectedElementIds: v.array(v.id("projectItems")),
+}
+```
+
+## 1.4 Revision Changes (`revisionChanges`)
+Detailed patches per element within a revision.
+```typescript
+defineTable({
+    revisionId: v.id("itemRevisions"),
+    elementId: v.id("projectItems"),
+    baseVersionId: v.id("elementVersions"), // For conflict detection
+    
+    // Strategy: Patch vs Snapshot
+    // Ideally we support both as per plan
+    replaceMask: v.array(v.string()), // sections to replace
+    patchOps: v.optional(v.array(v.any())), // JSON patch ops
+    proposedSnapshot: v.optional(v.any()), // Full snapshot for replace actions
+    
+    diffPreview: v.optional(v.any()), // Cached UI diff
+}).index("by_revision", ["revisionId"])
+```
+
+## 1.5 Current Knowledge (`projectKnowledge` & `knowledgeLogEntries`)
+Replaces Facts.
+```typescript
+defineTable({
+    projectId: v.id("projects"),
+    currentText: v.string(), // The "Truth"
+    preferencesText: v.optional(v.string()),
+    updatedAt: v.number(),
+    updatedBy: v.string()
+})
+
+defineTable({
+    projectId: v.id("projects"),
+    createdAt: v.number(),
+    source: v.union("ingestion", "user_chat", "agent_summary"),
+    text: v.string(), // Append-only log
+    linkedDocId: v.optional(v.string())
+})
+```
+
+---
+
+# 2. Key Workflows & Implementations
+
+## 2.1 Feature Flag: `elementsCanonical`
+*   In `publishedElementVersion` (or the new `revisions.approve` mutation), check:
+    ```typescript
+    const project = await ctx.db.get(projectId);
+    if (project.features?.elementsCanonical) {
+       // RUN NEW LOGIC: Revision -> ElementVersion
+    } else {
+       // RUN OLD LOGIC: Facts -> ElementVersion
+    }
+    ```
+*   This ensures safe rollout.
+
+## 2.2 Revisions & Approval Pipeline
+**Mutation: `revisions.createDraft(projectId, originTab, actionType)`**
+*   Ensures single active draft per scope (unless specific "multi-draft" feature used).
+*   Returns `revisionId`.
+
+**Mutation: `revisions.patchElement(revisionId, elementId, ops)`**
+*   This is the "Accounting Editor" and "Task Editor" backend.
+*   Accumulates ops in `revisionChanges`.
+
+**Mutation: `revisions.approve(revisionId)`**
+*   **Validation**:
+    *   Check `baseVersionId` vs `activeVersionId` (Conflict Check).
+    *   Validate schema (Zod).
+    *   Business Rules:
+        *   Auto-delete empty tasks.
+        *   Purchase task deletion logic (set `needPurchase=false`).
+        *   Enforce Tombstones.
+*   **Execution**:
+    *   Apply `patchOps` or `proposedSnapshot` to `latestVersion`.
+    *   Create new `elementVersions` rows.
+    *   Update `projectItems.activeVersionId`.
+    *   **Trigger Projections Request** (see below).
+    *   Mark revision `approved`.
+
+## 2.3 Projections Engine
+**Mutation: `projections.rebuild(projectId)`**
+*   Reads `projectItems` -> `activeVersionId` -> `elementVersions.snapshot`.
+*   **Tasks Projection**:
+    *   Wipes/Upserts `tasks` table based on snapshot tasks.
+    *   Preserves runtime fields if needed (e.g. assignedTo, unless that moves to element).
+*   **Accounting Projection**:
+    *   Rebuilds `sections`, `materialLines`, `workLines` from snapshot.
+    *   These are READ-ONLY for display. Edits happen via Drafts.
+*   **Quotes Projection**:
+    *   Calculates quote data from snapshots.
+
+## 2.4 Suggested Elements (Agents)
+*   **Trigger**: Buttons in UI (Planning, Solutioning, etc.).
+*   **Action**: `agents.generateSuggestions(...)`.
+*   **Output**: Writes to `revisionChanges` with `proposedSnapshot`.
+*   **UI**: Side panel listening to `revisionChanges`. User reviews -> clicks "Approve" (calls `revisions.approve`).
+
+## 2.5 Current Knowledge System
+*   **UI**: Panel above chat.
+*   **Data**: Reads/Writes `projectKnowledge`.
+*   **Agents**: Prompt includes:
+    > "CRITICAL: The 'Current Knowledge' section below is the absolute truth. It overrides any conflicting information in the conversation history."
+
+---
+
+# 3. Tasks Breakdown
+
+## Phase 1: Foundations & Schema
+- [ ] **Schema Migration**: Add `projectKnowledge`, `knowledgeLogEntries`, `revisionChanges`. Update `projectItems`, `elementVersions`, `itemRevisions`.
+- [ ] **Feature Flag**: Add `elementsCanonical` to `projects` schema and admin settings.
+- [ ] **Schema Validators**: Implement Zod schemas for `ElementSnapshot` and `PatchOps` in `convex/lib/zodSchemas.ts`.
+
+## Phase 2: Knowledge System (Replacing Facts)
+- [ ] **Knowledge API**: Create `convex/knowledge.ts` (CRUD for current text and log).
+- [ ] **Legacy Fact Gate**: Ensure `facts.ts` logic is skipped when flag is ON.
+- [ ] **UI Component**: Build "Project Knowledge" panel (replacing Facts view).
+
+## Phase 3: Revision & Approval Core
+- [ ] **Draft Logic**: Implement `revisions.createDraft`, `revisions.discard`.
+- [ ] **Patch Logic**: Implement `revisions.patchElement` (handling valid PatchOps).
+- [ ] **Approve Mutation**: The Big One. Implement `revisions.approve` with:
+    - [ ] Conflict detection.
+    - [ ] Snapshot application (apply patch to base).
+    - [ ] Business rules (Tombstones, auto-delete).
+    - [ ] Version creation.
+
+## Phase 4: Projections
+- [ ] **Materialization**: Implement `lib/projections/materialize.ts`.
+    - [ ] `materializeTasks`: Snapshot -> `tasks` table.
+    - [ ] `materializeAccounting`: Snapshot -> `materialLines`, `workLines`.
+- [ ] **Trigger**: Connect `revisions.approve` to `projections.rebuild`.
+
+## Phase 5: UI Integration
+- [ ] **Accounting UI**: Switch to "Read from Projection, Edit via Draft" mode.
+- [ ] **Tasks UI**: Switch to "Read from Projection, Edit via Draft" mode.
+- [ ] **Suggestion Panel**: Build the side panel for reviewing agent suggestions.
+
+## Phase 6: Agent Integration
+- [ ] **Agent Prompts**: Update prompts to respect "Current Knowledge" and output "Suggestion JSON" format.
+- [ ] **Agent Tools**: Create `generateSuggestions` action.
+
+---
+
+# 4. Rollout Strategy
+1.  Deploy Schema & Backend Logic (hidden behind flag).
+2.  Enable Flag on `Test Project`.
+3.  Migrate `facts` -> `projectKnowledge` (One-time script to dump accepted facts into text).
+4.  Backfill `elements` from existing `tasks`/`accounting` (One-time script).
+5.  Verify Projections match original data.
+6.  Enable for user.

@@ -12,6 +12,18 @@ const FALLBACK_SYSTEM_PROMPT = [
     "Default to the project's language unless explicitly instructed otherwise.",
 ].join("\n");
 
+function isElementTaskKey(value?: string | null) {
+    return Boolean(value && /^tsk_[a-f0-9]{8}$/.test(value));
+}
+
+function formatEstimateFromHours(hours?: number) {
+    if (typeof hours !== "number" || !Number.isFinite(hours)) return undefined;
+    const rounded = Math.max(0, hours);
+    if (rounded === 0) return "";
+    const trimmed = rounded % 1 === 0 ? `${rounded.toFixed(0)}` : `${rounded.toFixed(2)}`;
+    return `${trimmed}h`;
+}
+
 function normalizeTempTaskId(raw: string | undefined) {
     if (!raw) return null;
     const trimmed = raw.trim();
@@ -100,6 +112,92 @@ export const applyRefinements = internalMutation({
         ),
     },
     handler: async (ctx, args) => {
+        const taskDocs = await Promise.all(args.updates.map((update) => ctx.db.get(update.taskId)));
+        const tasks = taskDocs.filter(Boolean) as Doc<"tasks">[];
+        if (tasks.length === 0) return { updated: 0 };
+
+        const project = await ctx.db.get(tasks[0].projectId);
+        if (project?.features?.elementsCanonical) {
+            const draft = await ctx.db
+                .query("revisions")
+                .withIndex("by_project_tab_status", (q) =>
+                    q.eq("projectId", tasks[0].projectId).eq("originTab", "Tasks").eq("status", "draft")
+                )
+                .order("desc")
+                .first();
+            if (!draft) return { updated: 0, skipped: true };
+
+            const allTasks = await ctx.db
+                .query("tasks")
+                .withIndex("by_project", (q) => q.eq("projectId", tasks[0].projectId))
+                .collect();
+            const taskKeyById = new Map<string, string>();
+            for (const task of allTasks) {
+                if (isElementTaskKey(task.itemSubtaskId)) {
+                    taskKeyById.set(String(task._id), task.itemSubtaskId);
+                }
+            }
+
+            const elementIds = new Set<string>();
+            for (const task of tasks) {
+                if (task.itemId) elementIds.add(String(task.itemId));
+            }
+
+            const elementById = new Map<string, Doc<"projectItems">>();
+            const snapshotByElementId = new Map<string, { snapshot: any; baseVersionId?: Id<"elementVersions"> }>();
+            for (const elementId of elementIds) {
+                const element = await ctx.db.get(elementId as Id<"projectItems">);
+                if (!element) continue;
+                elementById.set(elementId, element);
+                const baseVersionId = element.activeVersionId ?? element.publishedVersionId;
+                const version = baseVersionId ? await ctx.db.get(baseVersionId) : null;
+                snapshotByElementId.set(elementId, { snapshot: version?.snapshot ?? null, baseVersionId: baseVersionId ?? undefined });
+            }
+
+            let updated = 0;
+            for (const update of args.updates) {
+                const task = tasks.find((row) => row._id === update.taskId);
+                if (!task?.itemId || !isElementTaskKey(task.itemSubtaskId)) continue;
+                const elementId = task.itemId;
+                const element = elementById.get(String(elementId));
+                if (!element) continue;
+                const snapshotEntry = snapshotByElementId.get(String(elementId));
+                const baseVersionId = snapshotEntry?.baseVersionId ?? element.activeVersionId ?? element.publishedVersionId;
+                const snapshot = snapshotEntry?.snapshot as { tasks?: any[] } | null;
+                const existingLine = snapshot?.tasks?.find((line) => line.taskKey === task.itemSubtaskId) ?? null;
+
+                const dependencyIds = update.dependencies ?? task.dependencies ?? [];
+                const dependencyKeys = dependencyIds
+                    .map((depId) => taskKeyById.get(String(depId)))
+                    .filter((key): key is string => Boolean(key));
+
+                const nextLine = {
+                    taskKey: task.itemSubtaskId,
+                    title: existingLine?.title ?? task.title,
+                    details: update.description ?? existingLine?.details ?? task.description ?? "",
+                    bucketKey: existingLine?.bucketKey ?? "general",
+                    taskType: existingLine?.taskType ?? "normal",
+                    estimate: update.estimatedHours !== undefined
+                        ? formatEstimateFromHours(update.estimatedHours)
+                        : existingLine?.estimate,
+                    dependencies: dependencyKeys.length ? dependencyKeys : existingLine?.dependencies ?? [],
+                    usesMaterialKeys: existingLine?.usesMaterialKeys ?? [],
+                    usesLaborKeys: existingLine?.usesLaborKeys ?? [],
+                    materialKey: existingLine?.materialKey,
+                };
+
+                await ctx.runMutation(api.revisions.patchElement, {
+                    revisionId: draft._id,
+                    elementId,
+                    baseVersionId,
+                    patchOps: [{ op: "upsert_line", entity: "tasks", key: task.itemSubtaskId, value: nextLine }],
+                });
+                updated += 1;
+            }
+
+            return { updated, revisionId: draft._id };
+        }
+
         let updated = 0;
         for (const update of args.updates) {
             const patch: Partial<Doc<"tasks">> = {};

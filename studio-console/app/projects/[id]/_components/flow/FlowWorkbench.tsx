@@ -10,11 +10,13 @@ import { ItemEditorPanel } from "../items/ItemEditorPanel";
 import type { FlowScopeType, FlowTab } from "@/src/lib/flowScope";
 import { buildFlowScopeKey } from "@/src/lib/flowScope";
 import { FlowItemsPanel } from "./FlowItemsPanel";
+import { SuggestedElementsPanel } from "./SuggestedElementsPanel";
 import { useThinkingMode } from "@/app/_context/ThinkingModeContext";
 import { useModel } from "@/app/_context/ModelContext";
 import { StructuredQuestionsPanel } from "./StructuredQuestionsPanel";
 import { FactsPanel } from "../facts/FactsPanel";
 import { CurrentStatePanel } from "../facts/CurrentStatePanel";
+import { CurrentKnowledgePanel } from "../facts/CurrentKnowledgePanel";
 import { IdeasPanel } from "./IdeasPanel";
 import { QuestionQueuePanel } from "../questions/QuestionQueuePanel";
 import { ChangeSetReviewBanner } from "../changesets/ChangeSetReviewBanner";
@@ -51,9 +53,11 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const sendFlowTurn = useAction(api.agents.flow.send);
     const generateUploadUrl = useMutation(api.assets.generateUploadUrl);
     const createAssetFromUpload = useMutation(api.assets.createAssetFromUpload);
+    const project = useQuery(api.projects.getProject, { projectId });
 
     const [selectedAllProject, setSelectedAllProject] = useState(true);
     const [selectedItemIds, setSelectedItemIds] = useState<Array<Id<"projectItems">>>([]);
+    const [reviewSignal, setReviewSignal] = useState(0);
 
     const scopeType: FlowScopeType = useMemo(() => {
         if (selectedAllProject || selectedItemIds.length === 0) return "allProject";
@@ -80,7 +84,7 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
     const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
     const [isSubmittingState, setIsSubmittingState] = useState(false);
     const [hasRemoteUpdate, setHasRemoteUpdate] = useState(false);
-    const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts" | "questions" | "ideas">("state");
+    const [rightPanelTab, setRightPanelTab] = useState<"state" | "facts" | "questions" | "ideas" | "knowledge">("state");
 
     const lastLoadedScopeKeyRef = useRef<string | null>(null);
     const lastRemoteTextRef = useRef<string>("");
@@ -217,6 +221,18 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
         }
     }, [rightPanelTab, tab]);
 
+    const elementsCanonical = project?.features?.elementsCanonical ?? false;
+    const factsEnabled = project?.features?.factsEnabled !== false;
+
+    useEffect(() => {
+        if (elementsCanonical && rightPanelTab === "state") {
+            setRightPanelTab("knowledge");
+        }
+        if (!elementsCanonical && rightPanelTab === "knowledge") {
+            setRightPanelTab("state");
+        }
+    }, [elementsCanonical, rightPanelTab]);
+
     useEffect(() => {
         void (async () => {
             const title = tab === "ideation" ? "Ideation" : tab === "planning" ? "Planning" : "Solutioning";
@@ -232,33 +248,44 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
 
     const bottomTabs = selectedAllProject ? [] : selectedItemIds;
 
+    const changeSetPhase = tab === "ideation" ? "convert" : tab;
+
     return (
         <div className="flex flex-col gap-8 pb-20">
-            {tab === "ideation" && (
-                <ChangeSetReviewBanner projectId={projectId} phase="convert" />
-            )}
+            <ChangeSetReviewBanner projectId={projectId} phase={changeSetPhase} openSignal={reviewSignal} />
             {/* Top row: left / center / right */}
             <div className="grid gap-4 h-[85vh] grid-cols-[260px_minmax(0,1fr)_420px]">
-                <FlowItemsPanel
-                    projectId={projectId}
-                    selectedAllProject={selectedAllProject}
-                    selectedItemIds={selectedItemIds}
-                    multiSelectEnabled={true}
-                    onToggleMultiSelect={() => {}}
-                    onSelectAllProject={() => {
-                        setSelectedAllProject(true);
-                        setSelectedItemIds([]);
-                    }}
-                    onSetSelectedItemIds={(ids) => {
-                        if (ids.length === 0) {
-                            setSelectedAllProject(true);
-                            setSelectedItemIds([]);
-                        } else {
-                            setSelectedAllProject(false);
-                            setSelectedItemIds(ids);
-                        }
-                    }}
-                />
+                <div className="flex flex-col gap-4 min-h-0">
+                    <div className="flex-1 min-h-0">
+                        <FlowItemsPanel
+                            projectId={projectId}
+                            selectedAllProject={selectedAllProject}
+                            selectedItemIds={selectedItemIds}
+                            multiSelectEnabled={true}
+                            onToggleMultiSelect={() => {}}
+                            onSelectAllProject={() => {
+                                setSelectedAllProject(true);
+                                setSelectedItemIds([]);
+                            }}
+                            onSetSelectedItemIds={(ids) => {
+                                if (ids.length === 0) {
+                                    setSelectedAllProject(true);
+                                    setSelectedItemIds([]);
+                                } else {
+                                    setSelectedAllProject(false);
+                                    setSelectedItemIds(ids);
+                                }
+                            }}
+                        />
+                    </div>
+                    <SuggestedElementsPanel
+                        projectId={projectId}
+                        selectedAllProject={selectedAllProject}
+                        selectedItemIds={selectedItemIds}
+                        phase={changeSetPhase}
+                        onGenerated={() => setReviewSignal((value) => value + 1)}
+                    />
+                </div>
 
                 <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
                     <div className="p-3 border-b flex items-center justify-between gap-3">
@@ -364,18 +391,29 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                     <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
                         <div className="p-3 border-b flex items-center justify-between bg-gray-50">
                             <div className="flex gap-2">
-                                <button 
-                                    onClick={() => setRightPanelTab("state")}
-                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "state" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                                >
-                                    Current State
-                                </button>
-                                <button 
-                                    onClick={() => setRightPanelTab("facts")}
-                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "facts" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                                >
-                                    Facts Ledger
-                                </button>
+                                {elementsCanonical ? (
+                                    <button
+                                        onClick={() => setRightPanelTab("knowledge")}
+                                        className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "knowledge" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                    >
+                                        Current Knowledge
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={() => setRightPanelTab("state")}
+                                        className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "state" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                    >
+                                        Current State
+                                    </button>
+                                )}
+                                {!elementsCanonical && factsEnabled && (
+                                    <button
+                                        onClick={() => setRightPanelTab("facts")}
+                                        className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "facts" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                    >
+                                        Facts Ledger
+                                    </button>
+                                )}
                                 <button
                                     onClick={() => setRightPanelTab("questions")}
                                     className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "questions" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
@@ -393,7 +431,9 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                             </div>
                         </div>
                         <div className="flex-1 min-h-0 relative">
-                            {rightPanelTab === "state" ? (
+                            {rightPanelTab === "knowledge" ? (
+                                <CurrentKnowledgePanel projectId={projectId} />
+                            ) : rightPanelTab === "state" ? (
                                 <CurrentStatePanel
                                     text={textDraft}
                                     onChange={setTextDraft}

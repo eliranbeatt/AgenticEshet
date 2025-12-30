@@ -9,7 +9,7 @@ This document details the functional architecture of the AgenticEshet applicatio
 Before understanding the tabs, it is crucial to understand how the system "learns" and "remembers".
 
 ### A. The "Facts Engine" (Automatic Learning)
-**Trigger:** This process runs automatically whenever a user sends a message in any chat interface or an agent generates a response.
+**Trigger:** This process runs automatically whenever a user sends a message in any chat interface or an agent generates a response (only when `factsEnabled=true`, which is disabled by default in canonical projects).
 
 1.  **User Action**: User sends a chat message (e.g., "The venue is 500sqm and we need a red carpet").
 2.  **Code Trigger**: `convex/agents/flow.ts` -> `flow:send` action.
@@ -23,6 +23,7 @@ Before understanding the tabs, it is crucial to understand how the system "learn
         -   **Content**: "Venue size is 500sqm".
     -   **Step 4: Storage**: Extracted facts are stored in `factAtoms`.
     -   **Step 5: Vectorization**: Facts are embedded into `factEmbeddings`, allowing agents to query "What do we know about the venue?" later.
+4.  **Facts Disabled Path**: When `factsEnabled=false`, ingestion writes summaries into `knowledgeLogEntries` and no new fact rows are created.
 
 ### B. The "Knowledge Base" (Artifact Storage)
 **Trigger**: Uploading a PDF or approving a plan/quote.
@@ -34,6 +35,14 @@ Before understanding the tabs, it is crucial to understand how the system "learn
     -   **Enhancement**: An LLM "Enhancer" generates a summary, tags, and extracts metadata (Client Name, Topics).
     -   **Chunking**: The text is split into semantic chunks (overlapping windows of ~1000 chars).
     -   **Embedding**: Each chunk is converted to a vector and stored in `knowledgeChunks` for similarity search.
+
+### C. Canonical Elements + Draft Approval
+**Trigger:** A user edits Tasks or Accounting while Elements are canonical, or an agent proposes changes.
+
+1.  **Draft Writes**: Changes go into `revisions` and `revisionChanges` via `revisions.patchElement` or `revisions.upsertChange` (no immediate task/material/work writes).
+2.  **Approval**: `revisions.approve` validates conflicts, applies patch ops or snapshots, and writes a new `elementVersions.snapshot`.
+3.  **Projection**: `projections.rebuild` generates `tasks`, `materialLines`, and `workLines` from the canonical snapshot.
+4.  **Agent Context Order**: Element snapshot -> Current Knowledge -> Chat history.
 
 ---
 
@@ -94,6 +103,11 @@ Before understanding the tabs, it is crucial to understand how the system "learn
 ### Tab 3: Tasks (Execution & Gantt)
 **Goal**: Break down the project into actionable steps with dependencies.
 
+#### Draft Editing (Canonical Elements)
+*   **User Action**: User toggles "Edit tasks" with `elementsCanonical=true`.
+*   **Trigger**: `api.revisions.createDraft` and `api.revisions.patchElement`.
+*   **Process**: Changes are captured as patch ops on the element snapshot; tasks table updates only after `revisions.approve`.
+
 #### Feature: Architect Agent (Task Generation)
 *   **User Action**: User clicks **"Auto-Generate from Plan"** button.
 *   **Trigger**: `api.agents.architect.run` (Action).
@@ -117,6 +131,9 @@ Before understanding the tabs, it is crucial to understand how the system "learn
 
 ### Tab 4: Quotes (Client Facing)
 **Goal**: Produce a sellable PDF/document gathering all costs and specs.
+
+#### Canonical Projection Sync
+*   When `elementsCanonical=true`, quote generation triggers a projections rebuild so material/work lines reflect the latest element snapshots.
 
 #### Feature: Agent-Guided Quote
 *   **User Action**: User types instructions (e.g., "Make it friendly, verify we have a 20% margin") -> Clicks **"Generate Draft with AI"**.

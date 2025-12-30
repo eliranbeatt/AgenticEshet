@@ -109,6 +109,8 @@ export const createProject = mutation({
             createdBy: "user", // TODO: auth
             features: {
                 factsV2: true,
+                elementsCanonical: false,
+                factsEnabled: true,
             },
 
             currency: "ILS",
@@ -182,6 +184,8 @@ export const updateProject = mutation({
                 changeSetFlow: v.optional(v.boolean()),
                 accountingLinesV1: v.optional(v.boolean()),
                 factsV2: v.optional(v.boolean()),
+                elementsCanonical: v.optional(v.boolean()),
+                factsEnabled: v.optional(v.boolean()),
             })
         ),
     },
@@ -258,20 +262,92 @@ export const getPlanPhaseMeta = query({
         return {
             activePlan: activePlan
                 ? {
-                      planId: activePlan._id,
-                      version: activePlan.version,
-                      approvedAt: activePlan.createdAt,
-                  }
+                    planId: activePlan._id,
+                    version: activePlan.version,
+                    approvedAt: activePlan.createdAt,
+                }
                 : null,
             latestPlan: latestPlan
                 ? {
-                      planId: latestPlan._id,
-                      version: latestPlan.version,
-                      isDraft: latestPlan.isDraft,
-                  }
+                    planId: latestPlan._id,
+                    version: latestPlan.version,
+                    isDraft: latestPlan.isDraft,
+                }
                 : null,
             totalPlans: plans.length,
             draftCount,
         };
+    },
+});
+
+export const archiveProject = mutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.projectId, { status: "archived" });
+    },
+});
+
+export const deleteProject = mutation({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        // 1. Delete main project record
+        await ctx.db.delete(args.projectId);
+
+        // 2. Delete related Project Items
+        const items = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId))
+            .collect();
+        for (const item of items) {
+            await ctx.db.delete(item._id);
+        }
+
+        // 3. Delete Sections (Budget)
+        const sections = await ctx.db
+            .query("sections")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+        for (const section of sections) {
+            await ctx.db.delete(section._id);
+        }
+
+        // 4. Delete Material Lines
+        const materialLines = await ctx.db
+            .query("materialLines")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId)) // Assumes this index exists as per schema
+            .collect();
+        for (const line of materialLines) {
+            await ctx.db.delete(line._id);
+        }
+
+        // 5. Delete Scenarios
+        const scenarios = await ctx.db
+            .query("projectScenarios")
+            .withIndex("by_project_phase", (q) => q.eq("projectId", args.projectId))
+            .collect();
+        for (const scenario of scenarios) {
+            await ctx.db.delete(scenario._id);
+        }
+
+        // 6. Delete Chat Threads
+        const threads = await ctx.db
+            .query("chatThreads")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect();
+        for (const thread of threads) {
+            await ctx.db.delete(thread._id);
+        }
+
+        // 7. Delete Brief
+        const brief = await ctx.db
+            .query("projectBrief")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .first();
+        if (brief) {
+            await ctx.db.delete(brief._id);
+        }
+
+        // Note: There are many other related tables (assets, revisions, etc.)
+        // For a complete cleanup, those should also be deleted, but this covers the core functional data.
     },
 });

@@ -66,6 +66,7 @@ export default function TasksPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
 
+    const project = useQuery(api.projects.getProject, { projectId });
     const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
     const accountingData = useQuery(api.accounting.getProjectAccounting, { projectId });
     const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
@@ -81,6 +82,10 @@ export default function TasksPage() {
     const deleteTask = useMutation(api.tasks.deleteTask);
     const clearTasks = useMutation(api.tasks.clearTasks);
     const ensureTaskNumbers = useMutation(api.tasks.ensureTaskNumbers);
+    const createDraft = useMutation(api.revisions.createDraft);
+    const approveDraft = useMutation(api.revisions.approve);
+    const discardDraft = useMutation(api.revisions.discardDraft);
+    const patchElement = useMutation(api.revisions.patchElement);
 
     const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
     const [isGenerating, setIsGenerating] = useState(false);
@@ -92,6 +97,8 @@ export default function TasksPage() {
     const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
     const [activeTaskId, setActiveTaskId] = useState<Id<"tasks"> | null>(null);
     const [selectedTaskId, setSelectedTaskId] = useState<Id<"tasks"> | null>(null);
+    const [editMode, setEditMode] = useState(false);
+    const [draftRevisionId, setDraftRevisionId] = useState<Id<"revisions"> | null>(null);
 
     const refinerStatus = taskRefinerRuns?.[0]?.status;
     const isRefinerActive = refinerStatus === "queued" || refinerStatus === "running";
@@ -111,6 +118,14 @@ export default function TasksPage() {
     }, [accountingData?.sections]);
 
     const items = useMemo(() => itemsData?.items ?? [], [itemsData?.items]);
+    const elementsById = useMemo(() => new Map(items.map((item) => [String(item._id), item])), [items]);
+    const elementsCanonical = project?.features?.elementsCanonical ?? false;
+    const existingDraft = useQuery(
+        api.revisions.getDraft,
+        elementsCanonical ? { projectId, originTab: "Tasks" } : "skip"
+    );
+    const allowInlineEdits = !elementsCanonical || editMode;
+    const draftOnlyMode = elementsCanonical && editMode;
 
     const sectionLabelById = useMemo(() => {
         const map = new Map<string, string>();
@@ -147,6 +162,127 @@ export default function TasksPage() {
         if (!tasks || !selectedTaskId) return null;
         return tasks.find((t) => t._id === selectedTaskId) ?? null;
     }, [selectedTaskId, tasks]);
+
+    const taskKeyById = useMemo(() => {
+        const map = new Map<string, string>();
+        (tasks ?? []).forEach((task) => {
+            if (task.itemSubtaskId && /^tsk_[a-f0-9]{8}$/.test(task.itemSubtaskId)) {
+                map.set(String(task._id), task.itemSubtaskId);
+            }
+        });
+        return map;
+    }, [tasks]);
+
+    const createTaskKey = () => {
+        const suffix = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+        return `tsk_${suffix}`;
+    };
+
+    const isElementTaskKey = (value?: string | null) => Boolean(value && /^tsk_[a-f0-9]{8}$/.test(value));
+
+    const buildTaskValue = (task: Doc<"tasks">) => {
+        const taskKey = isElementTaskKey(task.itemSubtaskId) ? task.itemSubtaskId : createTaskKey();
+        const dependencies = (task.dependencies ?? [])
+            .map((id) => taskKeyById.get(String(id)))
+            .filter((key): key is string => Boolean(key));
+        return {
+            taskKey,
+            title: task.title,
+            details: task.description ?? "",
+            bucketKey: "general",
+            taskType: "normal",
+            estimate: "",
+            dependencies,
+            usesMaterialKeys: [],
+            usesLaborKeys: [],
+        };
+    };
+
+    const applyTaskPatch = async (task: Doc<"tasks">, updates: Partial<UpdateTaskInput>) => {
+        if (!editMode || !draftRevisionId) return;
+        const hasItemId = Object.prototype.hasOwnProperty.call(updates, "itemId");
+        const hasItemSubtaskId = Object.prototype.hasOwnProperty.call(updates, "itemSubtaskId");
+        const previousElementId = task.itemId;
+        const nextElementId = hasItemId ? updates.itemId : task.itemId;
+        const previousTaskKey = isElementTaskKey(task.itemSubtaskId) ? task.itemSubtaskId : undefined;
+        const rawNextTaskKey = hasItemSubtaskId ? updates.itemSubtaskId : task.itemSubtaskId;
+        const nextTaskKey = isElementTaskKey(rawNextTaskKey) ? rawNextTaskKey : undefined;
+
+        if (previousElementId && previousElementId !== nextElementId && previousTaskKey) {
+            const previousElement = elementsById.get(String(previousElementId));
+            const baseVersionId = previousElement?.publishedVersionId ?? undefined;
+            await patchElement({
+                revisionId: draftRevisionId,
+                elementId: previousElementId,
+                baseVersionId,
+                patchOps: [{ op: "remove_line", entity: "tasks", key: previousTaskKey, reason: "Moved task to another element" }],
+            });
+        }
+
+        if (previousElementId && hasItemId && !nextElementId && previousTaskKey) {
+            const previousElement = elementsById.get(String(previousElementId));
+            const baseVersionId = previousElement?.publishedVersionId ?? undefined;
+            await patchElement({
+                revisionId: draftRevisionId,
+                elementId: previousElementId,
+                baseVersionId,
+                patchOps: [{ op: "remove_line", entity: "tasks", key: previousTaskKey, reason: "Unlinked task from element" }],
+            });
+        }
+
+        if (!nextElementId) return;
+        if (!nextTaskKey) return;
+        const element = elementsById.get(String(nextElementId));
+        const baseVersionId = element?.publishedVersionId ?? undefined;
+        const nextTask: Doc<"tasks"> = {
+            ...task,
+            ...updates,
+            itemId: nextElementId,
+            itemSubtaskId: nextTaskKey,
+        };
+        const value = buildTaskValue(nextTask);
+        await patchElement({
+            revisionId: draftRevisionId,
+            elementId: nextElementId,
+            baseVersionId,
+            patchOps: [{ op: "upsert_line", entity: "tasks", key: value.taskKey, value }],
+        });
+    };
+
+    const toggleEditMode = async () => {
+        if (!elementsCanonical) return;
+        if (!editMode) {
+            if (existingDraft?._id) {
+                setDraftRevisionId(existingDraft._id);
+                setEditMode(true);
+                return;
+            }
+            const result = await createDraft({
+                projectId,
+                originTab: "Tasks",
+                actionType: "manual_edit",
+                createdBy: "user",
+            });
+            setDraftRevisionId(result.revisionId);
+            setEditMode(true);
+            return;
+        }
+        setEditMode(false);
+    };
+
+    const handleApprove = async () => {
+        if (!draftRevisionId) return;
+        await approveDraft({ revisionId: draftRevisionId, approvedBy: "user" });
+        setDraftRevisionId(null);
+        setEditMode(false);
+    };
+
+    const handleDiscard = async () => {
+        if (!draftRevisionId) return;
+        await discardDraft({ revisionId: draftRevisionId });
+        setDraftRevisionId(null);
+        setEditMode(false);
+    };
 
     const filteredTasks = useMemo(() => {
         if (!tasks) return null;
@@ -212,6 +348,10 @@ export default function TasksPage() {
     }, [sortedTasks]);
 
     const handleAutoGenerate = async () => {
+        if (draftOnlyMode) {
+            alert("Auto-generation is disabled while editing a draft. Approve or discard the draft first.");
+            return;
+        }
         setIsGenerating(true);
         try {
             await runArchitect({ projectId });
@@ -226,6 +366,10 @@ export default function TasksPage() {
 
     const handleRegenerate = async () => {
         if (!confirm("Are you sure you want to delete all tasks and regenerate them? This cannot be undone.")) return;
+        if (draftOnlyMode) {
+            alert("Regeneration is disabled while editing a draft. Approve or discard the draft first.");
+            return;
+        }
         setIsGenerating(true);
         try {
             await clearTasks({ projectId });
@@ -240,6 +384,10 @@ export default function TasksPage() {
     };
 
     const handleRefineTasks = async () => {
+        if (draftOnlyMode) {
+            alert("Refinement is disabled while editing a draft. Approve or discard the draft first.");
+            return;
+        }
         if (!tasks || tasks.length === 0) {
             alert("No tasks to refine. Generate tasks first.");
             return;
@@ -259,6 +407,10 @@ export default function TasksPage() {
     const handleCreateManual = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newTaskTitle.trim()) return;
+        if (!allowInlineEdits || draftOnlyMode) {
+            alert("Enable draft editing to add tasks.");
+            return;
+        }
 
         await createTask({
             projectId,
@@ -280,6 +432,7 @@ export default function TasksPage() {
         const nextStatus = event.over?.id as Doc<"tasks">["status"] | undefined;
         setActiveTaskId(null);
         if (!taskId || !nextStatus) return;
+        if (!allowInlineEdits || draftOnlyMode) return;
         const task = tasks?.find((t: Doc<"tasks">) => t._id === taskId);
         if (!task || task.status === nextStatus) return;
         await updateTask({ taskId, status: nextStatus });
@@ -288,48 +441,78 @@ export default function TasksPage() {
     return (
         <div className="flex flex-col gap-6">
             <ChangeSetReviewBanner projectId={projectId} phase="tasks" />
-            <div className="flex justify-between items-center flex-wrap gap-4">
-                <form onSubmit={handleCreateManual} className="flex gap-2 w-full md:w-1/3 min-w-[260px]">
-                    <input
-                        type="text"
-                        placeholder="Add quick task..."
-                        className="flex-1 border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                        value={newTaskTitle}
-                        onChange={(e) => setNewTaskTitle(e.target.value)}
-                    />
+            <div className="flex flex-col gap-4">
+                {elementsCanonical && (
+                    <div className="flex items-center gap-2 text-sm">
+                        <button
+                            onClick={() => void toggleEditMode()}
+                            className={`text-xs font-semibold px-3 py-1 rounded ${editMode ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-700"}`}
+                        >
+                            {editMode ? "Draft editing on" : "Edit tasks"}
+                        </button>
+                        {editMode && (
+                            <>
+                                <button
+                                    onClick={() => void handleApprove()}
+                                    className="text-xs font-semibold px-3 py-1 rounded bg-green-600 text-white"
+                                >
+                                    Approve
+                                </button>
+                                <button
+                                    onClick={() => void handleDiscard()}
+                                    className="text-xs font-semibold px-3 py-1 rounded bg-gray-200 text-gray-700"
+                                >
+                                    Discard
+                                </button>
+                            </>
+                        )}
+                    </div>
+                )}
+                <div className="flex justify-between items-center flex-wrap gap-4">
+                    <form onSubmit={handleCreateManual} className="flex gap-2 w-full md:w-1/3 min-w-[260px]">
+                        <input
+                            type="text"
+                            placeholder="Add quick task..."
+                            className="flex-1 border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-gray-100"
+                            value={newTaskTitle}
+                            onChange={(e) => setNewTaskTitle(e.target.value)}
+                            disabled={!allowInlineEdits || draftOnlyMode}
+                        />
+                        <button
+                            type="submit"
+                            className="bg-white border hover:bg-gray-50 text-gray-700 px-3 py-2 rounded text-sm font-medium disabled:opacity-50"
+                            disabled={!allowInlineEdits || draftOnlyMode}
+                        >
+                            Add
+                        </button>
+                    </form>
+
                     <button
-                        type="submit"
-                        className="bg-white border hover:bg-gray-50 text-gray-700 px-3 py-2 rounded text-sm font-medium"
+                        onClick={handleAutoGenerate}
+                        disabled={isGenerating || isRefiningActive || draftOnlyMode}
+                        className="bg-purple-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center gap-2"
                     >
-                        Add
+                        {isGenerating ? "Thinking..." : "Auto-Generate from Plan"}
                     </button>
-                </form>
 
-                <button
-                    onClick={handleAutoGenerate}
-                    disabled={isGenerating || isRefiningActive}
-                    className="bg-purple-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center gap-2"
-                >
-                    {isGenerating ? "Thinking..." : "Auto-Generate from Plan"}
-                </button>
+                    <button
+                        onClick={handleRefineTasks}
+                        disabled={isRefiningActive || isGenerating || draftOnlyMode}
+                        className={`bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 ${
+                            isRefiningActive ? "animate-pulse" : ""
+                        }`}
+                    >
+                        {isRefiningActive ? "Refining..." : "Refine Tasks (Deps + Estimates)"}
+                    </button>
 
-                <button
-                    onClick={handleRefineTasks}
-                    disabled={isRefiningActive || isGenerating}
-                    className={`bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 ${
-                        isRefiningActive ? "animate-pulse" : ""
-                    }`}
-                >
-                    {isRefiningActive ? "Refining..." : "Refine Tasks (Deps + Estimates)"}
-                </button>
-
-                <button
-                    onClick={handleRegenerate}
-                    disabled={isGenerating || isRefiningActive}
-                    className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
-                >
-                    {isGenerating ? "Thinking..." : "Regenerate (Clear & New)"}
-                </button>
+                    <button
+                        onClick={handleRegenerate}
+                        disabled={isGenerating || isRefiningActive || draftOnlyMode}
+                        className="bg-red-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                        {isGenerating ? "Thinking..." : "Regenerate (Clear & New)"}
+                    </button>
+                </div>
             </div>
 
             <TaskControlsBar
@@ -360,9 +543,50 @@ export default function TasksPage() {
                                 activeTaskId={activeTaskId}
                                 onOpenTask={(taskId) => setSelectedTaskId(taskId)}
                                 onUpdate={async (input) => {
-                                    await updateTask(input);
+                                    if (!allowInlineEdits) {
+                                        alert("Enable draft editing to change tasks.");
+                                        return;
+                                    }
+                                    const task = tasks?.find((t: Doc<"tasks">) => t._id === input.taskId);
+                                    if (!task) return;
+                                    const hasItemId = Object.prototype.hasOwnProperty.call(input, "itemId");
+                                    const nextElementId = hasItemId ? input.itemId : task.itemId;
+                                    let nextTaskKey = isElementTaskKey(task.itemSubtaskId) ? task.itemSubtaskId : undefined;
+                                    if (Object.prototype.hasOwnProperty.call(input, "itemSubtaskId")) {
+                                        nextTaskKey = isElementTaskKey(input.itemSubtaskId) ? input.itemSubtaskId : undefined;
+                                    }
+                                    const updates: UpdateTaskInput = { ...input };
+                                    if (editMode && draftRevisionId && nextElementId && !nextTaskKey) {
+                                        nextTaskKey = createTaskKey();
+                                        updates.itemSubtaskId = nextTaskKey;
+                                    }
+                                    if (draftOnlyMode) {
+                                        await applyTaskPatch(task, updates);
+                                        return;
+                                    }
+                                    await updateTask(updates);
                                 }}
                                 onDelete={async (input) => {
+                                    if (!allowInlineEdits) {
+                                        alert("Enable draft editing to delete tasks.");
+                                        return;
+                                    }
+                                    const task = tasks?.find((t: Doc<"tasks">) => t._id === input.taskId);
+                                    if (draftOnlyMode) {
+                                        if (draftRevisionId && task?.itemId && isElementTaskKey(task.itemSubtaskId)) {
+                                            const element = elementsById.get(String(task.itemId));
+                                            const baseVersionId = element?.publishedVersionId ?? undefined;
+                                            await patchElement({
+                                                revisionId: draftRevisionId,
+                                                elementId: task.itemId,
+                                                baseVersionId,
+                                                patchOps: [{ op: "remove_line", entity: "tasks", key: task.itemSubtaskId, reason: "User deleted task" }],
+                                            });
+                                        } else {
+                                            alert("Draft deletes require a linked element task.");
+                                        }
+                                        return;
+                                    }
                                     await deleteTask(input);
                                 }}
                                 sections={accountingSections}
@@ -370,6 +594,8 @@ export default function TasksPage() {
                                 sectionLabelById={sectionLabelById}
                                 accountingItemById={accountingItemById}
                                 taskNumberById={taskNumberById}
+                                allowInlineEdits={allowInlineEdits}
+                                draftOnlyMode={draftOnlyMode}
                             />
                         ))}
                     </div>
@@ -388,6 +614,9 @@ export default function TasksPage() {
                     projectId={projectId}
                     task={selectedTask}
                     onClose={() => setSelectedTaskId(null)}
+                    elementsCanonical={elementsCanonical}
+                    draftRevisionId={draftRevisionId}
+                    elementsById={elementsById}
                 />
             )}
         </div>
@@ -406,6 +635,8 @@ function KanbanColumn({
     accountingItemById,
     activeTaskId,
     taskNumberById,
+    allowInlineEdits,
+    draftOnlyMode,
 }: {
     column: (typeof columns)[number];
     tasks: Doc<"tasks">[];
@@ -418,6 +649,8 @@ function KanbanColumn({
     accountingItemById: Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>;
     activeTaskId: Id<"tasks"> | null;
     taskNumberById: Map<Id<"tasks">, number>;
+    allowInlineEdits: boolean;
+    draftOnlyMode: boolean;
 }) {
     const { setNodeRef, isOver } = useDroppable({ id: column.id });
     return (
@@ -443,6 +676,8 @@ function KanbanColumn({
                         onOpen={() => onOpenTask(task._id)}
                         isDragging={activeTaskId === task._id}
                         taskNumberById={taskNumberById}
+                        allowInlineEdits={allowInlineEdits}
+                        draftOnlyMode={draftOnlyMode}
                     />
                 ))}
             </div>
@@ -461,6 +696,8 @@ function TaskCard({
     onOpen,
     isDragging,
     taskNumberById,
+    allowInlineEdits,
+    draftOnlyMode,
 }: {
     task: Doc<"tasks">;
     sections: AccountingSectionRow[];
@@ -472,10 +709,13 @@ function TaskCard({
     onOpen: () => void;
     isDragging: boolean;
     taskNumberById: Map<Id<"tasks">, number>;
+    allowInlineEdits: boolean;
+    draftOnlyMode: boolean;
 }) {
     const { attributes, listeners, setNodeRef, transform } = useDraggable({
         id: task._id,
         data: { taskId: task._id },
+        disabled: !allowInlineEdits || draftOnlyMode,
     });
     const style = {
         transform: CSS.Translate.toString(transform),
@@ -548,7 +788,14 @@ function TaskCard({
                     <button
                         type="button"
                         className="text-xs text-blue-600 hover:text-blue-800"
-                        onClick={onOpen}
+                        onClick={() => {
+                            if (!allowInlineEdits) {
+                                alert("Enable draft editing to edit tasks.");
+                                return;
+                            }
+                            onOpen();
+                        }}
+                        disabled={!allowInlineEdits}
                     >
                         Edit
                     </button>
@@ -589,12 +836,14 @@ function TaskCard({
                     label="Category"
                     value={task.category}
                     options={categoryOptions}
+                    disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) => onUpdate({ taskId: task._id, category: value as Doc<"tasks">["category"] })}
                 />
                 <InlineSelect
                     label="Priority"
                     value={task.priority}
                     options={priorityOptions}
+                    disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) => onUpdate({ taskId: task._id, priority: value as Doc<"tasks">["priority"] })}
                 />
                 <InlineSelect
@@ -602,6 +851,7 @@ function TaskCard({
                     value={task.itemId ?? ""}
                     options={itemLinkOptions}
                     includeUnassigned
+                    disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) =>
                         onUpdate({
                             taskId: task._id,
@@ -615,6 +865,7 @@ function TaskCard({
                     value={task.accountingSectionId ?? ""}
                     options={sectionOptions}
                     includeUnassigned
+                    disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) =>
                         onUpdate({
                             taskId: task._id,
@@ -625,10 +876,11 @@ function TaskCard({
                     }
                 />
                 <InlineSelect
-                    label="Element"
+                    label="Line"
                     value={itemValue}
                     options={itemOptions}
                     includeUnassigned
+                    disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) => {
                         if (!value) {
                             onUpdate({
@@ -651,6 +903,7 @@ function TaskCard({
                     label="Status"
                     value={task.status}
                     options={columns.map((col) => ({ label: col.title, value: col.id }))}
+                    disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) =>
                         onUpdate({
                             taskId: task._id,
@@ -666,6 +919,7 @@ function TaskCard({
                         if (confirm("Delete task?")) onDelete({ taskId: task._id });
                     }}
                     className="text-xs text-gray-400 hover:text-red-500"
+                    disabled={!allowInlineEdits || draftOnlyMode}
                 >
                     Delete
                 </button>
@@ -680,12 +934,14 @@ function InlineSelect({
     options,
     includeUnassigned,
     onChange,
+    disabled,
 }: {
     label: string;
     value: string;
     options: Array<string | { label: string; value: string }>;
     includeUnassigned?: boolean;
     onChange: (value: string) => void;
+    disabled?: boolean;
 }) {
     const normalized = options.map((option) =>
         typeof option === "string" ? { label: option, value: option } : option,
@@ -697,7 +953,8 @@ function InlineSelect({
             <select
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                className="border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500"
+                className="border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:bg-gray-100"
+                disabled={disabled}
             >
                 {includeUnassigned && <option value="">Unassigned</option>}
                 {normalized.map((option) => (

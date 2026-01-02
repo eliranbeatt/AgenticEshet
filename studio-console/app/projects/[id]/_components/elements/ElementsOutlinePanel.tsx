@@ -6,8 +6,10 @@ import { ChevronDown, ChevronRight, FileText, Folder, ListChecks, ShieldAlert } 
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useItemsContext } from "../items/ItemsContext";
+import { ItemEditorPanel } from "../items/ItemEditorPanel";
 
 type OutlineSectionKey =
+    | "details"
     | "overview"
     | "configuration"
     | "tasks"
@@ -17,6 +19,7 @@ type OutlineSectionKey =
     | "conflicts";
 
 const SECTION_ORDER: Array<{ key: OutlineSectionKey; label: string; icon: React.ReactNode }> = [
+    { key: "details", label: "Details", icon: <FileText size={14} /> },
     { key: "overview", label: "Overview", icon: <Folder size={14} /> },
     { key: "configuration", label: "Configuration", icon: <FileText size={14} /> },
     { key: "tasks", label: "Tasks", icon: <ListChecks size={14} /> },
@@ -26,7 +29,7 @@ const SECTION_ORDER: Array<{ key: OutlineSectionKey; label: string; icon: React.
     { key: "conflicts", label: "Conflicts / Warnings", icon: <ShieldAlert size={14} /> },
 ];
 
-const DEFAULT_EXPANDED: OutlineSectionKey[] = ["overview", "tasks", "budget"];
+const DEFAULT_EXPANDED: OutlineSectionKey[] = ["details", "overview", "tasks", "budget"];
 
 type ItemDetails = {
     item: Doc<"projectItems">;
@@ -38,7 +41,7 @@ type ItemDetails = {
 };
 
 export function ElementsOutlinePanel() {
-    const { projectId, selectedItemId } = useItemsContext();
+    const { selectedItemId } = useItemsContext();
     const [expandedSections, setExpandedSections] = useState<Set<OutlineSectionKey>>(
         () => new Set(DEFAULT_EXPANDED),
     );
@@ -114,6 +117,13 @@ export function ElementsOutlinePanel() {
         );
     }
 
+    const detailsSummary = (
+        <div className="flex flex-wrap gap-2">
+            <SummaryChip label="Editable" />
+            <SummaryChip label="Draft + Approve" />
+        </div>
+    );
+
     const overviewSummary = (
         <div className="flex flex-wrap gap-2">
             <SummaryChip label={content.item.status} />
@@ -168,6 +178,18 @@ export function ElementsOutlinePanel() {
                     const isOpen = expandedSections.has(key);
                     let summary: React.ReactNode = null;
                     let body: React.ReactNode = null;
+
+                    if (key === "details") {
+                        summary = detailsSummary;
+                        body = (
+                            <div className="space-y-2">
+                                <div className="text-xs text-gray-500">
+                                    Edit the element details below. Use Save draft / Approve to publish changes.
+                                </div>
+                                <ItemEditorPanel />
+                            </div>
+                        );
+                    }
 
                     if (key === "overview") {
                         summary = overviewSummary;

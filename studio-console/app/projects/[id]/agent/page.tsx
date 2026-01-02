@@ -51,9 +51,8 @@ function MessageBubble({ message }: { message: Doc<"conversationMessages"> }) {
     return (
         <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
             <div
-                className={`${base} ${
-                    isUser ? "bg-blue-600 text-white border-blue-700" : "bg-white text-gray-900 border-gray-200"
-                }`}
+                className={`${base} ${isUser ? "bg-blue-600 text-white border-blue-700" : "bg-white text-gray-900 border-gray-200"
+                    }`}
             >
                 <div dir="rtl">
                     {isUser ? message.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}
@@ -71,7 +70,7 @@ export default function AgentPage() {
     const projectId = params.id as Id<"projects">;
     const searchParams = useSearchParams();
     const router = useRouter();
-    const { selectedItemId, setShowDraftItems } = useItemsContext();
+    const { selectedItemId, setSelectedItemId, setSelectedItemMode, setShowDraftItems } = useItemsContext();
     const { thinkingMode } = useThinkingMode();
     const { selectedModel } = useModel();
 
@@ -81,6 +80,16 @@ export default function AgentPage() {
     const [draftChannel, setDraftChannel] = useState<Channel>("free");
     const [contextSearch, setContextSearch] = useState("");
     const [contextPickerOpen, setContextPickerOpen] = useState(false);
+    const [plannerStatus, setPlannerStatus] = useState<"idle" | "running">("idle");
+    const [plannerNotice, setPlannerNotice] = useState<string | null>(null);
+    const [disambiguationData, setDisambiguationData] = useState<{
+        draftOps: Array<{ type: string; elementId?: string; snapshot: any }>;
+        entries: Array<{ id: string; question: string; candidates: Array<{ elementId: string; title: string }> }>;
+    } | null>(null);
+    const [disambiguationSelections, setDisambiguationSelections] = useState<Record<string, string>>({});
+    const [summaryModalOpen, setSummaryModalOpen] = useState(false);
+    const [summaryText, setSummaryText] = useState("");
+    const [summaryStatus, setSummaryStatus] = useState<"idle" | "loading">("idle");
 
     const conversations = useQuery(api.projectConversations.list, {
         projectId,
@@ -101,6 +110,7 @@ export default function AgentPage() {
 
     const itemsSidebar = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
     const approvedItems = useQuery(api.items.listApproved, { projectId });
+    const draftList = useQuery(api.elementDrafts.list, { projectId });
     const itemsById = useMemo(() => {
         const map = new Map<string, string>();
         (itemsSidebar?.items ?? []).forEach((item) => {
@@ -124,6 +134,9 @@ export default function AgentPage() {
     const sendMessage = useAction(api.projectConversations.sendMessage);
     const renameConversation = useMutation(api.projectConversations.rename);
     const regenerateTitle = useAction(api.projectConversations.regenerateTitle);
+    const runPlanner = useAction(api.agents.planner.chatToDrafts);
+    const applyDraftOps = useAction(api.agents.planner.applyDraftOpsAction);
+    const summarizeConversation = useAction(api.agents.summary.summarizeConversation);
 
     useEffect(() => {
         setShowDraftItems(true);
@@ -134,14 +147,19 @@ export default function AgentPage() {
         const first = conversations[0];
         const next = new URLSearchParams(searchParams.toString());
         next.set("conversationId", String(first._id));
-        router.replace(`/projects/${projectId}/agent?${next.toString()}`);
+        const nextQuery = next.toString();
+        if (nextQuery === searchParams.toString()) return;
+        router.replace(`/projects/${projectId}/agent?${nextQuery}`);
     }, [conversations, projectId, router, searchParams, selectedConversationId]);
 
     useEffect(() => {
         if (!selectedConversation) return;
+        if (searchParams.get("stage") === selectedConversation.stageTag) return;
         const next = new URLSearchParams(searchParams.toString());
         next.set("stage", selectedConversation.stageTag);
-        router.replace(`/projects/${projectId}/agent?${next.toString()}`);
+        const nextQuery = next.toString();
+        if (nextQuery === searchParams.toString()) return;
+        router.replace(`/projects/${projectId}/agent?${nextQuery}`);
     }, [projectId, router, searchParams, selectedConversation]);
 
     const currentStage = (selectedConversation?.stageTag ?? draftStage) as Stage;
@@ -233,6 +251,13 @@ export default function AgentPage() {
         return (approvedItems ?? []).filter((item) => item.title.toLowerCase().includes(term));
     }, [approvedItems, contextSearch]);
 
+    const focusDrafts = () => {
+        const firstDraft = draftList?.[0];
+        if (!firstDraft) return;
+        setSelectedItemMode("draft");
+        setSelectedItemId(firstDraft.draft.elementId);
+    };
+
     return (
         <div className="flex flex-col gap-4 min-h-[85vh]">
             <div className="bg-white border rounded-lg shadow-sm p-4 flex flex-wrap items-center gap-4 justify-between">
@@ -313,6 +338,12 @@ export default function AgentPage() {
                 </div>
             </div>
 
+            {plannerNotice && (
+                <div className="bg-blue-50 border border-blue-200 text-blue-800 text-xs rounded px-3 py-2">
+                    {plannerNotice}
+                </div>
+            )}
+
             {selectedConversationId && contextMode === "selected" && contextPickerOpen && (
                 <div className="bg-white border rounded-lg shadow-sm p-3 space-y-3">
                     <div className="flex items-center gap-2">
@@ -367,7 +398,7 @@ export default function AgentPage() {
                 </div>
             )}
 
-            <div className="grid gap-4 min-h-0 grid-cols-[260px_minmax(0,1fr)_420px]">
+            <div className="grid gap-4 min-h-0 grid-cols-[260px_minmax(0,1fr)]">
                 <div className="bg-white border rounded-lg shadow-sm p-3 flex flex-col min-h-0">
                     <div className="flex items-center justify-between">
                         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Conversations</div>
@@ -408,9 +439,8 @@ export default function AgentPage() {
                                 return (
                                     <div
                                         key={conversation._id}
-                                        className={`border rounded p-2 text-xs cursor-pointer ${
-                                            isActive ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:bg-gray-50"
-                                        }`}
+                                        className={`border rounded p-2 text-xs cursor-pointer ${isActive ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:bg-gray-50"
+                                            }`}
                                         onClick={() => updateParam(conversation._id)}
                                     >
                                         <div className="font-semibold text-gray-800 truncate">{conversation.title}</div>
@@ -471,72 +501,253 @@ export default function AgentPage() {
                     </div>
                 </div>
 
-                <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
-                    <div className="p-3 border-b flex items-center justify-between">
-                        <div>
-                            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Agent</div>
-                            <div className="text-xs text-gray-500 mt-1">
-                                Stage: {currentStage} | Channel: {currentChannel}
+                <div className="grid grid-rows-2 gap-4 min-h-0">
+                    <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
+                        <div className="p-3 border-b flex items-center justify-between">
+                            <div>
+                                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Agent</div>
+                                <div className="text-xs text-gray-500 mt-1">
+                                    Stage: {currentStage} | Channel: {currentChannel}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        if (!selectedConversationId) return;
+                                        setSummaryModalOpen(true);
+                                        setSummaryStatus("loading");
+                                        try {
+                                            const result = await summarizeConversation({
+                                                projectId,
+                                                conversationId: selectedConversationId,
+                                            });
+                                            setSummaryText(result.text);
+                                        } catch (error) {
+                                            const message = error instanceof Error ? error.message : String(error);
+                                            setSummaryText(`Summary failed: ${message}`);
+                                        } finally {
+                                            setSummaryStatus("idle");
+                                        }
+                                    }}
+                                    className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 disabled:opacity-50"
+                                    disabled={!selectedConversation}
+                                >
+                                    Summary
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        if (!selectedConversationId) return;
+                                        setPlannerStatus("running");
+                                        setPlannerNotice(null);
+                                        try {
+                                            const result = await runPlanner({ projectId, conversationId: selectedConversationId });
+                                            if (result.status === "needs_disambiguation") {
+                                                setDisambiguationData({
+                                                    draftOps: result.draftOps,
+                                                    entries: result.disambiguation,
+                                                });
+                                                setPlannerNotice("Planner needs disambiguation before writing drafts.");
+                                            } else {
+                                                setPlannerNotice(`Drafts updated: ${result.updated}, created: ${result.created}.`);
+                                                focusDrafts();
+                                            }
+                                        } catch (error) {
+                                            const message = error instanceof Error ? error.message : String(error);
+                                            setPlannerNotice(`Planner failed: ${message}`);
+                                        } finally {
+                                            setPlannerStatus("idle");
+                                        }
+                                    }}
+                                    className="text-xs px-2 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
+                                    disabled={plannerStatus === "running" || !selectedConversation}
+                                >
+                                    {plannerStatus === "running" ? "Planning..." : "Turn chat into Draft Elements"}
+                                </button>
                             </div>
                         </div>
-                    </div>
-                    <div className="flex-1 min-h-0 relative">
-                        {!selectedConversation ? (
-                            <div className="p-4 text-sm text-gray-500">
-                                Select a conversation or create a new one to begin.
-                            </div>
-                        ) : currentChannel === "structured" ? (
-                            <div className="absolute inset-0">
-                                <StructuredQuestionsPanel
-                                    projectId={projectId}
-                                    stage={structuredStage}
-                                    conversationId={selectedConversation._id}
-                                />
-                            </div>
-                        ) : (
-                            <div className="flex flex-col h-full">
-                                <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                                    {!messages ? (
-                                        <div className="text-sm text-gray-500">Loading...</div>
-                                    ) : messages.length === 0 ? (
-                                        <div className="text-sm text-gray-500">No messages yet.</div>
-                                    ) : (
-                                        messages.map((message) => <MessageBubble key={message._id} message={message} />)
-                                    )}
+                        <div className="flex-1 min-h-0 relative">
+                            {!selectedConversation ? (
+                                <div className="p-4 text-sm text-gray-500">
+                                    Select a conversation or create a new one to begin.
                                 </div>
-                                <ChatComposer
-                                    placeholder="Ask for ideas, constraints, or solution approaches"
-                                    disabled={!selectedConversation}
-                                    onSend={async (content) => {
-                                        await sendMessage({
-                                            projectId,
-                                            conversationId: selectedConversation._id,
-                                            userContent: content,
-                                            model: selectedModel,
-                                            thinkingMode,
-                                        });
-                                    }}
-                                />
-                            </div>
-                        )}
+                            ) : currentChannel === "structured" ? (
+                                <div className="absolute inset-0">
+                                    <StructuredQuestionsPanel
+                                        projectId={projectId}
+                                        stage={structuredStage}
+                                        conversationId={selectedConversation._id}
+                                    />
+                                </div>
+                            ) : (
+                                <div className="flex flex-col h-full">
+                                    <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                                        {!messages ? (
+                                            <div className="text-sm text-gray-500">Loading...</div>
+                                        ) : messages.length === 0 ? (
+                                            <div className="text-sm text-gray-500">No messages yet.</div>
+                                        ) : (
+                                            messages.map((message) => <MessageBubble key={message._id} message={message} />)
+                                        )}
+                                    </div>
+                                    <ChatComposer
+                                        placeholder="Ask for ideas, constraints, or solution approaches"
+                                        disabled={!selectedConversation}
+                                        onSend={async (content) => {
+                                            await sendMessage({
+                                                projectId,
+                                                conversationId: selectedConversation._id,
+                                                userContent: content,
+                                                model: selectedModel,
+                                                thinkingMode,
+                                            });
+                                        }}
+                                    />
+                                </div>
+                            )}
+                        </div>
                     </div>
-                </div>
 
-                <div className="grid gap-4 min-h-0 grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]">
-                    <SuggestedElementsPanel
-                        projectId={projectId}
-                        selectedAllProject={true}
-                        selectedItemIds={[]}
-                        phase={plannerPhase}
-                    />
-                    <div className="min-h-0">
-                        <ElementsPanel />
-                    </div>
-                    <div className="min-h-0">
-                        <ElementsInspectorPanel />
+                    <div className="grid gap-4 min-h-0 grid-cols-[1fr_minmax(0,1fr)_420px]">
+                        <SuggestedElementsPanel
+                            projectId={projectId}
+                            selectedAllProject={true}
+                            selectedItemIds={[]}
+                            phase={plannerPhase}
+                        />
+                        <div className="min-h-0">
+                            <ElementsPanel />
+                        </div>
+                        <div className="min-h-0">
+                            <ElementsInspectorPanel />
+                        </div>
                     </div>
                 </div>
             </div>
+
+            {disambiguationData && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+                    <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl overflow-hidden">
+                        <div className="flex items-center justify-between px-4 py-3 border-b">
+                            <div className="text-sm font-semibold text-gray-800">Resolve disambiguation</div>
+                            <button
+                                type="button"
+                                className="text-xs text-gray-500 hover:text-gray-700"
+                                onClick={() => setDisambiguationData(null)}
+                            >
+                                Close
+                            </button>
+                        </div>
+                        <div className="p-4 space-y-4 text-sm">
+                            {disambiguationData.entries.map((entry) => (
+                                <div key={entry.id} className="space-y-2">
+                                    <div className="text-xs font-semibold text-gray-600">{entry.question}</div>
+                                    <select
+                                        className="w-full border rounded px-2 py-1 text-sm"
+                                        value={disambiguationSelections[entry.id] ?? ""}
+                                        onChange={(event) =>
+                                            setDisambiguationSelections((prev) => ({
+                                                ...prev,
+                                                [entry.id]: event.target.value,
+                                            }))
+                                        }
+                                    >
+                                        <option value="">Select element...</option>
+                                        {entry.candidates.map((candidate) => (
+                                            <option key={candidate.elementId} value={candidate.elementId}>
+                                                {candidate.title}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="px-4 py-3 border-t flex justify-end gap-2">
+                            <button
+                                type="button"
+                                className="text-xs px-3 py-2 rounded border border-gray-300"
+                                onClick={() => setDisambiguationData(null)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="text-xs px-3 py-2 rounded bg-blue-600 text-white"
+                                onClick={async () => {
+                                    if (!selectedConversationId) return;
+                                    const selections = disambiguationSelections;
+                                    const missing = disambiguationData.entries.filter(
+                                        (entry) => !selections[entry.id],
+                                    );
+                                    if (missing.length > 0) {
+                                        setPlannerNotice("Pick an element for each disambiguation.");
+                                        return;
+                                    }
+                                    const result = await applyDraftOps({
+                                        projectId,
+                                        conversationId: selectedConversationId,
+                                        draftOps: disambiguationData.draftOps,
+                                        selections,
+                                    });
+                                    setDisambiguationData(null);
+                                    setPlannerNotice(`Drafts updated: ${result.updated}, created: ${result.created}.`);
+                                    focusDrafts();
+                                }}
+                            >
+                                Apply drafts
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {summaryModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+                    <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl overflow-hidden">
+                        <div className="flex items-center justify-between px-4 py-3 border-b">
+                            <div className="text-sm font-semibold text-gray-800">Conversation summary</div>
+                            <button
+                                type="button"
+                                className="text-xs text-gray-500 hover:text-gray-700"
+                                onClick={() => setSummaryModalOpen(false)}
+                            >
+                                Close
+                            </button>
+                        </div>
+                        <div className="p-4">
+                            {summaryStatus === "loading" ? (
+                                <div className="text-sm text-gray-500">Generating summary...</div>
+                            ) : (
+                                <textarea
+                                    className="w-full min-h-[240px] border rounded p-3 text-xs"
+                                    value={summaryText}
+                                    onChange={(event) => setSummaryText(event.target.value)}
+                                />
+                            )}
+                        </div>
+                        <div className="px-4 py-3 border-t flex justify-end gap-2">
+                            <button
+                                type="button"
+                                className="text-xs px-3 py-2 rounded border border-gray-300"
+                                onClick={() => setSummaryModalOpen(false)}
+                            >
+                                Close
+                            </button>
+                            <button
+                                type="button"
+                                className="text-xs px-3 py-2 rounded bg-blue-600 text-white"
+                                onClick={async () => {
+                                    await navigator.clipboard.writeText(summaryText);
+                                }}
+                                disabled={!summaryText.trim()}
+                            >
+                                Copy to clipboard
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -1,8 +1,8 @@
 import { v } from "convex/values";
-import { action, mutation, query } from "./_generated/server";
+import { action, internalMutation, mutation, query } from "./_generated/server";
 import { api } from "./_generated/api";
 import { ItemSpecV2Schema } from "./lib/zodSchemas";
-import { parseItemSpec } from "./lib/itemHelpers";
+import { buildBaseItemSpec, buildSearchText, parseItemSpec } from "./lib/itemHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
 
 export const list = query({
@@ -99,6 +99,115 @@ export const upsert = mutation({
     },
 });
 
+export const applyDraftOps = mutation({
+    args: {
+        projectId: v.id("projects"),
+        ops: v.array(v.object({
+            type: v.union(v.literal("update_existing"), v.literal("create_new")),
+            elementId: v.optional(v.string()),
+            snapshot: v.any(),
+        })),
+    },
+    handler: async (ctx, args) => {
+        const now = Date.now();
+        let created = 0;
+        let updated = 0;
+        const elementIds: Array<Id<"projectItems">> = [];
+
+        for (const op of args.ops) {
+            const spec = ItemSpecV2Schema.parse(op.snapshot);
+            let elementId = op.elementId;
+
+            if (!elementId || elementId.toUpperCase().startsWith("NEW")) {
+                const itemId = await ctx.db.insert("projectItems", {
+                    projectId: args.projectId,
+                    parentItemId: null,
+                    sortKey: String(now),
+                    title: spec.identity.title,
+                    typeKey: spec.identity.typeKey,
+                    name: spec.identity.title,
+                    category: spec.identity.typeKey,
+                    kind: "deliverable",
+                    description: spec.identity.description,
+                    searchText: buildSearchText({
+                        name: spec.identity.title,
+                        description: spec.identity.description,
+                        typeKey: spec.identity.typeKey,
+                    }),
+                    status: "draft",
+                    createdFrom: { source: "agent" },
+                    latestRevisionNumber: 1,
+                    createdAt: now,
+                    updatedAt: now,
+                });
+
+                const baseSpec = buildBaseItemSpec(spec.identity.title, spec.identity.typeKey, spec.identity.description);
+                await ctx.db.insert("itemRevisions", {
+                    projectId: args.projectId,
+                    itemId,
+                    tabScope: "ideation",
+                    state: "proposed",
+                    revisionNumber: 1,
+                    data: baseSpec,
+                    createdBy: { kind: "agent" },
+                    createdAt: now,
+                });
+
+                elementId = String(itemId);
+                created += 1;
+            } else {
+                updated += 1;
+            }
+
+            const existing = await ctx.db
+                .query("elementDrafts")
+                .withIndex("by_project_element", (q) =>
+                    q.eq("projectId", args.projectId).eq("elementId", elementId as Id<"projectItems">)
+                )
+                .first();
+
+            if (existing) {
+                await ctx.db.patch(existing._id, {
+                    data: spec,
+                    updatedAt: now,
+                });
+            } else {
+                await ctx.db.insert("elementDrafts", {
+                    projectId: args.projectId,
+                    elementId: elementId as Id<"projectItems">,
+                    data: spec,
+                    createdAt: now,
+                    updatedAt: now,
+                });
+            }
+
+            elementIds.push(elementId as Id<"projectItems">);
+        }
+
+        return { created, updated, elementIds };
+    },
+});
+
+const logDraftApproval = internalMutation({
+    args: {
+        projectId: v.id("projects"),
+        elementId: v.id("projectItems"),
+        draftId: v.id("elementDrafts"),
+        approvedRevisionId: v.id("itemRevisions"),
+        approvedBy: v.optional(v.string()),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.insert("elementDraftApprovals", {
+            projectId: args.projectId,
+            elementId: args.elementId,
+            draftId: args.draftId,
+            approvedRevisionId: args.approvedRevisionId,
+            approvedAt: Date.now(),
+            approvedBy: args.approvedBy,
+        });
+    },
+});
+
 export const deleteDraft = mutation({
     args: { draftId: v.id("elementDrafts") },
     handler: async (ctx, args) => {
@@ -141,6 +250,14 @@ export const approveFromDraft = action({
         await ctx.runMutation(api.items.approveRevision, {
             itemId: draft.elementId as Id<"projectItems">,
             revisionId: result.revisionId,
+        });
+
+        await ctx.runMutation(logDraftApproval, {
+            projectId: args.projectId,
+            elementId: draft.elementId as Id<"projectItems">,
+            draftId: draft._id,
+            approvedRevisionId: result.revisionId,
+            approvedBy: "user",
         });
 
         await ctx.db.delete(args.draftId);

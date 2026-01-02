@@ -116,11 +116,12 @@ export function AgentActivityPanel({ projectId }: { projectId: Id<"projects"> })
                         ) : (
                             <div className="divide-y">
                                 {activity.map((entry) => (
-                                    <button
+                                    <div
                                         key={entry.key}
-                                        type="button"
+                                        role="button"
+                                        tabIndex={0}
                                         onClick={() => setSelectedKey(entry.key)}
-                                        className={`w-full text-left px-4 py-3 hover:bg-gray-50 ${selected?.key === entry.key ? "bg-blue-50" : ""
+                                        className={`w-full text-left px-4 py-3 hover:bg-gray-50 cursor-pointer ${selected?.key === entry.key ? "bg-blue-50" : ""
                                             }`}
                                     >
                                         <div className="flex items-center justify-between gap-2">
@@ -170,7 +171,7 @@ export function AgentActivityPanel({ projectId }: { projectId: Id<"projects"> })
                                                 {entry.error}
                                             </div>
                                         )}
-                                    </button>
+                                    </div>
                                 ))}
                             </div>
                         )}

@@ -243,23 +243,33 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
         })();
     }, [ensureThread, projectId, scopeKey, tab]);
 
-    const bottomTabs = selectedAllProject ? [] : selectedItemIds;
+    const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+    const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
+    const bottomTabs = selectedAllProject ? [] : selectedItemIds;
     const changeSetPhase = tab === "ideation" ? "convert" : tab;
+    const hasSelection = !selectedAllProject && (selectedItemIds.length > 0 || !!selectedItemId);
 
     return (
-        <div className="flex flex-col gap-8 pb-20">
+        <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden bg-gray-50 border-t">
             <ChangeSetReviewBanner projectId={projectId} phase={changeSetPhase} openSignal={reviewSignal} />
-            {/* Top row: left / center / right */}
-            <div className="grid gap-4 h-[85vh] grid-cols-[260px_minmax(0,1fr)_420px]">
-                <div className="flex flex-col gap-4 min-h-0">
-                    <div className="flex-1 min-h-0">
+
+            {/* LEFT SIDEBAR - ELEMENTS */}
+            {leftPanelOpen && (
+                <div className="w-[280px] flex-shrink-0 bg-white border-r flex flex-col z-10 transition-all">
+                    <div className="p-3 border-b flex items-center justify-between bg-gray-50/50">
+                        <span className="text-xs font-bold text-gray-500 uppercase">Elements</span>
+                        <button onClick={() => setLeftPanelOpen(false)} className="text-gray-400 hover:text-gray-600">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                        </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
                         <FlowItemsPanel
                             projectId={projectId}
                             selectedAllProject={selectedAllProject}
                             selectedItemIds={selectedItemIds}
                             multiSelectEnabled={true}
-                            onToggleMultiSelect={() => {}}
+                            onToggleMultiSelect={() => { }}
                             onSelectAllProject={() => {
                                 setSelectedAllProject(true);
                                 setSelectedItemIds([]);
@@ -274,221 +284,209 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                 }
                             }}
                         />
-                    </div>
-                    <SuggestedElementsPanel
-                        projectId={projectId}
-                        selectedAllProject={selectedAllProject}
-                        selectedItemIds={selectedItemIds}
-                        phase={changeSetPhase}
-                        onGenerated={() => setReviewSignal((value) => value + 1)}
-                    />
-                </div>
-
-                <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
-                    <div className="p-3 border-b flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Chat</div>
-                            <div className="text-xs text-gray-500 mt-1 truncate">Scope: {scopeKey}</div>
+                        <div className="border-t pt-2 mt-2">
+                            <SuggestedElementsPanel
+                                projectId={projectId}
+                                selectedAllProject={selectedAllProject}
+                                selectedItemIds={selectedItemIds}
+                                phase={changeSetPhase}
+                                onGenerated={() => setReviewSignal((value) => value + 1)}
+                            />
                         </div>
-                        <div className="flex items-center gap-2">
-                            {viewMode === "chat" && (
-                                <div className="flex items-center bg-gray-100 rounded p-1 gap-1 mr-2">
-                                    <button
-                                        onClick={() => setMode("clarify")}
-                                        className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
-                                            mode === "clarify" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
-                                        }`}
-                                        title="Ask clarification questions"
-                                    >
-                                        Clarify
-                                    </button>
-                                    <button
-                                        onClick={() => setMode("generate")}
-                                        className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
-                                            mode === "generate" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
-                                        }`}
-                                        title="Generate ideas and content"
-                                    >
-                                        Generate
-                                    </button>
-                                </div>
-                            )}
+                    </div>
+                </div>
+            )}
 
-                            <div className="flex items-center bg-gray-100 rounded p-1 gap-1">
-                                <button
-                                    onClick={() => setViewMode("structured")}
-                                    className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
-                                        viewMode === "structured" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
+            {/* CENTER MAIN CONTENT */}
+            <div className="flex-1 flex flex-col min-w-0 bg-white relative h-full">
+                {!leftPanelOpen && (
+                    <div className="absolute top-2 left-2 z-20">
+                        <button onClick={() => setLeftPanelOpen(true)} className="p-1 bg-white border shadow rounded text-gray-500 hover:text-blue-600">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                        </button>
+                    </div>
+                )}
+
+                {/* Top Toolbar */}
+                <div className="flex items-center justify-between px-4 py-2 border-b bg-white z-20 shadow-sm flex-shrink-0 h-12">
+                    <div className="flex items-center gap-2 pl-6">
+                        {/* Spacer */}
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="flex bg-gray-100 rounded p-1">
+                            <button
+                                onClick={() => setViewMode("structured")}
+                                className={`px-3 py-1 text-xs rounded font-medium transition-colors ${viewMode === "structured" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
                                     }`}
+                            >
+                                Structured
+                            </button>
+                            <button
+                                onClick={() => setViewMode("chat")}
+                                className={`px-3 py-1 text-xs rounded font-medium transition-colors ${viewMode === "chat" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
+                                    }`}
+                            >
+                                Chat
+                            </button>
+                        </div>
+                        {viewMode === "chat" && (
+                            <div className="flex bg-gray-100 rounded p-1">
+                                <button
+                                    onClick={() => setMode("clarify")}
+                                    className={`px-2 py-1 text-xs rounded font-medium transition-colors ${mode === "clarify" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
+                                        }`}
                                 >
-                                    Structured Questions
+                                    Clarify
                                 </button>
                                 <button
-                                    onClick={() => setViewMode("chat")}
-                                    className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
-                                        viewMode === "chat" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
-                                    }`}
+                                    onClick={() => setMode("generate")}
+                                    className={`px-2 py-1 text-xs rounded font-medium transition-colors ${mode === "generate" ? "bg-white shadow text-blue-600" : "text-gray-600 hover:text-gray-900"
+                                        }`}
                                 >
-                                    Generation Chat
+                                    Generate
                                 </button>
                             </div>
-                        </div>
+                        )}
                     </div>
+                    <div className="w-8">
+                        {/* Spacer */}
+                    </div>
+                </div>
 
-                    <div className="flex-1 min-h-0 relative">
+                {/* MAIN CONTENT SPLIT */}
+                <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                    {/* 1. TOP PANE: CHAT/STRUCTURED */}
+                    <div className={`flex flex-col relative w-full ${hasSelection ? 'h-[55%] border-b shadow-sm' : 'h-full'}`}>
                         {viewMode === "structured" ? (
-                            <div className="absolute inset-0">
-                                <StructuredQuestionsPanel 
-                                    projectId={projectId} 
-                                    stage={tab === "ideation" ? "clarification" : tab} 
+                            <div className="absolute inset-0 overflow-y-auto">
+                                <StructuredQuestionsPanel
+                                    projectId={projectId}
+                                    stage={tab === "ideation" ? "clarification" : tab}
                                 />
                             </div>
                         ) : (
                             !threadId ? (
-                                <div className="p-4 text-sm text-gray-500">Initializing chat...</div>
+                                <div className="flex-1 flex items-center justify-center text-sm text-gray-500">Initializing workspace...</div>
                             ) : (
                                 <AgentChatThread
                                     threadId={threadId}
-                                    placeholder="Ask to generate/expand ideas and execution approaches"
+                                    placeholder="Ask for generation..."
                                     onSend={async (content) => {
                                         await sendFlowTurn({
                                             threadId,
-                                        userContent: content,
-                                        tab,
-                                        mode,
-                                        scopeType,
-                                        scopeItemIds: selectedAllProject ? undefined : selectedItemIds,
-                                        model: selectedModel,
-                                        thinkingMode,
-                                    });
-                                }}
-                                onUpload={async (file) => {
-                                    const postUrl = await generateUploadUrl();
-                                    const result = await fetch(postUrl, {
-                                        method: "POST",
-                                        headers: { "Content-Type": file.type },
-                                        body: file,
-                                    });
-                                    if (!result.ok) throw new Error("Upload failed");
-                                    const { storageId } = await result.json();
-                                    const { url } = await createAssetFromUpload({
-                                        projectId,
-                                        storageId,
-                                        mimeType: file.type,
-                                        filename: file.name,
-                                    });
-                                    return `![${file.name}](${url})`;
-                                }}
-                                heightClassName="h-full"
-                            />
-                        ))}
+                                            userContent: content,
+                                            tab,
+                                            mode,
+                                            scopeType,
+                                            scopeItemIds: selectedAllProject ? undefined : selectedItemIds,
+                                            model: selectedModel,
+                                            thinkingMode,
+                                        });
+                                    }}
+                                    onUpload={async (file) => {
+                                        const postUrl = await generateUploadUrl();
+                                        const result = await fetch(postUrl, {
+                                            method: "POST",
+                                            headers: { "Content-Type": file.type },
+                                            body: file,
+                                        });
+                                        if (!result.ok) throw new Error("Upload failed");
+                                        const { storageId } = await result.json();
+                                        const { url } = await createAssetFromUpload({
+                                            projectId,
+                                            storageId,
+                                            mimeType: file.type,
+                                            filename: file.name,
+                                        });
+                                        return `![${file.name}](${url})`;
+                                    }}
+                                    heightClassName="h-full border-none shadow-none rounded-none"
+                                />
+                            )
+                        )}
                     </div>
-                </div>
 
-                    <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
-                        <div className="p-3 border-b flex items-center justify-between bg-gray-50">
-                            <div className="flex gap-2">
+                    {/* 2. BOTTOM PANE: EDITOR (Only if selection) */}
+                    {hasSelection && (
+                        <div className="flex-1 bg-gray-50 flex flex-col min-h-0 overflow-hidden">
+                            <div className="p-2 border-b bg-white flex items-center justify-between flex-shrink-0">
+                                <div className="text-xs font-bold text-gray-500 uppercase flex items-center gap-2">
+                                    <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                    Selected Element Editor
+                                </div>
                                 <button
-                                    onClick={() => setRightPanelTab("knowledge")}
-                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "knowledge" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                    onClick={() => setSelectedItemId(null)}
+                                    className="text-xs text-gray-500 hover:text-gray-800"
                                 >
-                                    Project Brain
+                                    Close
                                 </button>
-                                <button
-                                    onClick={() => setRightPanelTab("state")}
-                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "state" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                                >
-                                    Current State
-                                </button>
-                                {!elementsCanonical && factsEnabled && (
-                                    <button
-                                        onClick={() => setRightPanelTab("facts")}
-                                        className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "facts" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                                    >
-                                        Facts Ledger
-                                    </button>
-                                )}
-                                <button
-                                    onClick={() => setRightPanelTab("questions")}
-                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "questions" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                                >
-                                    Questions
-                                </button>
-                                {tab === "ideation" && (
-                                    <button
-                                        onClick={() => setRightPanelTab("ideas")}
-                                        className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "ideas" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                                    >
-                                        Ideas
-                                    </button>
-                                )}
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-4">
+                                <ItemEditorPanel />
                             </div>
                         </div>
-                        <div className="flex-1 min-h-0 relative">
-                            {rightPanelTab === "knowledge" ? (
-                                <CurrentKnowledgePanel projectId={projectId} />
-                            ) : rightPanelTab === "state" ? (
-                                <CurrentStatePanel
-                                    text={textDraft}
-                                    onChange={setTextDraft}
-                                    onSubmit={handleSubmitCurrentState}
-                                    isSubmitting={isSubmittingState}
-                                    saveStatus={saveStatus}
-                                    updatedAt={workspace?.updatedAt}
-                                    hasRemoteUpdate={hasRemoteUpdate}
-                                    onApplyRemote={applyRemoteUpdate}
-                                />
-                            ) : rightPanelTab === "facts" ? (
-                                <FactsPanel projectId={projectId} />
-                            ) : rightPanelTab === "questions" ? (
-                                <QuestionQueuePanel projectId={projectId} />
-                            ) : (
-                                <IdeasPanel projectId={projectId} />
-                            )}
-                    </div>
+                    )}
                 </div>
             </div>
 
-            {/* Bottom row: structured editor */}
-            <div className="bg-white border rounded-lg shadow-sm flex flex-col">
-                <div className="p-3 border-b flex items-center justify-between">
-                    <div>
-                        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Structured editor</div>
-                        <div className="text-xs text-gray-500 mt-1">
-                            {selectedAllProject
-                                ? "Select an item to edit"
-                                : bottomTabs.length > 1
-                                    ? "Multiple items selected"
-                                    : ""}
+            {/* RIGHT SIDEBAR - CONTEXT */}
+            {rightPanelOpen && (
+                <div className="w-[320px] flex-shrink-0 bg-white border-l flex flex-col z-10 transition-all">
+                    <div className="p-2 border-b bg-gray-50 flex items-center justify-between">
+                        <div className="flex gap-1 overflow-x-auto no-scrollbar">
+                            {["state", "knowledge", "facts", "questions", "ideas"].map((t) => {
+                                if (t === "facts" && (!factsEnabled || elementsCanonical)) return null;
+                                if (t === "ideas" && tab !== "ideation") return null;
+                                if (t === "knowledge" && elementsCanonical && rightPanelTab === "state") return null;
+
+                                return (
+                                    <button
+                                        key={t}
+                                        onClick={() => setRightPanelTab(t as any)}
+                                        className={`text-[10px] font-semibold uppercase tracking-wide px-2 py-1 rounded whitespace-nowrap ${rightPanelTab === t ? "bg-white shadow text-blue-600 border" : "text-gray-500 hover:text-gray-800"
+                                            }`}
+                                    >
+                                        {t === "state" ? "State" : t.charAt(0).toUpperCase() + t.slice(1)}
+                                    </button>
+                                );
+                            })}
                         </div>
+                        <button onClick={() => setRightPanelOpen(false)} className="ml-2 text-gray-400 hover:text-gray-600">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                        </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto relative">
+                        {rightPanelTab === "knowledge" ? (
+                            <CurrentKnowledgePanel projectId={projectId} />
+                        ) : rightPanelTab === "state" ? (
+                            <CurrentStatePanel
+                                text={textDraft}
+                                onChange={setTextDraft}
+                                onSubmit={handleSubmitCurrentState}
+                                isSubmitting={isSubmittingState}
+                                saveStatus={saveStatus}
+                                updatedAt={workspace?.updatedAt}
+                                hasRemoteUpdate={hasRemoteUpdate}
+                                onApplyRemote={applyRemoteUpdate}
+                            />
+                        ) : rightPanelTab === "facts" ? (
+                            <FactsPanel projectId={projectId} />
+                        ) : rightPanelTab === "questions" ? (
+                            <QuestionQueuePanel projectId={projectId} />
+                        ) : (
+                            <IdeasPanel projectId={projectId} />
+                        )}
                     </div>
                 </div>
-
-                {bottomTabs.length > 1 && (
-                    <div className="px-3 py-2 border-b flex flex-wrap gap-2">
-                        {bottomTabs.map((id) => {
-                            const isActive = selectedItemId === id;
-                            return (
-                                <button
-                                    key={String(id)}
-                                    type="button"
-                                    onClick={() => setSelectedItemId(id)}
-                                    className={`text-xs px-3 py-1 rounded border ${
-                                        isActive ? "bg-blue-50 border-blue-300 text-blue-800" : "bg-white hover:bg-gray-50"
-                                    }`}
-                                >
-                                    {String(id).slice(-6)}
-                                </button>
-                            );
-                        })}
-                    </div>
-                )}
-
-                <div className="p-3">
-                    <ItemEditorPanel />
+            )}
+            {!rightPanelOpen && (
+                <div className="absolute top-2 right-2 z-20">
+                    <button onClick={() => setRightPanelOpen(true)} className="p-1 bg-white border shadow rounded text-gray-500 hover:text-blue-600">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                    </button>
                 </div>
-            </div>
+            )}
         </div>
     );
 }
-

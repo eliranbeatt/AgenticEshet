@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
+import { runStudioTurnHelper } from "./agents/orchestrator";
 
 const stageValidator = v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning"));
 const channelValidator = v.union(v.literal("free"), v.literal("structured"));
@@ -162,7 +163,7 @@ export const setContext = mutation({
     },
 });
 
-const appendMessage = internalMutation({
+export const appendMessage = internalMutation({
     args: {
         conversationId: v.id("projectConversations"),
         projectId: v.id("projects"),
@@ -170,6 +171,7 @@ const appendMessage = internalMutation({
         content: v.string(),
         stage: stageValidator,
         channel: channelValidator,
+        promptIdUsed: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
         await ctx.db.insert("conversationMessages", {
@@ -179,12 +181,15 @@ const appendMessage = internalMutation({
             content: args.content,
             stage: args.stage,
             channel: args.channel,
+            stageAtTime: args.stage,
+            channelAtTime: args.channel,
+            promptIdUsed: args.promptIdUsed,
             createdAt: Date.now(),
         });
     },
 });
 
-const touchConversation = internalMutation({
+export const touchConversation = internalMutation({
     args: {
         conversationId: v.id("projectConversations"),
         updatedAt: v.number(),
@@ -202,7 +207,7 @@ const touchConversation = internalMutation({
     },
 });
 
-const countMessages = internalQuery({
+export const countMessages = internalQuery({
     args: { conversationId: v.id("projectConversations") },
     handler: async (ctx, args) => {
         const messages = await ctx.db
@@ -214,7 +219,7 @@ const countMessages = internalQuery({
     },
 });
 
-const countUserMessages = internalQuery({
+export const countUserMessages = internalQuery({
     args: { conversationId: v.id("projectConversations") },
     handler: async (ctx, args) => {
         const messages = await ctx.db
@@ -240,13 +245,13 @@ export const regenerateTitle = action({
             throw new Error("Conversation not found");
         }
 
-        const userMessages = await ctx.runQuery(countUserMessages, { conversationId: conversation._id });
+        const userMessages = await ctx.runQuery(internal.projectConversations.countUserMessages, { conversationId: conversation._id });
         const lastUser = [...userMessages].reverse().find((message) => message.role === "user");
         if (!lastUser) {
             throw new Error("No user messages to derive title");
         }
 
-        await ctx.runMutation(touchConversation, {
+        await ctx.runMutation(internal.projectConversations.touchConversation, {
             conversationId: conversation._id,
             updatedAt: Date.now(),
             title: normalizeTitle(lastUser.content),
@@ -263,6 +268,10 @@ export const sendMessage = action({
         thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
+        console.log("DEBUG sendMessage - api.agents:", api.agents);
+        console.log("DEBUG sendMessage - api.agents?.orchestrator:", api.agents?.orchestrator);
+        console.log("DEBUG sendMessage - api.agents?.orchestrator?.runStudioTurn:", api.agents?.orchestrator?.runStudioTurn);
+
         const conversation = await ctx.runQuery(api.projectConversations.getById, {
             projectId: args.projectId,
             conversationId: args.conversationId,
@@ -275,100 +284,20 @@ export const sendMessage = action({
             throw new Error("Conversation is archived");
         }
 
-        const stage = conversation.stageTag;
-        const channel = conversation.defaultChannel;
-
-        if (channel !== "free") {
+        if (conversation.defaultChannel !== "free") {
             throw new Error("Structured channel uses the structured questions panel.");
         }
 
-        const contextElementIds = (conversation.contextElementIds ?? []).filter(Boolean);
-        const scopeType =
-            conversation.contextMode === "selected" && contextElementIds.length > 0
-                ? contextElementIds.length === 1
-                    ? "singleItem"
-                    : "multiItem"
-                : "allProject";
-        const scopeItemIds = scopeType === "allProject" ? undefined : contextElementIds;
-
-        const { threadId } = await ctx.runMutation(api.chat.ensureThread, {
-            projectId: conversation.projectId,
-            phase: stage,
-            scenarioKey: `agent:${conversation._id}`,
-            title: conversation.title,
-        });
-
-        const now = Date.now();
-        await ctx.runMutation(appendMessage, {
-            conversationId: conversation._id,
-            projectId: conversation.projectId,
-            role: "user",
-            content: args.userContent,
-            stage,
-            channel,
-        });
-
-        await ctx.runMutation(touchConversation, {
-            conversationId: conversation._id,
-            updatedAt: now,
-            lastMessageAt: now,
-            threadId,
-        });
-
-        try {
-            const result = await ctx.runAction(api.agents.flow.send, {
-                threadId,
+        return await runStudioTurnHelper(ctx, {
+            projectId: args.projectId,
+            conversationId: args.conversationId,
+            stage: conversation.stageTag,
+            channel: "free",
+            payload: {
                 userContent: args.userContent,
-                stage,
-                channel,
-                mode: "generate",
-                scopeType,
-                scopeItemIds,
-                conversationId: conversation._id,
-                contextMode: conversation.contextMode,
-                contextElementIds: conversation.contextElementIds,
                 model: args.model,
                 thinkingMode: args.thinkingMode,
-            });
-
-            await ctx.runMutation(appendMessage, {
-                conversationId: conversation._id,
-                projectId: conversation.projectId,
-                role: "assistant",
-                content: result.assistantMarkdown ?? "(empty)",
-                stage,
-                channel,
-            });
-
-            const userMessages = await ctx.runQuery(countUserMessages, { conversationId: conversation._id });
-            const shouldAutoTitle = isAutoTitleEligible(conversation.title) && userMessages.length >= 3;
-            const lastUser = [...userMessages].reverse().find((message) => message.role === "user");
-            const autoTitle = shouldAutoTitle && lastUser ? normalizeTitle(lastUser.content) : undefined;
-
-            await ctx.runMutation(touchConversation, {
-                conversationId: conversation._id,
-                updatedAt: Date.now(),
-                lastMessageAt: Date.now(),
-                threadId,
-                title: autoTitle,
-            });
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            await ctx.runMutation(appendMessage, {
-                conversationId: conversation._id,
-                projectId: conversation.projectId,
-                role: "system",
-                content: `Error: ${message}`,
-                stage,
-                channel,
-            });
-            await ctx.runMutation(touchConversation, {
-                conversationId: conversation._id,
-                updatedAt: Date.now(),
-                lastMessageAt: Date.now(),
-                threadId,
-            });
-            throw error;
-        }
+            },
+        });
     },
 });

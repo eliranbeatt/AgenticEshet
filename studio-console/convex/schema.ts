@@ -726,6 +726,17 @@ export default defineSchema({
         .index("by_project_element", ["projectId", "elementId"])
         .index("by_project_updatedAt", ["projectId", "updatedAt"]),
 
+    elementDraftApprovals: defineTable({
+        projectId: v.id("projects"),
+        elementId: v.id("projectItems"),
+        draftId: v.id("elementDrafts"),
+        approvedRevisionId: v.id("itemRevisions"),
+        approvedAt: v.number(),
+        approvedBy: v.optional(v.string()),
+    })
+        .index("by_project_approvedAt", ["projectId", "approvedAt"])
+        .index("by_element_approvedAt", ["elementId", "approvedAt"]),
+
     projectVersions: defineTable({
         projectId: v.id("projects"),
         createdAt: v.number(),
@@ -1305,6 +1316,9 @@ export default defineSchema({
         content: v.string(),
         stage: v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning")),
         channel: v.union(v.literal("free"), v.literal("structured")),
+        stageAtTime: v.optional(v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning"))),
+        channelAtTime: v.optional(v.union(v.literal("free"), v.literal("structured"))),
+        promptIdUsed: v.optional(v.string()),
         createdAt: v.number(),
     })
         .index("by_conversation_createdAt", ["conversationId", "createdAt"])

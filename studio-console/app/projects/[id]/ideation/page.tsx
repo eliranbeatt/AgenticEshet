@@ -1,13 +1,6 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { Id } from "@/convex/_generated/dataModel";
-import { useParams } from "next/navigation";
-import { FlowWorkbench } from "../_components/flow/FlowWorkbench";
-
-export default function IdeationPage() {
-    const params = useParams();
-    const projectId = params.id as Id<"projects">;
-
-    return <FlowWorkbench projectId={projectId} tab="ideation" />;
+export default function IdeationPage({ params }: { params: { id: string } }) {
+    redirect(`/projects/${params.id}/agent?stage=ideation`);
 }
 

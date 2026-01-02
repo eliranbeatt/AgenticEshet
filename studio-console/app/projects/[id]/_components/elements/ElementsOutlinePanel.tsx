@@ -1,12 +1,34 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useQuery } from "convex/react";
-import { ChevronDown, ChevronRight, FileText, Folder, ListChecks, ShieldAlert } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import {
+    ChevronDown,
+    ChevronRight,
+    FileText,
+    Folder,
+    ListChecks,
+    Pencil,
+    Plus,
+    Save,
+    ShieldAlert,
+    Trash2,
+    X,
+} from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useItemsContext } from "../items/ItemsContext";
-import { ItemEditorPanel } from "../items/ItemEditorPanel";
+
+import {
+    createEmptyItemSpec,
+    type ItemSpecV2,
+    type LaborSpec,
+    type MaterialSpec,
+    type SubtaskSpec,
+} from "../../../../../lib/items";
+import { mergeItemSpec } from "../../../../../lib/itemsMerge";
+
+
 
 type OutlineSectionKey =
     | "details"
@@ -40,52 +62,124 @@ type ItemDetails = {
     revisions: Doc<"itemRevisions">[];
 };
 
+type DraftTask = {
+    id: string;
+    title: string;
+    status: "todo" | "in_progress" | "done" | "blocked";
+    estMinutes: string;
+};
+
+type DraftMaterial = {
+    id: string;
+    label: string;
+    category: string;
+    unit: string;
+    qty: string;
+    unitCostEstimate: string;
+    status: string;
+};
+
+type DraftLabor = {
+    id: string;
+    role: string;
+    workType: string;
+    rateType: string;
+    quantity: string;
+    unitCost: string;
+    description: string;
+};
+
 export function ElementsOutlinePanel() {
-    const { selectedItemId } = useItemsContext();
+    const { projectId, selectedItemId } = useItemsContext();
     const [expandedSections, setExpandedSections] = useState<Set<OutlineSectionKey>>(
         () => new Set(DEFAULT_EXPANDED),
     );
-    const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+    const [editingTask, setEditingTask] = useState<DraftTask | null>(null);
+    const [editingMaterial, setEditingMaterial] = useState<DraftMaterial | null>(null);
+    const [editingWork, setEditingWork] = useState<DraftLabor | null>(null);
 
     const details = useQuery(
         api.items.getItemDetails,
         selectedItemId ? { itemId: selectedItemId } : "skip",
     ) as ItemDetails | null | undefined;
+    const draftData = useQuery(
+        api.elementDrafts.get,
+        selectedItemId ? { projectId, elementId: selectedItemId } : "skip",
+    );
+    const upsertDraft = useMutation(api.elementDrafts.upsert);
 
     const content = useMemo(() => {
         if (!details) return null;
         return details;
     }, [details]);
 
-    const tasks = content?.tasks ?? [];
-    const materialLines = content?.materialLines ?? [];
-    const workLines = content?.workLines ?? [];
-    const accountingLines = content?.accountingLines ?? [];
     const revisions = content?.revisions ?? [];
+    const approvedRevision = useMemo(() => {
+        if (!content?.item.approvedRevisionId) return null;
+        return revisions.find((rev) => rev._id === content.item.approvedRevisionId) ?? null;
+    }, [content?.item.approvedRevisionId, revisions]);
+
+    const baseSpec = useMemo<ItemSpecV2 | null>(() => {
+        if (!content) return null;
+        const base = createEmptyItemSpec(content.item.title, content.item.typeKey);
+        const sourceSpec = (draftData?.data ?? approvedRevision?.data) as ItemSpecV2 | undefined;
+        return sourceSpec ? mergeItemSpec(base, sourceSpec) : base;
+    }, [approvedRevision?.data, content, draftData?.data]);
+
+    const [localSpec, setLocalSpec] = useState<ItemSpecV2 | null>(null);
+    const [isSavingDraft, setIsSavingDraft] = useState(false);
+
+    const lastElementIdRef = useRef<string | null>(null);
+
+    useEffect(() => {
+        const nextId = selectedItemId ? String(selectedItemId) : null;
+        if (!baseSpec) {
+            setLocalSpec(null);
+            lastElementIdRef.current = nextId;
+            return;
+        }
+        if (lastElementIdRef.current !== nextId) {
+            setLocalSpec(baseSpec);
+            lastElementIdRef.current = nextId;
+            return;
+        }
+        if (!localSpec) {
+            setLocalSpec(baseSpec);
+        }
+    }, [baseSpec, localSpec, selectedItemId]);
+
+    const viewSpec = localSpec ?? baseSpec;
+    const subtasks = viewSpec?.breakdown.subtasks ?? [];
+    const materials = viewSpec?.breakdown.materials ?? [];
+    const labor = viewSpec?.breakdown.labor ?? [];
+
+    const baseSpecString = useMemo(() => (baseSpec ? JSON.stringify(baseSpec) : ""), [baseSpec]);
+    const localSpecString = useMemo(() => (localSpec ? JSON.stringify(localSpec) : ""), [localSpec]);
+    const isDirty = Boolean(localSpec && baseSpec && localSpecString !== baseSpecString);
 
     const taskStats = useMemo(() => {
-        const blocked = tasks.filter((task) => task.status === "blocked").length;
-        const done = tasks.filter((task) => task.status === "done").length;
-        return { total: tasks.length, blocked, done };
-    }, [tasks]);
+        const flat = flattenSubtasks(subtasks);
+        const blocked = flat.filter((task) => task.status === "blocked").length;
+        const done = flat.filter((task) => task.status === "done").length;
+        return { total: flat.length, blocked, done };
+    }, [subtasks]);
 
     const budgetStats = useMemo(() => {
-        const materialTotal = materialLines.reduce(
-            (sum, line) => sum + line.plannedQuantity * line.plannedUnitCost,
+        const materialTotal = materials.reduce(
+            (sum, line) => sum + (line.qty ?? 0) * (line.unitCostEstimate ?? 0),
             0,
         );
-        const laborTotal = workLines.reduce(
-            (sum, line) => sum + line.plannedQuantity * line.plannedUnitCost,
+        const laborTotal = labor.reduce(
+            (sum, line) => sum + (line.quantity ?? 0) * (line.unitCost ?? 0),
             0,
         );
         return {
             materialTotal,
             laborTotal,
-            materialCount: materialLines.length,
-            laborCount: workLines.length,
-            accountingCount: accountingLines.length,
+            materialCount: materials.length,
+            laborCount: labor.length,
         };
-    }, [accountingLines.length, materialLines, workLines]);
+    }, [labor, materials]);
 
     const toggleSection = (key: OutlineSectionKey) => {
         setExpandedSections((prev) => {
@@ -98,6 +192,96 @@ export function ElementsOutlinePanel() {
             return next;
         });
     };
+
+    const expandAll = () => {
+        setExpandedSections(new Set(SECTION_ORDER.map((s) => s.key)));
+    };
+
+    const collapseAll = () => {
+        setExpandedSections(new Set());
+    };
+
+    const startEditTask = (task: SubtaskSpec) => {
+        setEditingTask({
+            id: task.id,
+            title: task.title,
+            status: (task.status as "todo" | "in_progress" | "done" | "blocked") ?? "todo",
+            estMinutes: task.estMinutes?.toString() ?? "",
+        });
+    };
+
+    const startEditMaterial = (line: MaterialSpec) => {
+        setEditingMaterial({
+            id: line.id,
+            label: line.label,
+            category: line.category ?? "",
+            unit: line.unit ?? "",
+            qty: line.qty?.toString() ?? "",
+            unitCostEstimate: line.unitCostEstimate?.toString() ?? "",
+            status: line.status ?? "",
+        });
+    };
+
+    const startEditWork = (line: LaborSpec) => {
+        setEditingWork({
+            id: line.id,
+            role: line.role,
+            workType: line.workType,
+            rateType: line.rateType,
+            quantity: line.quantity?.toString() ?? "",
+            unitCost: line.unitCost?.toString() ?? "",
+            description: line.description ?? "",
+        });
+    };
+
+    const saveDraftSpec = async (nextSpec: ItemSpecV2) => {
+        if (!selectedItemId) return;
+        setIsSavingDraft(true);
+        try {
+            await upsertDraft({
+                projectId,
+                elementId: selectedItemId,
+                data: nextSpec,
+            });
+        } finally {
+            setIsSavingDraft(false);
+        }
+    };
+
+    const updateLocalSpec = (updater: (spec: ItemSpecV2) => ItemSpecV2) => {
+        setLocalSpec((prev) => {
+            const base = prev ?? baseSpec;
+            if (!base) return prev;
+            return updater(base);
+        });
+    };
+
+    const visibleSubtasks = useMemo(() => {
+        if (!viewSpec) return [];
+        if (!editingTask) return viewSpec.breakdown.subtasks;
+        if (viewSpec.breakdown.subtasks.some((entry) => entry.id === editingTask.id)) {
+            return viewSpec.breakdown.subtasks;
+        }
+        return [draftToSubtask(editingTask), ...viewSpec.breakdown.subtasks];
+    }, [editingTask, viewSpec]);
+
+    const visibleMaterials = useMemo(() => {
+        if (!viewSpec) return [];
+        if (!editingMaterial) return viewSpec.breakdown.materials;
+        if (viewSpec.breakdown.materials.some((entry) => entry.id === editingMaterial.id)) {
+            return viewSpec.breakdown.materials;
+        }
+        return [draftToMaterial(editingMaterial), ...viewSpec.breakdown.materials];
+    }, [editingMaterial, viewSpec]);
+
+    const visibleLabor = useMemo(() => {
+        if (!viewSpec) return [];
+        if (!editingWork) return viewSpec.breakdown.labor;
+        if (viewSpec.breakdown.labor.some((entry) => entry.id === editingWork.id)) {
+            return viewSpec.breakdown.labor;
+        }
+        return [draftToLabor(editingWork), ...viewSpec.breakdown.labor];
+    }, [editingWork, viewSpec]);
 
     if (!selectedItemId) {
         return (
@@ -117,10 +301,11 @@ export function ElementsOutlinePanel() {
         );
     }
 
+
     const detailsSummary = (
         <div className="flex flex-wrap gap-2">
-            <SummaryChip label="Editable" />
-            <SummaryChip label="Draft + Approve" />
+            <SummaryChip label={draftData ? "Draft saved" : "No draft"} />
+            <SummaryChip label="Approve to publish" />
         </div>
     );
 
@@ -153,7 +338,6 @@ export function ElementsOutlinePanel() {
         <div className="flex flex-wrap gap-2">
             <SummaryChip label={`${budgetStats.materialCount} materials`} />
             <SummaryChip label={`${budgetStats.laborCount} labor`} />
-            <SummaryChip label={`${budgetStats.accountingCount} accounting`} />
         </div>
     );
 
@@ -163,13 +347,44 @@ export function ElementsOutlinePanel() {
 
     return (
         <div className="bg-white border rounded-lg shadow-sm flex flex-col h-full overflow-hidden">
-            <div className="px-4 py-3 border-b bg-gray-50/70">
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Outline</div>
-                <div className="text-lg font-semibold text-gray-900 truncate">
-                    {content.item.title}
+            <div className="px-4 py-3 border-b bg-gray-50/70 flex justify-between items-start">
+                <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Outline</div>
+                    <div className="text-lg font-semibold text-gray-900 truncate">
+                        {content.item.title}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                        {content.item.typeKey} - {content.item.status}
+                    </div>
                 </div>
-                <div className="text-xs text-gray-500">
-                    {content.item.typeKey} • {content.item.status}
+                <div className="flex flex-wrap gap-2 flex-none ml-4 items-center">
+                    {isDirty && (
+                        <span className="text-[10px] uppercase tracking-wide text-amber-700 bg-amber-100 px-2 py-1 rounded-full">
+                            Unsaved changes
+                        </span>
+                    )}
+                    <button
+                        onClick={async () => {
+                            if (!viewSpec) return;
+                            await saveDraftSpec(viewSpec);
+                        }}
+                        disabled={!isDirty || isSavingDraft}
+                        className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded shadow-sm hover:bg-blue-700 disabled:opacity-50"
+                    >
+                        {isSavingDraft ? "Saving..." : "Save element draft"}
+                    </button>
+                    <button
+                        onClick={expandAll}
+                        className="text-xs px-2 py-1 bg-white border rounded shadow-sm hover:bg-gray-50 text-gray-600 font-medium"
+                    >
+                        Expand All
+                    </button>
+                    <button
+                        onClick={collapseAll}
+                        className="text-xs px-2 py-1 bg-white border rounded shadow-sm hover:bg-gray-50 text-gray-600 font-medium"
+                    >
+                        Collapse All
+                    </button>
                 </div>
             </div>
 
@@ -182,11 +397,30 @@ export function ElementsOutlinePanel() {
                     if (key === "details") {
                         summary = detailsSummary;
                         body = (
-                            <div className="space-y-2">
-                                <div className="text-xs text-gray-500">
-                                    Edit the element details below. Use Save draft / Approve to publish changes.
+                            <div className="space-y-3">
+                                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                                    <div className="text-gray-500 font-medium">Title</div>
+                                    <div className="text-gray-900 font-semibold">{content.item.title}</div>
+
+                                    <div className="text-gray-500 font-medium">Type</div>
+                                    <div className="text-gray-900">{content.item.typeKey}</div>
+
+                                    <div className="text-gray-500 font-medium">Status</div>
+                                    <div className="text-gray-900">
+                                        <SummaryChip label={content.item.status} tone={content.item.status === "approved" ? "success" : "default"} />
+                                    </div>
+
+                                    <div className="text-gray-500 font-medium">Updated</div>
+                                    <div className="text-gray-900">{new Date(content.item.updatedAt).toLocaleString()}</div>
                                 </div>
-                                <ItemEditorPanel />
+
+                                {content.item.description ? (
+                                    <div className="bg-gray-50 p-2 rounded text-sm text-gray-700 whitespace-pre-wrap border border-gray-100">
+                                        {content.item.description}
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-gray-400 italic">No description provided.</div>
+                                )}
                             </div>
                         );
                     }
@@ -245,17 +479,50 @@ export function ElementsOutlinePanel() {
 
                     if (key === "tasks") {
                         summary = taskSummary;
-                        body = tasks.length === 0 ? (
+                        body = visibleSubtasks.length === 0 ? (
                             <div className="text-xs text-gray-500">No tasks linked yet.</div>
                         ) : (
                             <div className="space-y-2">
-                                {tasks.map((task) => (
-                                    <OutlineRow
-                                        key={task._id}
-                                        isActive={selectedRowId === task._id}
-                                        title={task.title}
-                                        subtitle={`${task.status} • ${formatTaskHours(task)}`}
-                                        onClick={() => setSelectedRowId(task._id)}
+                                {visibleSubtasks.map((task) => (
+                                    <TaskRow
+                                        key={task.id}
+                                        task={task}
+                                        isEditing={editingTask?.id === task.id}
+                                        draft={editingTask}
+                                        onEdit={() => startEditTask(task)}
+                                        onCancel={() => setEditingTask(null)}
+                                        onChange={setEditingTask}
+                                        onSave={async () => {
+                                            if (!editingTask) return;
+                                            const nextTask = draftToSubtask(editingTask);
+                                            updateLocalSpec((spec) => {
+                                                const nextSubtasks = upsertById(spec.breakdown.subtasks, nextTask);
+                                                return {
+                                                    ...spec,
+                                                    breakdown: { ...spec.breakdown, subtasks: nextSubtasks },
+                                                };
+                                            });
+                                            setEditingTask(null);
+                                        }}
+                                        onDelete={async () => {
+                                            if (!viewSpec) return;
+                                            const exists = viewSpec.breakdown.subtasks.some(
+                                                (entry) => entry.id === task.id,
+                                            );
+                                            if (!exists) {
+                                                setEditingTask(null);
+                                                return;
+                                            }
+                                            if (!confirm("Delete this task?")) return;
+                                            updateLocalSpec((spec) => {
+                                                const nextSubtasks = removeById(spec.breakdown.subtasks, task.id);
+                                                return {
+                                                    ...spec,
+                                                    breakdown: { ...spec.breakdown, subtasks: nextSubtasks },
+                                                };
+                                            });
+                                            setEditingTask(null);
+                                        }}
                                     />
                                 ))}
                             </div>
@@ -270,47 +537,141 @@ export function ElementsOutlinePanel() {
                                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
                                         Materials
                                     </div>
-                                    {materialLines.length === 0 ? (
+                                    {visibleMaterials.length === 0 ? (
                                         <div className="text-xs text-gray-500">No materials yet.</div>
                                     ) : (
                                         <div className="space-y-2">
-                                            {materialLines.map((line) => (
-                                                <OutlineRow
-                                                    key={line._id}
-                                                    isActive={selectedRowId === line._id}
-                                                    title={line.label}
-                                                    subtitle={`${line.plannedQuantity} ${line.unit} • ${formatCurrency(
-                                                        line.plannedQuantity * line.plannedUnitCost,
-                                                        "ILS",
-                                                    )}`}
-                                                    onClick={() => setSelectedRowId(line._id)}
+                                            {visibleMaterials.map((line) => (
+                                                <MaterialRow
+                                                    key={line.id}
+                                                    line={line}
+                                                    isEditing={editingMaterial?.id === line.id}
+                                                    draft={editingMaterial}
+                                                    onEdit={() => startEditMaterial(line)}
+                                                    onCancel={() => setEditingMaterial(null)}
+                                                    onChange={setEditingMaterial}
+                                                    onSave={async () => {
+                                                        if (!editingMaterial) return;
+                                                        const nextLine = draftToMaterial(editingMaterial);
+                                                        updateLocalSpec((spec) => {
+                                                            const nextMaterials = upsertById(spec.breakdown.materials, nextLine);
+                                                            return {
+                                                                ...spec,
+                                                                breakdown: { ...spec.breakdown, materials: nextMaterials },
+                                                            };
+                                                        });
+                                                        setEditingMaterial(null);
+                                                    }}
+                                                    onDelete={async () => {
+                                                        if (!viewSpec) return;
+                                                        const exists = viewSpec.breakdown.materials.some(
+                                                            (entry) => entry.id === line.id,
+                                                        );
+                                                        if (!exists) {
+                                                            setEditingMaterial(null);
+                                                            return;
+                                                        }
+                                                        if (!confirm("Delete this material line?")) return;
+                                                        updateLocalSpec((spec) => {
+                                                            const nextMaterials = removeById(spec.breakdown.materials, line.id);
+                                                            return {
+                                                                ...spec,
+                                                                breakdown: { ...spec.breakdown, materials: nextMaterials },
+                                                            };
+                                                        });
+                                                        setEditingMaterial(null);
+                                                    }}
                                                 />
                                             ))}
                                         </div>
                                     )}
+                                    <div className="mt-3">
+                                        <AddRowButton
+                                            label="Add material"
+                                            onClick={() => {
+                                                const newId = createLocalId("material");
+                                                setEditingMaterial({
+                                                    id: newId,
+                                                    label: "New material",
+                                                    category: "General",
+                                                    unit: "unit",
+                                                    qty: "1",
+                                                    unitCostEstimate: "0",
+                                                    status: "planned",
+                                                });
+                                            }}
+                                        />
+                                    </div>
                                 </div>
                                 <div>
                                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
                                         Labor
                                     </div>
-                                    {workLines.length === 0 ? (
+                                    {visibleLabor.length === 0 ? (
                                         <div className="text-xs text-gray-500">No labor lines yet.</div>
                                     ) : (
                                         <div className="space-y-2">
-                                            {workLines.map((line) => (
-                                                <OutlineRow
-                                                    key={line._id}
-                                                    isActive={selectedRowId === line._id}
-                                                    title={line.role}
-                                                    subtitle={`${line.plannedQuantity} ${line.rateType} • ${formatCurrency(
-                                                        line.plannedQuantity * line.plannedUnitCost,
-                                                        "ILS",
-                                                    )}`}
-                                                    onClick={() => setSelectedRowId(line._id)}
+                                            {visibleLabor.map((line) => (
+                                                <WorkRow
+                                                    key={line.id}
+                                                    line={line}
+                                                    isEditing={editingWork?.id === line.id}
+                                                    draft={editingWork}
+                                                    onEdit={() => startEditWork(line)}
+                                                    onCancel={() => setEditingWork(null)}
+                                                    onChange={setEditingWork}
+                                                    onSave={async () => {
+                                                        if (!editingWork) return;
+                                                        const nextLine = draftToLabor(editingWork);
+                                                        updateLocalSpec((spec) => {
+                                                            const nextLabor = upsertById(spec.breakdown.labor, nextLine);
+                                                            return {
+                                                                ...spec,
+                                                                breakdown: { ...spec.breakdown, labor: nextLabor },
+                                                            };
+                                                        });
+                                                        setEditingWork(null);
+                                                    }}
+                                                    onDelete={async () => {
+                                                        if (!viewSpec) return;
+                                                        const exists = viewSpec.breakdown.labor.some(
+                                                            (entry) => entry.id === line.id,
+                                                        );
+                                                        if (!exists) {
+                                                            setEditingWork(null);
+                                                            return;
+                                                        }
+                                                        if (!confirm("Delete this labor line?")) return;
+                                                        updateLocalSpec((spec) => {
+                                                            const nextLabor = removeById(spec.breakdown.labor, line.id);
+                                                            return {
+                                                                ...spec,
+                                                                breakdown: { ...spec.breakdown, labor: nextLabor },
+                                                            };
+                                                        });
+                                                        setEditingWork(null);
+                                                    }}
                                                 />
                                             ))}
                                         </div>
                                     )}
+                                    <div className="mt-3">
+                                        <AddRowButton
+                                            label="Add labor"
+                                            onClick={() => {
+                                                const newId = createLocalId("labor");
+                                                setEditingWork({
+                                                    id: newId,
+                                                    role: "New role",
+                                                    workType: "studio",
+                                                    rateType: "day",
+                                                    quantity: "1",
+                                                    unitCost: "0",
+                                                    description: "",
+                                                });
+                                            }}
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         );
@@ -334,7 +695,7 @@ export function ElementsOutlinePanel() {
                                     .map((rev) => (
                                         <div key={rev._id} className="border rounded-md px-3 py-2">
                                             <div className="font-semibold text-gray-700">
-                                                v{rev.revisionNumber} • {rev.tabScope} • {rev.state}
+                                                v{rev.revisionNumber} - {rev.tabScope} - {rev.state}
                                             </div>
                                             <div className="text-gray-500">
                                                 {new Date(rev.createdAt).toLocaleString()}
@@ -354,6 +715,22 @@ export function ElementsOutlinePanel() {
                         );
                     }
 
+                    const sectionActions =
+                        key === "tasks"
+                            ? {
+                                label: "Add task",
+                                onClick: () => {
+                                    const id = createLocalId("task");
+                                    setEditingTask({
+                                        id,
+                                        title: "New task",
+                                        status: "todo",
+                                        estMinutes: "",
+                                    });
+                                },
+                            }
+                            : null;
+
                     return (
                         <OutlineSection
                             key={key}
@@ -362,6 +739,7 @@ export function ElementsOutlinePanel() {
                             summary={summary}
                             isOpen={isOpen}
                             onToggle={() => toggleSection(key)}
+                            actions={sectionActions ?? undefined}
                         >
                             {body}
                         </OutlineSection>
@@ -372,12 +750,82 @@ export function ElementsOutlinePanel() {
     );
 }
 
+function parseOptionalNumber(value: string) {
+    if (!value.trim()) return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function createLocalId(prefix: string) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function upsertById<T extends { id: string }>(items: T[], item: T) {
+    if (items.some((entry) => entry.id === item.id)) {
+        return items.map((entry) => (entry.id === item.id ? item : entry));
+    }
+    return [item, ...items];
+}
+
+function removeById<T extends { id: string }>(items: T[], id: string) {
+    return items.filter((entry) => entry.id !== id);
+}
+
+function flattenSubtasks(subtasks: SubtaskSpec[]) {
+    const flattened: SubtaskSpec[] = [];
+    const walk = (items: SubtaskSpec[]) => {
+        for (const item of items) {
+            flattened.push(item);
+            if (item.children?.length) {
+                walk(item.children);
+            }
+        }
+    };
+    walk(subtasks);
+    return flattened;
+}
+
+function draftToSubtask(draft: DraftTask): SubtaskSpec {
+    return {
+        id: draft.id,
+        title: draft.title.trim() || "Untitled task",
+        status: draft.status,
+        estMinutes: parseOptionalNumber(draft.estMinutes),
+    };
+}
+
+function draftToMaterial(draft: DraftMaterial): MaterialSpec {
+    return {
+        id: draft.id,
+        label: draft.label.trim() || "Untitled material",
+        category: draft.category.trim() || undefined,
+        unit: draft.unit.trim() || "unit",
+        qty: parseOptionalNumber(draft.qty),
+        unitCostEstimate: parseOptionalNumber(draft.unitCostEstimate),
+        status: draft.status.trim() || undefined,
+    };
+}
+
+function draftToLabor(draft: DraftLabor): LaborSpec {
+    const rateType = draft.rateType.trim() || "day";
+    return {
+        id: draft.id,
+        role: draft.role.trim() || "Untitled role",
+        workType: draft.workType.trim() || "studio",
+        rateType: rateType as LaborSpec["rateType"],
+        quantity: parseOptionalNumber(draft.quantity),
+        unitCost: parseOptionalNumber(draft.unitCost),
+        description: draft.description.trim() || undefined,
+    };
+}
+
 function OutlineSection({
     label,
     icon,
     summary,
     isOpen,
     onToggle,
+    actions,
     children,
 }: {
     label: string;
@@ -385,6 +833,7 @@ function OutlineSection({
     summary: React.ReactNode;
     isOpen: boolean;
     onToggle: () => void;
+    actions?: { label: string; onClick: () => void };
     children: React.ReactNode;
 }) {
     return (
@@ -399,6 +848,19 @@ function OutlineSection({
                     <span className="text-sm font-semibold text-gray-800">{label}</span>
                 </div>
                 <div className="flex items-center gap-3">
+                    {actions && (
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                actions.onClick();
+                            }}
+                            className="text-[10px] px-2 py-1 rounded-full bg-blue-600 text-white flex items-center gap-1 hover:bg-blue-700"
+                        >
+                            <Plus size={12} />
+                            {actions.label}
+                        </button>
+                    )}
                     {!isOpen && <div className="hidden sm:flex">{summary}</div>}
                     <span className="text-gray-400">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
                 </div>
@@ -436,27 +898,351 @@ function SummaryCard({ title, value }: { title: string; value: string }) {
     );
 }
 
-function OutlineRow({
-    title,
-    subtitle,
-    isActive,
-    onClick,
+function TaskRow({
+    task,
+    isEditing,
+    draft,
+    onEdit,
+    onCancel,
+    onChange,
+    onSave,
+    onDelete,
 }: {
-    title: string;
-    subtitle?: string;
-    isActive: boolean;
-    onClick: () => void;
+    task: SubtaskSpec;
+    isEditing: boolean;
+    draft: DraftTask | null;
+    onEdit: () => void;
+    onCancel: () => void;
+    onChange: (next: DraftTask | null) => void;
+    onSave: () => void;
+    onDelete: () => void;
 }) {
+    if (isEditing && draft) {
+        return (
+            <div className="border rounded-md px-3 py-3 space-y-2 bg-white">
+                <div className="grid gap-2 sm:grid-cols-[1.5fr_auto_auto]">
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.title}
+                        onChange={(event) => onChange({ ...draft, title: event.target.value })}
+                    />
+                    <select
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.status}
+                        onChange={(event) =>
+                            onChange({
+                                ...draft,
+                                status: event.target.value as "todo" | "in_progress" | "done" | "blocked",
+                            })
+                        }
+                    >
+                        <option value="todo">todo</option>
+                        <option value="in_progress">in progress</option>
+                        <option value="done">done</option>
+                        <option value="blocked">blocked</option>
+                    </select>
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        placeholder="Est minutes"
+                        value={draft.estMinutes}
+                        onChange={(event) => onChange({ ...draft, estMinutes: event.target.value })}
+                    />
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        className="text-xs px-2 py-1 rounded bg-blue-600 text-white flex items-center gap-1 hover:bg-blue-700"
+                        onClick={onSave}
+                    >
+                        <Save size={12} />
+                        Save row
+                    </button>
+                    <button
+                        type="button"
+                        className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 flex items-center gap-1"
+                        onClick={onCancel}
+                    >
+                        <X size={12} />
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 flex items-center gap-1"
+                        onClick={onDelete}
+                    >
+                        <Trash2 size={12} />
+                        Delete row
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="group border rounded-md px-3 py-2 hover:bg-gray-50 transition flex items-center justify-between gap-3">
+            <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800 truncate">{task.title}</div>
+                <div className="text-xs text-gray-500 mt-1">
+                    {task.status ?? "todo"} - {formatTaskHours(task)}
+                </div>
+            </div>
+            <div className="hidden group-hover:flex items-center gap-2">
+                <button
+                    type="button"
+                    className="text-gray-500 hover:text-gray-700"
+                    onClick={onEdit}
+                >
+                    <Pencil size={14} />
+                </button>
+                <button
+                    type="button"
+                    className="text-red-500 hover:text-red-600"
+                    onClick={onDelete}
+                >
+                    <Trash2 size={14} />
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function MaterialRow({
+    line,
+    isEditing,
+    draft,
+    onEdit,
+    onCancel,
+    onChange,
+    onSave,
+    onDelete,
+}: {
+    line: MaterialSpec;
+    isEditing: boolean;
+    draft: DraftMaterial | null;
+    onEdit: () => void;
+    onCancel: () => void;
+    onChange: (next: DraftMaterial | null) => void;
+    onSave: () => void;
+    onDelete: () => void;
+}) {
+    if (isEditing && draft) {
+        return (
+            <div className="border rounded-md px-3 py-3 space-y-2 bg-white">
+                <div className="grid gap-2 sm:grid-cols-[1.2fr_0.8fr_0.5fr_0.6fr_0.6fr]">
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.label}
+                        onChange={(event) => onChange({ ...draft, label: event.target.value })}
+                    />
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.category}
+                        onChange={(event) => onChange({ ...draft, category: event.target.value })}
+                    />
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.unit}
+                        onChange={(event) => onChange({ ...draft, unit: event.target.value })}
+                    />
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.qty}
+                        onChange={(event) => onChange({ ...draft, qty: event.target.value })}
+                    />
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.unitCostEstimate}
+                        onChange={(event) => onChange({ ...draft, unitCostEstimate: event.target.value })}
+                    />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto] items-center">
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.status}
+                        onChange={(event) => onChange({ ...draft, status: event.target.value })}
+                    />
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded bg-blue-600 text-white flex items-center gap-1 hover:bg-blue-700"
+                            onClick={onSave}
+                        >
+                            <Save size={12} />
+                            Save row
+                        </button>
+                        <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 flex items-center gap-1"
+                            onClick={onCancel}
+                        >
+                            <X size={12} />
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 flex items-center gap-1"
+                            onClick={onDelete}
+                        >
+                            <Trash2 size={12} />
+                            Delete row
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="group border rounded-md px-3 py-2 hover:bg-gray-50 transition flex items-center justify-between gap-3">
+            <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800 truncate">{line.label}</div>
+                <div className="text-xs text-gray-500 mt-1">
+                    {line.qty ?? 0} {line.unit ?? ""} - {formatCurrency((line.qty ?? 0) * (line.unitCostEstimate ?? 0), "ILS")}
+                </div>
+            </div>
+            <div className="hidden group-hover:flex items-center gap-2">
+                <button
+                    type="button"
+                    className="text-gray-500 hover:text-gray-700"
+                    onClick={onEdit}
+                >
+                    <Pencil size={14} />
+                </button>
+                <button
+                    type="button"
+                    className="text-red-500 hover:text-red-600"
+                    onClick={onDelete}
+                >
+                    <Trash2 size={14} />
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function WorkRow({
+    line,
+    isEditing,
+    draft,
+    onEdit,
+    onCancel,
+    onChange,
+    onSave,
+    onDelete,
+}: {
+    line: LaborSpec;
+    isEditing: boolean;
+    draft: DraftLabor | null;
+    onEdit: () => void;
+    onCancel: () => void;
+    onChange: (next: DraftLabor | null) => void;
+    onSave: () => void;
+    onDelete: () => void;
+}) {
+    if (isEditing && draft) {
+        return (
+            <div className="border rounded-md px-3 py-3 space-y-2 bg-white">
+                <div className="grid gap-2 sm:grid-cols-[1fr_0.6fr_0.6fr_0.6fr_0.6fr]">
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.role}
+                        onChange={(event) => onChange({ ...draft, role: event.target.value })}
+                    />
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.workType}
+                        onChange={(event) => onChange({ ...draft, workType: event.target.value })}
+                    />
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.rateType}
+                        onChange={(event) => onChange({ ...draft, rateType: event.target.value })}
+                    />
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.quantity}
+                        onChange={(event) => onChange({ ...draft, quantity: event.target.value })}
+                    />
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.unitCost}
+                        onChange={(event) => onChange({ ...draft, unitCost: event.target.value })}
+                    />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto] items-center">
+                    <input
+                        className="border rounded px-2 py-1 text-sm"
+                        value={draft.description}
+                        onChange={(event) => onChange({ ...draft, description: event.target.value })}
+                    />
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded bg-blue-600 text-white flex items-center gap-1 hover:bg-blue-700"
+                            onClick={onSave}
+                        >
+                            <Save size={12} />
+                            Save row
+                        </button>
+                        <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 flex items-center gap-1"
+                            onClick={onCancel}
+                        >
+                            <X size={12} />
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 flex items-center gap-1"
+                            onClick={onDelete}
+                        >
+                            <Trash2 size={12} />
+                            Delete row
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="group border rounded-md px-3 py-2 hover:bg-gray-50 transition flex items-center justify-between gap-3">
+            <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800 truncate">{line.role}</div>
+                <div className="text-xs text-gray-500 mt-1">
+                    {line.quantity ?? 0} {line.rateType} - {formatCurrency((line.quantity ?? 0) * (line.unitCost ?? 0), "ILS")}
+                </div>
+            </div>
+            <div className="hidden group-hover:flex items-center gap-2">
+                <button
+                    type="button"
+                    className="text-gray-500 hover:text-gray-700"
+                    onClick={onEdit}
+                >
+                    <Pencil size={14} />
+                </button>
+                <button
+                    type="button"
+                    className="text-red-500 hover:text-red-600"
+                    onClick={onDelete}
+                >
+                    <Trash2 size={14} />
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function AddRowButton({ label, onClick }: { label: string; onClick: () => void }) {
     return (
         <button
             type="button"
             onClick={onClick}
-            className={`w-full text-left border rounded-md px-3 py-2 transition ${
-                isActive ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:bg-gray-50"
-            }`}
+            className="text-xs px-2 py-1 rounded border border-dashed border-gray-300 text-gray-600 hover:bg-gray-50 flex items-center gap-1"
         >
-            <div className="text-sm font-semibold text-gray-800 truncate">{title}</div>
-            {subtitle && <div className="text-xs text-gray-500 mt-1">{subtitle}</div>}
+            <Plus size={12} />
+            {label}
         </button>
     );
 }
@@ -470,9 +1256,10 @@ function formatCurrency(value: number, currency: string) {
     return formatter.format(value);
 }
 
-function formatTaskHours(task: Doc<"tasks">) {
-    if (task.durationHours) return `${task.durationHours}h`;
-    if (task.effortDays) return `${task.effortDays * 8}h`;
-    if (task.estimatedMinutes) return `${(task.estimatedMinutes / 60).toFixed(1)}h`;
+function formatTaskHours(task: SubtaskSpec) {
+    if (task.estMinutes !== undefined && task.estMinutes !== null) {
+        return `${(task.estMinutes / 60).toFixed(1)}h`;
+    }
     return "n/a";
 }
+

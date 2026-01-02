@@ -6,6 +6,25 @@ import { ChangeSetSchema } from "./lib/zodSchemas";
 import { recomputeRollups } from "./lib/itemRollups";
 import { buildBaseItemSpec } from "./lib/itemHelpers";
 
+function buildItemRevisionDigest(spec: any) {
+    const title = spec?.identity?.title ?? "Untitled item";
+    const description = spec?.identity?.description ?? "";
+    const materials = spec?.breakdown?.materials?.length ?? 0;
+    const labor = spec?.breakdown?.labor?.length ?? 0;
+    const tasks = spec?.breakdown?.subtasks?.length ?? 0;
+    const lines = [
+        "## Summary",
+        title,
+        description,
+        "",
+        "## Breakdown",
+        `- Materials: ${materials}`,
+        `- Labor: ${labor}`,
+        `- Tasks: ${tasks}`,
+    ];
+    return lines.filter(Boolean).join("\n").trim();
+}
+
 function serializePayload(value: unknown) {
     return JSON.stringify(value ?? null);
 }
@@ -148,6 +167,19 @@ export const create = mutation({
         const accountingOps = changeSet.accountingLines.create.length + changeSet.accountingLines.patch.length;
         const dependencyOps = changeSet.tasks.dependencies.length;
         const materialOps = (changeSet.materialLines?.create.length ?? 0) + (changeSet.materialLines?.patch.length ?? 0) + (changeSet.materialLines?.deleteRequest.length ?? 0);
+        const totalOps = itemOps + taskOps + accountingOps + dependencyOps + materialOps;
+
+        const project = await ctx.db.get(changeSet.projectId as Id<"projects">);
+        const extraWarnings: string[] = [];
+        if (project?.features?.elementsCanonical && totalOps > 0) {
+            if (!changeSet.basedOnBulletIds || changeSet.basedOnBulletIds.length === 0) {
+                extraWarnings.push("Missing basedOnBulletIds (Brain citations)");
+            }
+            if (changeSet.items.patch.length > 0 && !changeSet.basedOnApprovedSnapshotId) {
+                extraWarnings.push("Missing basedOnApprovedSnapshotId for element edits");
+            }
+        }
+        const mergedWarnings = [...(changeSet.warnings ?? []), ...extraWarnings];
 
         const changeSetId = await ctx.db.insert("itemChangeSets", {
             projectId: changeSet.projectId as Id<"projects">,
@@ -158,9 +190,12 @@ export const create = mutation({
             status: "pending",
             createdAt: now,
             title: changeSet.summary,
-            warnings: changeSet.warnings,
+            warnings: mergedWarnings,
             assumptions: changeSet.assumptions,
             openQuestions: changeSet.openQuestions,
+            basedOnBulletIds: changeSet.basedOnBulletIds,
+            basedOnApprovedSnapshotId: changeSet.basedOnApprovedSnapshotId,
+            conflictsReferenced: changeSet.conflictsReferenced,
             counts: {
                 items: itemOps,
                 tasks: taskOps,
@@ -535,6 +570,9 @@ export const apply = mutation({
                 data: spec,
                 createdBy: { kind: "agent" },
                 createdAt: now,
+                approvedAt: now,
+                approvedBy: decidedBy ?? changeSet.agentName,
+                digestText: buildItemRevisionDigest(spec),
             });
 
             tempItemMap.set(payload.tempId, itemId);
@@ -575,6 +613,9 @@ export const apply = mutation({
                 data: payload,
                 createdBy: { kind: "agent" },
                 createdAt: now,
+                approvedAt: now,
+                approvedBy: decidedBy ?? changeSet.agentName,
+                digestText: buildItemRevisionDigest(payload),
             });
 
             await ctx.db.patch(itemId, {
@@ -933,6 +974,9 @@ async function applyChangeSetCanonical(
             data: spec,
             createdBy: { kind: "agent" },
             createdAt: now,
+            approvedAt: now,
+            approvedBy: decidedBy ?? changeSet.agentName,
+            digestText: buildItemRevisionDigest(spec),
         });
 
         tempItemMap.set(payload.tempId, itemId);
@@ -973,6 +1017,9 @@ async function applyChangeSetCanonical(
             data: payload,
             createdBy: { kind: "agent" },
             createdAt: now,
+            approvedAt: now,
+            approvedBy: decidedBy ?? changeSet.agentName,
+            digestText: buildItemRevisionDigest(payload),
         });
 
         await ctx.db.patch(itemId, {

@@ -158,10 +158,17 @@ export const createFact = mutation({
         if (!(await isFactsEnabled(ctx, args.projectId))) {
             const text = formatFactLog(args);
             if (text.trim()) {
-                await ctx.runMutation(api.projectKnowledge.appendLog, {
+                const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
                     projectId: args.projectId,
-                    text,
-                    source: resolveKnowledgeSource(args.source ?? null),
+                    eventType: "manual_add",
+                    payload: {
+                        source: resolveKnowledgeSource(args.source ?? null),
+                        text,
+                    },
+                });
+                await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+                    projectId: args.projectId,
+                    brainEventId,
                 });
             }
             return { factId: null, skipped: true };

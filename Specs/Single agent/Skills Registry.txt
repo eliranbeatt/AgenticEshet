@@ -1,0 +1,278 @@
+Below is a **concrete Skills Registry convention** you can implement immediately: **Skill IDs**, **schema naming**, and **standardized input/output envelopes** so the *single agent* can reliably route + the UI can render results without guessing.
+
+---
+
+## 1) Skill ID naming convention (stable IDs + separate version)
+
+### Format
+
+```
+ms.<area>.<stage>.<channel>.<action>
+```
+
+### Allowed enums
+
+* **area**: `router | ideation | planning | solutioning | critique | change | element | knowledge | accounting | quote | procurement`
+* **stage**: `auto | ideation | planning | solutioning | cross`
+* **channel**: `questions | chat | changeset`
+* **action**: kebabCase or dot-separated verbs, e.g. `initial-questions`, `generate-elements`, `decompose-atomic`, `value-engineer`
+
+### Versioning
+
+* **Do NOT bake version into `skillId`**.
+* Store `version` separately as **semver**: `1.0.0`, `1.1.0`, `2.0.0`.
+* Deprecation is a flag: `isDeprecated=true`, not by renaming IDs.
+
+✅ Examples
+
+* `ms.router.auto.chat.route`
+* `ms.ideation.ideation.questions.initial-questions`
+* `ms.planning.planning.changeset.build-quote-plan`
+* `ms.solutioning.solutioning.changeset.decompose-atomic`
+* `ms.critique.cross.changeset.risk-register`
+* `ms.change.cross.changeset.handle-customer-change`
+
+---
+
+## 2) Schema naming convention (input/output schemas)
+
+You’ll want a deterministic way to reference schemas in code + store the key in the DB row.
+
+### Format
+
+```
+SkillInput.<skillId>.v<major>
+SkillOutput.<skillId>.v<major>
+```
+
+Rules:
+
+* Only bump the schema **major** when you break compatibility.
+* Minor/patch changes don’t change schema name.
+
+✅ Example
+
+* `SkillInput.ms.ideation.ideation.questions.initial-questions.v1`
+* `SkillOutput.ms.ideation.ideation.questions.initial-questions.v1`
+
+---
+
+## 3) Skills Registry record (what a row in `skills` should represent)
+
+A “skill” is **prompt + IO contract + runtime config**.
+
+### `SkillSpec` (stored in DB)
+
+```json
+{
+  "skillId": "ms.planning.planning.changeset.build-quote-plan",
+  "version": "1.0.0",
+  "name": "Planning → Build quote-ready plan",
+  "description": "Create milestones + mid-level tasks + materials/labor estimates suitable for a customer quote.",
+  "area": "planning",
+  "stage": "planning",
+  "channel": "changeset",
+  "inputSchema": "SkillInput.ms.planning.planning.changeset.build-quote-plan.v1",
+  "outputSchema": "SkillOutput.ms.planning.planning.changeset.build-quote-plan.v1",
+  "model": { "provider": "openai", "name": "gpt-5.2", "temperature": 0.2 },
+  "toolsAllowed": ["knowledge.search", "prices.getBestEstimate", "accounting.getProjectAccounting"],
+  "prompt": "…full prompt text…",
+  "isEnabled": true,
+  "isDeprecated": false,
+  "tags": ["quote", "milestones", "tasks", "accounting"]
+}
+```
+
+---
+
+## 4) Standard input envelope (shared by ALL skills)
+
+Keep the shared envelope stable so the router + UI integration is simple.
+
+### `SkillRunInput` (common)
+
+```json
+{
+  "run": {
+    "runId": "uuid",
+    "projectId": "convexId",
+    "userMessage": "string",
+    "language": "he",
+    "nowISO": "2025-12-31T09:00:00+02:00"
+  },
+  "ui": {
+    "pinnedStage": "auto|ideation|planning|solutioning",
+    "channel": "auto|questions|chat",
+    "selectedElementIds": ["optional"],
+    "selectedSectionId": "optional"
+  },
+  "context": {
+    "project": { "name": "string", "brief": "string", "constraints": "string" },
+    "elementsSummary": "string",
+    "activePlanSummary": "string",
+    "tasksSummary": "string",
+    "accountingSummary": "string",
+    "factsAccepted": ["atomic facts…"],
+    "factsProposed": ["atomic facts…"]
+  },
+  "policy": {
+    "requireHebrew": true,
+    "maxQuestions": 12,
+    "requireChangeApproval": true
+  }
+}
+```
+
+Notes:
+
+* `context.*Summary` is intentionally **summaries** (cheap + small). Skills that need detail can call tools.
+* `policy.maxQuestions` directly supports your “structured questions vs free chat” UX.
+
+---
+
+## 5) Standard output envelope (shared by ALL skills)
+
+Every skill returns one of **three renderable kinds**.
+
+### `SkillRunOutput` (common)
+
+```json
+{
+  "meta": {
+    "skillId": "string",
+    "version": "string",
+    "stage": "ideation|planning|solutioning|cross",
+    "channel": "questions|chat|changeset",
+    "confidence": 0.0,
+    "summary": "short human summary for the UI",
+    "followUps": ["optional next actions"]
+  },
+  "result": { }
+}
+```
+
+The `result` shape depends on `channel`.
+
+---
+
+## 6) Output schemas by channel (the important part)
+
+### A) Structured Questions output (`channel=questions`)
+
+```json
+{
+  "meta": { "...": "..." },
+  "result": {
+    "questionGroups": [
+      {
+        "groupId": "ideation.brief",
+        "titleHe": "הבנת הבקשה",
+        "questions": [
+          {
+            "qid": "q_goal",
+            "type": "single|multi|text|number|date|yesno",
+            "labelHe": "מה המטרה המרכזית של האלמנט?",
+            "helpHe": "לדוגמה: משיכת קהל, צילום, פונקציה…",
+            "required": true,
+            "choicesHe": ["צילום", "חוויה", "תפעול", "מיתוג"],
+            "mapsTo": [
+              { "factType": "project.goal", "fieldPath": "project.goals", "confidence": 0.9 }
+            ]
+          }
+        ]
+      }
+    ],
+    "missingCritical": ["מידות משוערות", "מיקום/גישה", "דדליין"],
+    "stopAskingWhen": { "answeredRequiredCount": 6 }
+  }
+}
+```
+
+### B) Free chat output (`channel=chat`)
+
+```json
+{
+  "meta": { "...": "..." },
+  "result": {
+    "messageHe": "text to render in chat",
+    "bulletsHe": ["optional"],
+    "assumptions": ["optional"],
+    "citations": ["optional: docIds/chunkIds if you want"]
+  }
+}
+```
+
+### C) ChangeSet output (`channel=changeset`) — for “create/update elements/tasks/accounting/knowledge”
+
+This is the “no freestyle” contract that lets you show diffs + require approval.
+
+```json
+{
+  "meta": { "...": "..." },
+  "result": {
+    "proposed": {
+      "changeSetId": "uuid",
+      "titleHe": "עדכון תוכנית ותמחור",
+      "tags": ["planning", "accounting"],
+      "rationaleHe": "למה השינוי נדרש",
+      "impacts": ["עלות", "זמן", "סיכון"],
+      "patchOps": [
+        {
+          "opId": "1",
+          "entityType": "element|task|materialLine|workLine|fact",
+          "entityId": "existingId-or-null",
+          "op": "add|replace|remove|tombstone",
+          "path": "/fields/titleHe",
+          "value": "קיר לוגו מודולרי",
+          "ifMatch": "optionalHash"
+        }
+      ],
+      "tombstones": [
+        { "entityType": "task", "entityId": "t_123", "reasonHe": "הוחלף בפתרון קנייה במקום ייצור" }
+      ]
+    },
+    "requiresApproval": true,
+    "validationHints": {
+      "mustHave": ["atLeastOneElementOrTaskChange"],
+      "warningsHe": ["חסר ספק להדפסה", "אין זמן הובלה"]
+    }
+  }
+}
+```
+
+---
+
+## 7) The actual registry list (starter set)
+
+You can seed these into `/admin/skills` immediately.
+
+### Router (always first)
+
+* `ms.router.auto.chat.route` → output: `{ stage, channel, nextSkillId }`
+
+### Ideation
+
+* `ms.ideation.ideation.questions.initial-questions`
+* `ms.ideation.ideation.chat.generate-element-ideas`
+* `ms.ideation.ideation.chat.rom-budget`
+
+### Planning (quote-ready)
+
+* `ms.planning.planning.questions.quote-required`
+* `ms.planning.planning.changeset.build-quote-plan`
+* `ms.planning.planning.changeset.build-accounting-lines`
+* `ms.planning.planning.changeset.price-strategy`
+
+### Solutioning (atomic build)
+
+* `ms.solutioning.solutioning.questions.execution-required`
+* `ms.solutioning.solutioning.changeset.decompose-atomic`
+* `ms.solutioning.solutioning.changeset.value-engineer`
+* `ms.solutioning.solutioning.changeset.procurement-plan`
+
+### Critique / Change
+
+* `ms.critique.cross.changeset.plan-critic`
+* `ms.critique.cross.changeset.risk-register`
+* `ms.change.cross.changeset.handle-customer-change`
+

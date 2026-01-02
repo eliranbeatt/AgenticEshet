@@ -1,0 +1,142 @@
+Codex Single Agent Plan
+=======================
+
+Goal
+- Replace multi-tab agent UX with one Studio Agent tab that routes to skills (prompts + schemas + tools), preserves Structured Questions vs Free Chat, and returns ChangeSet proposals for approval.
+
+Current State Snapshot (from code)
+- UI: ideation/planning/solutioning tabs all use FlowWorkbench and agents.flow chat; structured questions are handled by agents.structuredQuestions + structuredQuestionSessions/Turns.
+- Backend: skills table is simple (name/type/content/metadataJson). ChangeSets use ChangeSetSchema (items/tasks/accounting arrays) stored in itemChangeSets + itemChangeSetOps with apply/reject flows.
+- Facts pipeline exists via turnBundles -> facts/factsV2; chat + structured questions already create turnBundles.
+- Agent runs are tracked in agentRuns and shown in AgentActivityPanel.
+
+Implementation Plan (features first, then skills)
+
+1) Foundations: data model + contracts
+- Add a Studio domain in Convex: new action `studio.runStudioTurn` plus `studio.applyChangeSet` and `studio.answerStructuredQuestions`.
+- Add a Studio persistence table (e.g., studioTurns or studioRuns) to store idempotencyKey, routing decision, chosenSkillId/version, outputs, ChangeSet reference, and message ids.
+- Extend or create a new skills registry table (skillsV2) to store skillId, version, name, description, area, stage, channel, inputSchema, outputSchema, model config, toolsAllowed, prompt, flags.
+- Update admin UI (`/admin/skills`) to view/edit the new registry records (keep old skills table intact until migration is done).
+- Add/extend schema definitions for StudioRoutingDecision, StructuredQuestion (group/answerType/choices/mapsTo), FactAtom, PatchOp, and StudioTurnOutput.
+- Decide ChangeSet strategy:
+  - Option A: keep existing ChangeSetSchema and map Studio PatchOps -> ChangeSet items/tasks/accounting ops.
+  - Option B: add a new ChangeSet V2 table and conversion layer to existing apply pipeline.
+- Add idempotency enforcement (by projectId + idempotencyKey) inside `studio.runStudioTurn`.
+
+2) Skill runner (shared mechanism)
+- Implement `runSkill` helper in convex/lib that:
+  - Loads SkillSpec by skillId (or forcedSkillId).
+  - Assembles SkillRunInput envelope (run/ui/context/policy).
+  - Calls LLM with schema validation (Zod) and retries.
+  - Returns SkillRunOutput (meta + result) and logs to agentRuns.
+- Add schema registry lookup helpers using SkillInput/SkillOutput naming conventions.
+- Add error handling and guardrails: refuse invalid output, provide errors[] in StudioTurnOutput.
+
+3) Studio orchestrator (single entrypoint)
+- Build `studio.runStudioTurn` to:
+  - Ensure or create a Studio chat thread (scenario phase "studio").
+  - Create user + assistant chat messages and link to agentRun.
+  - Gather context: project, elements/items, tasks, accounting, knowledge docs, facts summaries, structured questions transcript, current UI context.
+  - Run Router skill(s) to choose stage/channel/skill unless pinned or forced.
+  - Run chosen skill; validate output; normalize to assistant message + optional structuredQuestions/proposedFacts/proposedChangeSet.
+  - Persist StudioTurn record and update turnBundles for facts ingestion.
+  - Return StudioTurnOutput per contract (always includes assistantMessage).
+- Add `studio.applyChangeSet` to call existing changeSets.apply/reject (or new V2 apply) and write version tags.
+- Add `studio.answerStructuredQuestions` to save answers + trigger next questions if using session-based flow.
+
+4) Studio UI + state machine
+- Add `/projects/[id]/studio` page with a new StudioWorkbench component.
+- Add Studio tab to `app/projects/[id]/layout.tsx` and decide whether to keep or hide ideation/planning/solutioning tabs during rollout.
+- Implement UI state machine per spec (READY, NEEDS_SCOPE, QUESTIONS, RUNNING, REVIEW_CHANGESET, APPLYING, ERROR).
+- Top bar: stage selector, channel selector, scope chip, and Apply proposed changes button.
+- Main chat panel: show conversation with stage/channel tags and a single composer wired to `studio.runStudioTurn`.
+- Right panel tabs: Elements, Plan snapshot, Tasks, Accounting, Risks/Decisions, Pending Changes.
+  - Reuse existing components where possible (FlowItemsPanel, ChangeSetReviewBanner or new PendingChangesPanel, facts/knowledge panels).
+- Structured Questions panel: render StructuredQuestionsPayload and answers; support generate-next, save, skip, continue anyway, and channel switch.
+- Pending ChangeSet panel: diff viewer + apply/reject; show destructive confirmation gate.
+
+5) Skill-by-skill implementation plan
+
+A) Router + guardrails (always first)
+1) Stage Router (ms.router.auto.chat.route)
+   - Input: user message + project state + UI pins.
+   - Output: inferredStage + confidence + why + nextSkillId.
+2) Channel Router (ms.router.auto.chat.route or separate)
+   - Decide free_chat vs structured_questions vs propose_changes based on stage + policy.
+3) Element Resolver
+   - Use item list + fuzzy matching to map references to itemIds.
+   - Return ambiguities + askUser flag to trigger NEEDS_SCOPE.
+4) Safety + Constraints Checker
+   - Pull constraints from project.details, facts, accounting budget, and venue rules.
+   - Emit warnings + requiredQuestions into routing/skill context.
+
+B) Ideation skills
+1) Ideation Structured Questions
+   - Reuse structuredQuestions pipeline or add Studio-specific schema (groups, choices, mapsTo).
+   - Store answers as facts + map to elements/project fields.
+2) Element Ideas Generator
+   - Reuse agents.ideation prompt or new skill prompt.
+   - Output elementIdeas[] and optional ChangeSet for create elements (Generate Elements skill).
+3) ROM Budget Estimator
+   - Use existing accounting summaries + lightweight LLM estimation.
+   - Output budgetRanges + assumptions; no ChangeSet unless explicitly requested.
+4) Style/References Extractor
+   - Parse mood words into atomic facts; store as proposed facts + knowledge updates.
+
+C) Planning skills
+1) Planning Structured Questions
+   - Extend question types (measurement, material prefs, logistics).
+   - Map answers to facts and element fields.
+2) Milestones + Phases Builder
+   - Create quests/milestones (convex/quests) with ChangeSet if needed.
+3) Task Breakdown (mid-level)
+   - Reuse taskRefiner/architect or new skill to propose tasks + dependencies.
+4) BOM + Labor Estimator
+   - Use accountingGenerator/estimator to propose material/work lines.
+5) Pricing Strategy
+   - Apply pricing rules from project settings; output summary + risk buffer notes.
+
+D) Solutioning skills
+1) Solutioning Structured Questions
+   - Execution-level questions (joinery, tolerances, rigging, sourcing).
+2) Build Options Generator
+   - Generate 2-4 options with pros/cons; return recommendation.
+3) Atomic Task Decomposer
+   - Break down tasks to atomic steps; propose task ChangeSet.
+4) Materials Substitution / Value Engineering
+   - Propose cheaper/faster alternatives; output ChangeSet for material lines.
+5) Procurement Plan
+   - Propose purchase plan items with vendors/lead times; map to accounting/procurement records.
+
+E) Critique + change skills
+1) Plan Critic
+   - Analyze plan/tasks/accounting for gaps; output issues + fixes.
+2) Risk Register Builder
+   - Create risks with severity + mitigations; store in a risks table or facts.
+3) Customer Change Request Handler
+   - Parse request into impact summary + ChangeSet proposal.
+4) Diff/Version Summarizer
+   - Create version tag + summary; write to projectVersions and changeSet metadata.
+
+F) Technical skills
+1) Generate Elements
+   - Convert ideas or user prompts into item creation ChangeSet.
+2) Update Elements
+   - Patch existing items safely; use tombstone for destructive ops.
+3) Knowledge / Facts Updater
+   - Convert answers/uploads into atomic facts and knowledge docs.
+4) Tasks + Accounting Consistency Fixer
+   - Validate task/material/work line consistency; emit reconciliation ChangeSet.
+
+G) Optional extras (future)
+- Scope Clarifier, Decision Log Writer, Budget Guardrails Enforcer, Timeline Feasibility Checker, Reuse/Inventory Optimizer, Vendor Quote Comparator, Post-Project Learning Ingest.
+
+6) Migration and rollout
+- Ship Studio tab alongside current ideation/planning/solutioning; allow opt-in via project.features flag.
+- Gradually point flow actions to Studio orchestration and deprecate legacy tabs.
+- Maintain backward compatibility with existing ChangeSets and structured questions until Studio V2 is stable.
+
+7) Testing and verification
+- Unit test router + skill runner with mocked schemas.
+- Integration test `studio.runStudioTurn` (idempotency, routing, ChangeSet creation).
+- Manual QA: verify stage/channel pins, structured questions flow, pending changes apply/reject, and AgentActivityPanel updates.

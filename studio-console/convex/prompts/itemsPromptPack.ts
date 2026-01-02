@@ -79,12 +79,13 @@ Context payload the app passes into every agent:
 `;
 
 export const extractGuardrails = `GUARDRAILS FOR EXTRACT OUTPUT (STRICT)
-- Output JSON only. No markdown. No comments.
-- Never hard-delete. Only deleteRequest with requiresDoubleConfirm=true.
-- Never invent vendor-specific prices unless user provided them.
-- Always separate: assumptions[] vs openQuestions[].
-- All created tasks + accounting lines MUST reference an element (itemRef).
-- Management/admin work MUST be flagged (isManagement=true) so it won't be double-counted.`;
+  - Output JSON only. No markdown. No comments.
+  - Never hard-delete. Only deleteRequest with requiresDoubleConfirm=true.
+  - Never invent vendor-specific prices unless user provided them.
+  - Always separate: assumptions[] vs openQuestions[].
+  - All created tasks + accounting lines MUST reference an element (itemRef).
+  - Management/admin work MUST be flagged (isManagement=true) so it won't be double-counted.
+  - ChangeSet outputs MUST include basedOnBulletIds and conflictsReferenced; include basedOnApprovedSnapshotId when editing existing elements.`;
 
 export const tsakaVocab = `TSAKA VOCABULARY (use consistently)
 - אלמנט = atomic deliverable/service line, quoteable.
@@ -118,17 +119,20 @@ export const quoteVisibilityEnum = `QUOTE VISIBILITY (for accounting lines and e
 `;
 
 export const changeSetSchemaText = `COMMON EXTRACT OUTPUT: ChangeSet (JSON only)
-{
-  "type": "ChangeSet",
-  "projectId": "P123",
-  "phase": "planning|solutioning|accounting|tasks|element_edit|convert|procurement|runbook|closeout",
-  "agentName": "string",
-  "summary": "One sentence",
-  "assumptions": ["..."],
-  "openQuestions": ["..."],
-  "warnings": ["..."],
+  {
+    "type": "ChangeSet",
+    "projectId": "P123",
+    "phase": "planning|solutioning|accounting|tasks|element_edit|convert|procurement|runbook|closeout",
+    "agentName": "string",
+    "summary": "One sentence",
+    "assumptions": ["..."],
+    "openQuestions": ["..."],
+    "warnings": ["..."],
+    "basedOnBulletIds": ["brain_bullet_id_1", "brain_bullet_id_2"],
+    "basedOnApprovedSnapshotId": "element_version_id_if_applicable",
+    "conflictsReferenced": ["conflict_id_1"],
 
-  "items": { // == ELEMENTS
+    "items": { // == ELEMENTS
     "create": [
       {
         "tempId": "tmp_el_1",
@@ -329,13 +333,14 @@ CHAT must include:
 2) Elements list (what exists / what missing)
 3) Task skeleton per element (verb+object)
 
-EXTRACT:
-- ChangeSet JSON:
-  - items.patch/create as needed
-  - tasks.create for EACH element (must use itemRef.itemId for existing items)
-  - minimal obvious dependencies only
-
-RULES:
+  EXTRACT:
+  - ChangeSet JSON:
+    - items.patch/create as needed
+    - tasks.create for EACH element (must use itemRef.itemId for existing items)
+    - minimal obvious dependencies only
+    - include basedOnBulletIds / basedOnApprovedSnapshotId / conflictsReferenced
+  
+  RULES:
 - Tasks must have workstream and isManagement when relevant.
 - Keep tasks mid-grain (not too granular yet).
 - LINK EVERY TASK to an element via itemRef.`;

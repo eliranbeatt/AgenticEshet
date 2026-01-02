@@ -10,6 +10,7 @@ import {
     summarizeKnowledgeDocs,
     summarizeElementSnapshots,
 } from "../lib/contextSummary";
+import { buildBrainContext } from "../lib/brainContext";
 
 function formatAssistantMessage(result: { openQuestions?: string[] }) {
     if (result.openQuestions && result.openQuestions.length > 0) {
@@ -201,7 +202,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                     queryText: args.chatHistory.map((m) => m.content).join("\n").slice(0, 500),
                 });
 
-            const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+            const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
                 projectId: args.projectId,
             });
 
@@ -277,10 +278,8 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
                 elementSnapshotsSummary,
                 "",
-                "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
-                currentKnowledge
-                    ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
-                    : "(none)",
+                "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
+                brain ? buildBrainContext(brain) : "(none)",
                 "",
                 "KNOWN FACTS (accepted + high-confidence proposed):",
                 factsContext.bullets,
@@ -410,6 +409,22 @@ export const run: ReturnType<typeof action> = action({
             chatHistory: args.chatHistory,
             agentRunId,
             thinkingMode: args.thinkingMode,
+        });
+
+        const transcript = args.chatHistory
+            .map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`)
+            .join("\n");
+        const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+            projectId: args.projectId,
+            eventType: "agent_send",
+            payload: {
+                source: "clarification_chat",
+                transcript,
+            },
+        });
+        await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+            projectId: args.projectId,
+            brainEventId,
         });
 
         return { queued: true, conversationId, runId: agentRunId };

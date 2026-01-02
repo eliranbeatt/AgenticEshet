@@ -171,7 +171,7 @@ export function FlowItemsPanel(props: Props) {
                             return (
                                 <div
                                     key={item._id}
-                                    className={`px-3 py-2 hover:bg-gray-50 cursor-pointer ${
+                                    className={`group px-3 py-2 hover:bg-gray-50 cursor-pointer ${
                                         checked && !props.selectedAllProject ? "bg-blue-50" : ""
                                     }`}
                                     onClick={() => {
@@ -211,7 +211,7 @@ export function FlowItemsPanel(props: Props) {
                                                         </div>
                                                     ) : null}
                                                 </div>
-                                                <div className="flex flex-col items-end gap-1 shrink-0">
+                                                <div className="flex flex-col items-end gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                                                     {pendingById.get(String(item._id)) ? (
                                                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">
                                                             Pending update

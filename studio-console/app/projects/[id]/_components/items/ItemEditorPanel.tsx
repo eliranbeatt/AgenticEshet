@@ -87,15 +87,20 @@ function findApprovedRevision(revisions: Doc<"itemRevisions">[], approvedRevisio
 }
 
 export function ItemEditorPanel() {
-    const { projectId, selectedItemId, tabScope } = useItemsContext();
+    const { projectId, selectedItemId, selectedItemMode, tabScope } = useItemsContext();
     const project = useQuery(api.projects.getProject, { projectId });
     const itemData = useQuery(
         api.items.getItem,
         selectedItemId ? { itemId: selectedItemId } : "skip",
     );
+    const draftData = useQuery(
+        api.elementDrafts.get,
+        selectedItemId ? { projectId, elementId: selectedItemId } : "skip",
+    );
     const factsEnabled = project?.features?.factsEnabled !== false;
     const allFacts = useQuery(api.factsV2.listFacts, factsEnabled ? { projectId } : "skip");
     const upsertRevision = useMutation(api.items.upsertRevision);
+    const upsertDraft = useMutation(api.elementDrafts.upsert);
     const populateFromFacts = useAction(api.agents.itemPopulator.populate);
 
     const [specDraft, setSpecDraft] = useState<ItemSpecV2 | null>(null);
@@ -130,11 +135,13 @@ export function ItemEditorPanel() {
             return;
         }
         const base = createEmptyItemSpec(item.title, item.typeKey);
-        const sourceSpec = (draftRevision?.data ?? approvedRevision?.data) as ItemSpecV2 | undefined;
+        const sourceSpec = (selectedItemMode === "draft"
+            ? draftData?.data ?? approvedRevision?.data ?? draftRevision?.data
+            : draftRevision?.data ?? approvedRevision?.data) as ItemSpecV2 | undefined;
         const merged = sourceSpec ? mergeItemSpec(base, sourceSpec) : base;
         setSpecDraft(merged);
         setChangeReason("");
-    }, [approvedRevision?.data, draftRevision?.data, item, item?.title, item?.typeKey]);
+    }, [approvedRevision?.data, draftData?.data, draftRevision?.data, item, item?.title, item?.typeKey, selectedItemMode]);
 
     if (!selectedItemId) {
         return (
@@ -181,6 +188,20 @@ export function ItemEditorPanel() {
     };
 
     const saveRevision = async () => {
+        if (selectedItemMode === "draft") {
+            if (!selectedItemId || !specDraft) return;
+            setIsSaving(true);
+            try {
+                await upsertDraft({
+                    projectId,
+                    elementId: selectedItemId,
+                    data: specDraft,
+                });
+            } finally {
+                setIsSaving(false);
+            }
+            return;
+        }
         if (!tabScope) return;
         setIsSaving(true);
         try {
@@ -222,7 +243,7 @@ export function ItemEditorPanel() {
                         {item.typeKey} - {item.status}
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
                     <button
                         type="button"
                         className="text-sm px-3 py-2 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
@@ -243,21 +264,32 @@ export function ItemEditorPanel() {
                     <button
                         type="button"
                         className="text-sm px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                        disabled={!tabScope || isSaving}
+                        disabled={(selectedItemMode !== "draft" && !tabScope) || isSaving}
                         onClick={saveRevision}
                     >
-                        {isSaving ? "Saving..." : tabScope ? `Save ${tabScope} draft` : "Save draft"}
+                        {isSaving
+                            ? "Saving..."
+                            : selectedItemMode === "draft"
+                                ? "Save element draft"
+                                : tabScope
+                                    ? `Save ${tabScope} draft`
+                                    : "Save draft"}
                     </button>
                 </div>
             </div>
 
-            {draftRevision && (
+            {selectedItemMode !== "draft" && draftRevision && (
                 <ItemRevisionBanner
                     itemId={item._id}
                     revisionId={draftRevision._id}
                     revisionNumber={draftRevision.revisionNumber}
                     summaryMarkdown={draftRevision.summaryMarkdown}
                 />
+            )}
+            {selectedItemMode === "draft" && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    Editing the draft slot. Approving will replace the approved element snapshot.
+                </div>
             )}
 
             {factsEnabled && (

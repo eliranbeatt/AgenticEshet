@@ -444,6 +444,7 @@ export default defineSchema({
             v.literal("active"),
             v.literal("archived")
         )),
+        elementNotesMarkdown: v.optional(v.string()),
         publishedVersionId: v.optional(v.id("elementVersions")),
         activeVersionId: v.optional(v.id("elementVersions")),
         createdFrom: v.object({
@@ -519,6 +520,9 @@ export default defineSchema({
         ),
         revisionNumber: v.number(),
         baseApprovedRevisionId: v.optional(v.id("itemRevisions")),
+        approvedAt: v.optional(v.number()),
+        approvedBy: v.optional(v.string()),
+        digestText: v.optional(v.string()),
         data: v.any(),
         summaryMarkdown: v.optional(v.string()),
         createdBy: v.object({
@@ -603,6 +607,9 @@ export default defineSchema({
         warnings: v.optional(v.array(v.string())),
         assumptions: v.optional(v.array(v.string())),
         openQuestions: v.optional(v.array(v.string())),
+        basedOnBulletIds: v.optional(v.array(v.string())),
+        basedOnApprovedSnapshotId: v.optional(v.string()),
+        conflictsReferenced: v.optional(v.array(v.string())),
         counts: v.optional(v.object({
             items: v.optional(v.number()),
             tasks: v.optional(v.number()),
@@ -707,6 +714,17 @@ export default defineSchema({
     })
         .index("by_element_createdAt", ["elementId", "createdAt"])
         .index("by_project_createdAt", ["projectId", "createdAt"]),
+
+    elementDrafts: defineTable({
+        projectId: v.id("projects"),
+        elementId: v.id("projectItems"),
+        data: v.any(),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+        createdBy: v.optional(v.string()),
+    })
+        .index("by_project_element", ["projectId", "elementId"])
+        .index("by_project_updatedAt", ["projectId", "updatedAt"]),
 
     projectVersions: defineTable({
         projectId: v.id("projects"),
@@ -1262,6 +1280,36 @@ export default defineSchema({
         createdAt: v.number(),
     }).index("by_project_phase", ["projectId", "phase"]),
 
+    // 8a. PROJECT CONVERSATIONS: Agent tab threaded conversations
+    projectConversations: defineTable({
+        projectId: v.id("projects"),
+        title: v.string(),
+        stageTag: v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning")),
+        defaultChannel: v.union(v.literal("free"), v.literal("structured")),
+        contextMode: v.union(v.literal("none"), v.literal("selected"), v.literal("all")),
+        contextElementIds: v.optional(v.array(v.id("projectItems"))),
+        status: v.union(v.literal("active"), v.literal("archived")),
+        threadId: v.optional(v.id("chatThreads")),
+        lastMessageAt: v.optional(v.number()),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+        archivedAt: v.optional(v.number()),
+    })
+        .index("by_project_status_updatedAt", ["projectId", "status", "updatedAt"])
+        .index("by_project_stage_updatedAt", ["projectId", "stageTag", "updatedAt"]),
+
+    conversationMessages: defineTable({
+        projectId: v.id("projects"),
+        conversationId: v.id("projectConversations"),
+        role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")),
+        content: v.string(),
+        stage: v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning")),
+        channel: v.union(v.literal("free"), v.literal("structured")),
+        createdAt: v.number(),
+    })
+        .index("by_conversation_createdAt", ["conversationId", "createdAt"])
+        .index("by_project_createdAt", ["projectId", "createdAt"]),
+
     // 8b. FLOW WORKSPACES: editable "current understanding" per tab + scope
     flowWorkspaces: defineTable({
         projectId: v.id("projects"),
@@ -1657,15 +1705,19 @@ export default defineSchema({
     // Structured Questions
     structuredQuestionSessions: defineTable({
         projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
         stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
         status: v.union(v.literal("active"), v.literal("done"), v.literal("archived")),
         currentTurnNumber: v.number(),
         createdAt: v.number(),
         updatedAt: v.number(),
-    }).index("by_project_stage", ["projectId", "stage", "status"]),
+    })
+        .index("by_project_stage", ["projectId", "stage", "status"])
+        .index("by_project_conversation_stage_status", ["projectId", "conversationId", "stage", "status"]),
 
     structuredQuestionTurns: defineTable({
         projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
         stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
         sessionId: v.id("structuredQuestionSessions"),
         turnNumber: v.number(),
@@ -1677,7 +1729,8 @@ export default defineSchema({
         answeredAt: v.optional(v.number()),
     })
         .index("by_session_turn", ["sessionId", "turnNumber"])
-        .index("by_project_stage_recent", ["projectId", "stage", "createdAt"]),
+        .index("by_project_stage_recent", ["projectId", "stage", "createdAt"])
+        .index("by_conversation_stage_recent", ["conversationId", "stage", "createdAt"]),
 
     // --- FACTS PIPELINE ---
 
@@ -1904,24 +1957,64 @@ export default defineSchema({
     })
         .index("by_scope_block", ["projectId", "scopeType", "itemId", "blockKey"]),
 
-    projectKnowledge: defineTable({
+    projectBrains: defineTable({
         projectId: v.id("projects"),
-        currentText: v.string(),
-        preferencesText: v.optional(v.string()),
+        version: v.number(),
         updatedAt: v.number(),
-        updatedBy: v.string(),
+        project: v.any(),
+        elementNotes: v.any(),
+        unmapped: v.any(),
+        conflicts: v.any(),
+        recentUpdates: v.any(),
     }).index("by_project", ["projectId"]),
 
-    knowledgeLogEntries: defineTable({
+    brainEvents: defineTable({
         projectId: v.id("projects"),
-        createdAt: v.number(),
-        source: v.union(
-            v.literal("ingestion"),
-            v.literal("user_chat"),
-            v.literal("agent_summary")
+        eventType: v.union(
+            v.literal("structured_submit"),
+            v.literal("agent_send"),
+            v.literal("file_ingested"),
+            v.literal("manual_add"),
+            v.literal("manual_structured_edit")
         ),
-        text: v.string(),
-        linkedDocId: v.optional(v.id("knowledgeDocs")),
-        linkedMessageId: v.optional(v.string()),
-    }).index("by_project_createdAt", ["projectId", "createdAt"]),
+        payload: v.any(),
+        brainVersionAtStart: v.number(),
+        status: v.union(
+            v.literal("queued"),
+            v.literal("applied"),
+            v.literal("needs_review"),
+            v.literal("rejected"),
+            v.literal("conflict_retry")
+        ),
+        patchOps: v.optional(v.any()),
+        createdAt: v.number(),
+        appliedAt: v.optional(v.number()),
+        error: v.optional(v.string()),
+    })
+        .index("by_project_createdAt", ["projectId", "createdAt"])
+        .index("by_project_status", ["projectId", "status"]),
+
+    brainRuns: defineTable({
+        projectId: v.id("projects"),
+        eventId: v.id("brainEvents"),
+        model: v.string(),
+        outputJson: v.optional(v.string()),
+        runSummary: v.optional(v.string()),
+        status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+        createdAt: v.number(),
+        error: v.optional(v.string()),
+    }).index("by_project_event", ["projectId", "eventId"]),
+
+    elementSuggestions: defineTable({
+        projectId: v.id("projects"),
+        title: v.string(),
+        descriptionMarkdown: v.string(),
+        status: v.union(
+            v.literal("SUGGESTED"),
+            v.literal("APPROVED"),
+            v.literal("DISMISSED")
+        ),
+        createdAt: v.number(),
+    }).index("by_project_status", ["projectId", "status"])
+        .index("by_project_createdAt", ["projectId", "createdAt"]),
 });

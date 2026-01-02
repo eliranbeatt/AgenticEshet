@@ -130,7 +130,7 @@ export function SuggestedElementsPanel({ projectId, selectedAllProject, selected
         <div className="bg-white border rounded-lg shadow-sm p-3 space-y-3">
             <div className="flex items-center justify-between">
                 <div>
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Suggested Elements</div>
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Agent Strategy</div>
                     <div className="text-xs text-gray-500 mt-1">Scope: {scopeLabel}</div>
                 </div>
             </div>

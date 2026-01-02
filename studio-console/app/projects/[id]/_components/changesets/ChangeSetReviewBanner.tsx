@@ -174,6 +174,14 @@ export function ChangeSetReviewBanner({
                                         <Section title="Assumptions" lines={active.assumptions ?? []} />
                                         <Section title="Warnings" lines={active.warnings ?? []} />
                                         <Section title="Open questions" lines={active.openQuestions ?? []} />
+                                        <Section title="Brain citations" lines={active.basedOnBulletIds ?? []} />
+                                        {active.basedOnApprovedSnapshotId && (
+                                            <div>
+                                                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Approved snapshot</div>
+                                                <div className="mt-2 text-sm text-gray-700">{active.basedOnApprovedSnapshotId}</div>
+                                            </div>
+                                        )}
+                                        <Section title="Conflicts referenced" lines={active.conflictsReferenced ?? []} />
 
                                         <div className="space-y-3">
                                             <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Operations</div>

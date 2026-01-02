@@ -36,6 +36,7 @@ type ElementSnapshotSummary = {
     itemId?: string;
     title?: string;
     typeKey?: string;
+    versionId?: string;
     snapshot?: {
         descriptions?: { short?: string; long?: string };
         tasks?: unknown[];
@@ -130,12 +131,13 @@ export function summarizeElementSnapshots(items: ElementSnapshotSummary[], limit
     return items.slice(0, limit).map((item) => {
         const title = item.title ?? "Untitled element";
         const typeKey = item.typeKey ?? "unknown";
+        const versionId = item.versionId ? ` versionId=${item.versionId}` : "";
         const snapshot = item.snapshot ?? null;
         const tasks = Array.isArray(snapshot?.tasks) ? snapshot?.tasks.length : 0;
         const materials = Array.isArray(snapshot?.materials) ? snapshot?.materials.length : 0;
         const labor = Array.isArray(snapshot?.labor) ? snapshot?.labor.length : 0;
         const description = snapshot?.descriptions?.short || snapshot?.descriptions?.long || "";
         const descText = description ? ` | ${truncateText(formatValue(description), 120)}` : "";
-        return `- ${title} [${typeKey}] tasks=${tasks} materials=${materials} labor=${labor}${descText}`;
+        return `- ${title} [${typeKey}]${versionId} tasks=${tasks} materials=${materials} labor=${labor}${descText}`;
     }).join("\n");
 }

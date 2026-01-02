@@ -23,18 +23,18 @@ const TSAKA_LANGUAGE = `
 - רשימת הלבשה = dressing list per area/room/zone.
 - ראנבוק = work breakdown/runbook (who does what, when, with what).
 - רכש/איסופים = procurement/pickups (assigned to a person/vendor).
-- ????? = studio<->site trucking & load-in/out (not supplier delivery).
+- הובלה = studio<->site trucking & load-in/out (not supplier delivery).
 - התקנה / הרכבה = on-site build/rig/mount/assemble.
-- ????? = teardown/strike/return/disposal.
+- פירוק = teardown/strike/return/disposal.
 - גרפיקות/דפוס = graphics/prints (PVC, vinyl, sticker, kapa, mesh).
 `;
 
 const STANDARD_DEFINITIONS = `
 STANDARD DEFINITIONS (strict):
-- ????? (Moving): truck + driver + load/unload at venue. NOT supplier delivery to studio.
+- הובלה (Moving): truck + driver + load/unload at venue. NOT supplier delivery to studio.
 - התקנה (Installation): skilled onsite work: mounting, hanging, assembly, adjustments.
-- ????? (Teardown): planned dismantle, packing, return/storage, disposal/site restore.
-- ?????? ?????? (Studio production): in-house fabrication: carpentry, paint, foam, print mounting.
+- פירוק (Teardown): planned dismantle, packing, return/storage, disposal/site restore.
+- בניה בסטודיו (Studio production): in-house fabrication: carpentry, paint, foam, print mounting.
 - ניהול/אדמין: approvals, coordination, meetings, paperwork. Must be flagged as management (not double-counted).
 `;
 

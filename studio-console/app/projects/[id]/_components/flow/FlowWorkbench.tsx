@@ -228,9 +228,6 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
         if (elementsCanonical && rightPanelTab === "state") {
             setRightPanelTab("knowledge");
         }
-        if (!elementsCanonical && rightPanelTab === "knowledge") {
-            setRightPanelTab("state");
-        }
     }, [elementsCanonical, rightPanelTab]);
 
     useEffect(() => {
@@ -391,21 +388,18 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                     <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
                         <div className="p-3 border-b flex items-center justify-between bg-gray-50">
                             <div className="flex gap-2">
-                                {elementsCanonical ? (
-                                    <button
-                                        onClick={() => setRightPanelTab("knowledge")}
-                                        className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "knowledge" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                                    >
-                                        Current Knowledge
-                                    </button>
-                                ) : (
-                                    <button
-                                        onClick={() => setRightPanelTab("state")}
-                                        className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "state" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
-                                    >
-                                        Current State
-                                    </button>
-                                )}
+                                <button
+                                    onClick={() => setRightPanelTab("knowledge")}
+                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "knowledge" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                >
+                                    Project Brain
+                                </button>
+                                <button
+                                    onClick={() => setRightPanelTab("state")}
+                                    className={`text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded ${rightPanelTab === "state" ? "bg-white shadow text-blue-600" : "text-gray-500"}`}
+                                >
+                                    Current State
+                                </button>
                                 {!elementsCanonical && factsEnabled && (
                                     <button
                                         onClick={() => setRightPanelTab("facts")}

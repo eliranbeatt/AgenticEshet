@@ -1,0 +1,663 @@
+Awesome — here’s the **single, consolidated “full dev plan”** that bakes in **everything you accepted**, plus the missing pieces we identified: **draft/stacked ChangeSets (non-blocking)**, **one event-based orchestrator**, **stable skill IDs + semver**, **hard invariants + reconciliation-by-flag**, **2-layer validation (rules + optional judge)**, **optimistic concurrency**, **context budgets**, and a **migration/rollout plan**.
+
+---
+
+# 0) What we are building
+
+## Goal
+
+Replace **Ideation / Planning / Solutioning** tabs with **one Studio Agent tab** that:
+
+* routes each turn to a **skill** (prompt + schemas + tools),
+* preserves the UX separation: **Structured Questions (שאלות מובנות)** vs **Free Chat (צ׳אט חופשי)**,
+* outputs **one primary render kind per turn**: chat OR questions OR draft changes,
+* produces **draft ChangeSets** that are **stackable + editable** until the user applies/discards,
+* enforces data integrity with deterministic **validators + reconciliation**.
+
+## Non-goals (for v1)
+
+* full “auto-merge” rebasing of drafts after conflicts (we’ll detect + show conflicts first)
+* full projected rendering of every derived domain (we’ll show diffs + lightweight projections)
+* allowing LLM to write directly to DB without approval (never)
+
+---
+
+# 1) Core decisions (locked)
+
+These are the “no ambiguity” choices for dev:
+
+1. **Skill IDs are stable** (NO version baked in). Version is stored separately as semver.
+2. **One public orchestrator endpoint**: `studio.runStudioTurn(event)` (event-based).
+3. **Draft/stacked ChangeSet is default** (non-blocking banner; user can keep chatting).
+4. **Stage is split into three concepts**:
+
+   * `projectStage` (persisted workflow gating)
+   * `uiPinnedStage` (user preference)
+   * `turnStage` (router’s decision for this turn)
+5. **Reconciliation is “flag-first”** (safe auto-fixes allowed; destructive = flagged / tombstoned).
+6. **Validation is 2-layer**: deterministic rule validators + optional LLM judge only on high-risk.
+7. **Approved ElementSnapshots are source-of-truth**; facts/knowledge support and propose updates, never override silently.
+
+---
+
+# 2) System architecture
+
+### One mental model
+
+**Every user action is a “StudioTurn event”** → orchestrator routes → runs one skill → returns **one primary render payload** + updates session + (optionally) draft.
+
+### High-level flow
+
+```mermaid
+flowchart LR
+UI[Studio Tab UI] -->|runStudioTurn(event)| ORCH[Studio Orchestrator]
+ORCH --> ROUTE[Heuristic Router / LLM Router]
+ROUTE --> SKILL[Skill Runner]
+SKILL --> VALID[Schema + Rule Validators]
+VALID -->|ok| SAVE[Update StudioSession + log AgentRun]
+SAVE --> UI
+VALID -->|errors| UI
+SAVE -->|draftChangeSet| DRAFT[Pending Changes Panel]
+DRAFT -->|apply/discard via event| ORCH
+```
+
+---
+
+# 3) Data model (Convex) — “Session + Draft + Turn log”
+
+## 3.1 `studioSessions` (per project + user)
+
+Purpose: hold *ongoing state* (pins, questionnaire state, draft ChangeSet) so you avoid “stop-and-approve”.
+
+**Fields**
+
+* identity:
+
+  * `projectId`, `userId`
+* UI state:
+
+  * `pinnedStage: "auto|ideation|planning|solutioning"`
+  * `pinnedChannel: "auto|questions|chat"`
+  * `selectedElementIds: Id[]`
+  * `focus: {kind: "project|element|task|section", ids...}`
+* workflow gating:
+
+  * `projectStage: "ideation|planning|solutioning"`
+* questionnaire:
+
+  * `activeQuestionsSkillId`
+  * `visibleQids[]`
+  * `draftAnswers: {qid: value}`  *(unsaved UI state)*
+  * `savedAnswers: {qid: value}`
+  * `skippedQids[]`
+  * `continueAnyway: boolean`
+* draft changes:
+
+  * `draftChangeSet: { draftId, revision, proposed, lastUpdatedAt } | null`
+* last turn info:
+
+  * `lastSkillId`, `lastRouting`, `status: idle|routing|executing`
+* timestamps
+
+✅ **Why:** fixes the blocking flow, preserves form state, lets draft persist across refresh.
+
+---
+
+## 3.2 `studioTurns` (audit log of what happened)
+
+Purpose: debuggability and repeatability.
+
+Fields:
+
+* `projectId`, `userId`, `idempotencyKey`
+* `eventType`, `userMessage` (if any)
+* `routingDecision`
+* `skillRunMeta` (skillId, version, model)
+* `validationResults` (rule warnings/errors, judge score if used)
+* `draftRevisionAfter`
+* pointers to `agentRuns` + `conversationMessageIds`
+* timestamps
+
+---
+
+## 3.3 ChangeSets
+
+You can keep your existing ChangeSet storage/apply pipeline **but** the Studio layer treats them as:
+
+* **Draft ChangeSet**: stored in `studioSessions.draftChangeSet.proposed`
+* **Applied ChangeSet**: persisted to your canonical versioning system (`itemChangeSets`, `projectVersions`, etc.)
+
+We’ll implement conversion if needed:
+
+* Studio outputs `patchOps[]` in a strict contract
+* Apply step maps patchOps → existing domain mutations (elements/tasks/accounting/etc.)
+
+---
+
+# 4) Skill registry — code-first + DB overrides
+
+## 4.1 Code registry (`convex/skills/registry.ts`)
+
+**Source of truth** for:
+
+* `skillId` (stable)
+* `stage`, `channel`, `minProjectStage`
+* `inputSchema`, `outputSchema` (Zod)
+* `contextNeeds`
+* default prompt + default model config
+* allowed tools
+
+## 4.2 DB “override rows” (editable in `/admin/skills`)
+
+Editable fields only:
+
+* `promptOverride`
+* `isEnabled`
+* model/tool overrides (allowlist)
+* notes
+
+Locked (not editable):
+
+* schema identifiers/hashes
+* stage/channel/minProjectStage
+* contextNeeds structure
+
+## 4.3 Registry sync
+
+Add an admin action/script:
+
+* upserts missing skills
+* updates schema hash, prompt hash
+* flags drift (shows “needsSync” badge)
+
+✅ **Why:** prevents schema drift and “ghost skills” during migrations.
+
+---
+
+# 5) Orchestrator — one endpoint, event-based
+
+## 5.1 Single public entrypoint
+
+`studio.runStudioTurn({ projectId, idempotencyKey, event })`
+
+Event union (v1):
+
+* `chatMessage { text }`
+* `generateQuestions { pendingAnswers? }`
+* `saveAnswers { answers }`
+* `applyDraft { expectedDraftRevision }`
+* `discardDraft`
+* `reviseDraft { feedbackText }`
+* `setPins { pinnedStage?, pinnedChannel? }`
+* `setScope { selectedElementIds/focus }`
+
+✅ **Why:** no multi-endpoint state desync; UI just emits events.
+
+---
+
+# 6) Routing — deterministic first, LLM router only when needed
+
+## 6.1 Deterministic routing rules
+
+Skip LLM router when:
+
+* channel is pinned to `questions` → go directly to questions skill for stage
+* stage is pinned (non-auto) → no stage inference needed
+* explicit commands detected (optional): `/task`, `/price`, `/element`
+
+## 6.2 Heuristic router
+
+Keyword + state based:
+
+* ideation words (“רעיון/קונספט/השראה”) → ideation ideas
+* planning words (“משימות/שלבים/תמחור/הצעה”) → planning skills
+* solutioning words (“איך בונים/חיבורים/חומרים/קונסטרוקציה”) → solutioning skills
+* change words (“להוזיל/להחליף/להוריד אלמנט”) → change handler
+
+## 6.3 LLM router (small model) only when ambiguous
+
+Only when:
+
+* channel resolves to free chat
+* stage is auto
+* heuristics confidence < threshold
+
+Router output:
+
+* `turnStage`, `turnChannel`, `chosenSkillId`, `confidence`, `reasons[]`
+
+---
+
+# 7) Scope resolution — no hallucinated IDs
+
+Before running a skill that touches entities:
+
+1. Run **Element Resolver** (deterministic fuzzy match first; LLM assist if needed)
+2. If ambiguity remains → return **NEEDS_SCOPE** render payload:
+
+   * show candidates, ask 1–3 disambiguation questions, block apply/mutations
+
+✅ **Why:** prevents wrong-element edits (your #1 “silent corruption” risk).
+
+---
+
+# 8) Context loading — 2-phase + budgets + fallback
+
+## 8.1 Router context (minimal)
+
+* projectStage, pins, counts, selected ids, hasDraft, lastSkill
+  No long summaries.
+
+## 8.2 Skill context (targeted by `contextNeeds`)
+
+Each skill declares what it needs:
+
+* elements: selected or search-limited (e.g., 5)
+* tasks: by elements (limit 120)
+* accounting: totals + relevant lines only
+* knowledge: optional RAG slice only when requested/needed
+
+## 8.3 Hard budgets + fallback
+
+Per skill config:
+
+* `maxElements`, `maxTasks`, `maxLines`, `maxKnowledgeChunks`
+  If exceeded:
+* either return **NEEDS_SCOPE** (“pick element / narrow scope”)
+* or run a “Summarize slice” helper first (deterministic), then proceed.
+
+✅ **Why:** avoids token blowups and keeps outputs grounded.
+
+---
+
+# 9) Output contract — exactly one primary render kind
+
+Every turn returns:
+
+* always: `assistantMessage`
+* plus **one primary payload**:
+
+  * `render.kind = "chat" | "questions" | "draft_changes"`
+* optional secondary: `warnings`, `blockers`, `proposedFacts`
+
+✅ **Why:** UI stays simple and predictable.
+
+---
+
+# 10) Draft/stacked ChangeSets — non-blocking by default
+
+## 10.1 Draft semantics (replace-by-default)
+
+When a skill proposes changes:
+
+* it returns the **entire draft**
+* server stores it as `session.draftChangeSet.proposed`
+* increments `revision`
+
+User can keep chatting; skills can revise the draft.
+
+## 10.2 Apply/Discard
+
+Apply happens only when:
+
+* user clicks Apply
+* or explicit “apply/save/commit”
+* or “finalize quote/version”
+
+Apply must include:
+
+* `expectedDraftRevision` (optimistic lock)
+* conflict detection (see §12)
+
+Discard clears draft, keeps audit logs.
+
+---
+
+# 11) Hard invariants + Reconciliation Engine (flag-first)
+
+This is the piece that keeps “tasks/accounting/quote don’t diverge”.
+
+## 11.1 Invariants (v1 set)
+
+Examples (you’ll add more later):
+
+* Every task that implies purchasing should map to a material line OR explicitly mark “handled elsewhere”.
+* Every material/work line tied to an element must reference a valid elementId.
+* If a task is tombstoned, linked lines are **not deleted automatically**; they become:
+
+  * `status: orphaned` + flagged (“task removed; keep costs?”)
+* Quote totals must be derived from accounting snapshot + pricing policy version.
+
+## 11.2 Reconciliation outputs
+
+After applying a ChangeSet:
+
+* run deterministic reconciliation
+* produce:
+
+  * `autoFixOps[]` (safe, non-destructive)
+  * `flags[]` (needs user decision)
+  * optional `followUpDraftChangeSet` (suggested but not applied)
+
+## 11.3 Tombstone “Graveyard”
+
+A UI view listing:
+
+* tombstoned tasks/lines
+* orphaned links
+* flagged inconsistencies
+  With bulk actions:
+* “unlink only”
+* “remove cost line”
+* “restore tombstone”
+
+✅ **Why:** prevents the “reconciliation engine deletes my stuff” rage scenario.
+
+---
+
+# 12) Validation pipeline — schema + rules + optional judge
+
+## 12.1 Schema validation (Zod)
+
+Reject any skill output that doesn’t match.
+
+## 12.2 Rule validators (deterministic)
+
+Run on every proposed draft:
+
+* referential integrity (IDs exist)
+* stage gating (skill can’t do solutioning-only ops in ideation projectStage)
+* path allowlist (no arbitrary JSON patch)
+* no hard deletes (tombstone only)
+* maxOps thresholds
+* dependency integrity (no cycles; dependsOn IDs exist)
+* pricing impact thresholds (if large change, add warnings)
+
+## 12.3 Optional LLM judge (high-risk only)
+
+Trigger if:
+
+* destructive-ish changes (many tombstones)
+* large cost delta
+* scope mismatch risk
+* validator produced many warnings
+  Judge returns:
+* `pass|fail`, reasons, severity
+  Fail → keep draft but mark as “blocked” until revised.
+
+✅ **Why:** schema stops freestyle, rules stop corruption, judge catches “looks valid but insane”.
+
+---
+
+# 13) Concurrency & conflicts — optimistic locking
+
+## 13.1 `ifMatch` on patchOps
+
+Each patchOp can carry `ifMatch` (hash/version) of the entity snapshot it was based on.
+
+## 13.2 Apply-time conflict detection
+
+If underlying entity changed since draft:
+
+* apply rejects with `conflicts[]`:
+
+  * entityId, fieldPath, baseValue, currentValue, proposedValue
+    UI shows conflict resolution options:
+* “re-run skill with latest”
+* “discard draft”
+* (later) “manual resolve then apply”
+
+✅ **Why:** prevents applying stale drafts over manual edits or other users.
+
+---
+
+# 14) Studio UI — one tab, updated state machine
+
+## 14.1 Page
+
+`/projects/[id]/studio`
+
+Top bar:
+
+* Stage selector (Auto/Ideation/Planning/Solutioning)
+* Channel selector (Auto/Questions/Chat)
+* Scope chip (Project / Element(s))
+* Draft banner (rev N) with View / Apply / Discard
+
+Left panel:
+
+* single conversation thread with tags per message
+* composer emits `chatMessage` events
+
+Right panel tabs:
+
+* Elements
+* Plan snapshot
+* Tasks
+* Accounting
+* Risks/Decisions
+* Questions (when channel=questions)
+* Pending Changes (always accessible; auto-opens when draft exists)
+
+## 14.2 State logic (updated for non-blocking draft)
+
+* Draft does **not** block Send/Run
+* REVIEW_CHANGESET is a **panel state**, not a global mode lock
+
+---
+
+# 15) Migration & rollout plan (safe + incremental)
+
+## 15.1 Feature flag
+
+`project.features.studioTabV1 = true`
+
+## 15.2 Coexistence phase
+
+* Keep old tabs visible but add banner:
+
+  * “Studio replaces this. Open Studio with pinned stage = Planning/Solutioning.”
+* Provide “Open in Studio” buttons that set pins.
+
+## 15.3 Legacy import
+
+In Studio:
+
+* show “Legacy conversations” read-only
+* action: “Import summary into facts” (creates proposed facts + mapping)
+
+## 15.4 Deprecation
+
+Once Studio covers core flows:
+
+* hide old tabs behind an “Advanced/Legacy” toggle
+* eventually remove old routes
+
+---
+
+# 16) Observability & safety
+
+* `agentRuns` logs:
+
+  * routing time vs execution time
+  * chosen skill + version
+  * validation outcomes
+  * draft revision
+* `reconciliationRuns` logs:
+
+  * flags produced
+  * autoFix ops applied
+* “corruption alarm” metric:
+
+  * % of applies that produced conflicts/flags
+
+---
+
+# 17) Testing plan (must-have)
+
+Unit tests:
+
+* routing bypass rules
+* stage gating
+* scope resolver ambiguity handling
+* validators (path allowlist, referential checks)
+* reconciliation rules
+
+Integration tests:
+
+* “add logo wall” → draft → “make it blue” → draft updated → apply once
+* structured answers + generate next without explicit save
+* apply conflict detection
+
+Performance budgets:
+
+* router LLM calls < 20% of turns
+* context loader obeys max budgets
+
+---
+
+# 18) Dev execution plan (phases + epics + tickets)
+
+## Phase 0 — Design lock (1–2 days)
+
+**Epic 0: Contracts & invariants**
+
+1. **Doc: Stage definitions + gating rules**
+
+   * AC: `projectStage/uiPinnedStage/turnStage` are defined and used consistently.
+2. **Doc: Patch path allowlist by entity type**
+
+   * AC: list exists for element/task/materialLine/workLine/fact.
+3. **Doc: Invariants + reconciliation rules v1**
+
+   * AC: at least 10 invariants + “flag-first” behavior described.
+
+---
+
+## Phase 1 — Backend foundations
+
+**Epic 1: StudioSession + Turn log**
+
+* Ticket: Create `studioSessions` table + indexes
+
+  * AC: session persists pins, scope, draft answers, draftChangeSet across refresh.
+* Ticket: Create `studioTurns` log
+
+  * AC: every runStudioTurn writes a record with routing + skill + validation metadata.
+
+**Epic 2: Skill registry code-first**
+
+* Ticket: Implement `skills/registry.ts` + Zod IO schemas
+
+  * AC: 5 starter skills compile (router, ideation questions, planning quote plan, solutioning decompose, change handler).
+* Ticket: DB overrides model + admin sync action
+
+  * AC: sync upserts skills; admin can override prompt/model; schema fields locked.
+
+**Epic 3: Orchestrator (`runStudioTurn`)**
+
+* Ticket: Implement event union + idempotency
+
+  * AC: same idempotencyKey returns same output; no duplicate agentRuns/messages.
+* Ticket: Deterministic routing + heuristic router
+
+  * AC: pinned questions never calls LLM router; pinned stage never calls LLM router.
+* Ticket: LLM router fallback
+
+  * AC: only triggers when ambiguous; logs confidence + reasons.
+
+**Epic 4: Context loader (2-phase)**
+
+* Ticket: Router context builder (minimal)
+
+  * AC: router payload excludes long summaries.
+* Ticket: Skill context builder with budgets
+
+  * AC: refuses or scopes when budgets exceeded; loads only needed slices.
+
+---
+
+## Phase 2 — Draft ChangeSet mechanics + validation + reconciliation
+
+**Epic 5: Draft ChangeSet storage + revisioning**
+
+* Ticket: Store/replace draft + bump revision
+
+  * AC: multiple user messages update same draft; no blocking UI requirement.
+* Ticket: Apply/discard via events
+
+  * AC: apply requires expected revision; discard clears draft.
+
+**Epic 6: Validators**
+
+* Ticket: Schema validation gate
+
+  * AC: invalid skill output returns errors and does not update draft.
+* Ticket: Rule validator suite v1
+
+  * AC: referential integrity, allowlist paths, no hard deletes, maxOps, stage gating.
+* Ticket: Optional judge integration
+
+  * AC: triggers only on risk thresholds; fail blocks apply and marks draft.
+
+**Epic 7: Reconciliation engine**
+
+* Ticket: Reconciliation run after apply
+
+  * AC: produces `autoFixOps[]` + `flags[]`.
+* Ticket: Tombstone/orphan logic
+
+  * AC: tombstoned tasks do not auto-delete accounting lines; lines flagged as orphaned.
+
+---
+
+## Phase 3 — Studio UI
+
+**Epic 8: Studio page**
+
+* Ticket: Add `/projects/[id]/studio` route + layout
+
+  * AC: single chat, stage/channel selectors, scope chip.
+* Ticket: Draft banner + Pending Changes panel
+
+  * AC: shows revision, diff view, Apply/Discard, non-blocking.
+* Ticket: Questions panel wired to session.draftAnswers
+
+  * AC: answers persist locally in session; generate-next uses `pendingAnswers` event payload.
+* Ticket: Needs-scope UX
+
+  * AC: ambiguity blocks apply, shows picker + 1-question clarification option.
+
+---
+
+## Phase 4 — Skills rollout (minimum viable set)
+
+**Epic 9: Skills v1**
+
+* Router skill
+* Ideation initial questions
+* Planning build quote plan (mid-level tasks + milestone + accounting lines)
+* Solutioning decompose atomic
+* Change request handler (impact + proposed patch)
+* Plan critic (issues + suggested follow-up draft)
+
+AC for each skill:
+
+* passes schema validation
+* produces one render kind
+* does not exceed op/path limits
+* respects stage gating
+
+---
+
+## Phase 5 — Migration & deprecation
+
+**Epic 10: Migration**
+
+* Ticket: Add “Open in Studio” from old tabs with pinned stage
+
+  * AC: button sets stage + opens studio.
+* Ticket: Legacy conversation import to facts
+
+  * AC: imports create proposed facts; no direct overwrites.
+

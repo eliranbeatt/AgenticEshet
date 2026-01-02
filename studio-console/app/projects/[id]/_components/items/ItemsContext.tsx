@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Id } from "../../../../../convex/_generated/dataModel";
 
 export type ItemTabScope =
@@ -18,6 +18,8 @@ type ItemsContextValue = {
     tabScope?: ItemTabScope;
     selectedItemId: Id<"projectItems"> | null;
     setSelectedItemId: (value: Id<"projectItems"> | null) => void;
+    selectedItemMode: "approved" | "draft";
+    setSelectedItemMode: (value: "approved" | "draft") => void;
     showDraftItems: boolean;
     setShowDraftItems: (value: boolean) => void;
 };
@@ -26,7 +28,13 @@ const ItemsContext = createContext<ItemsContextValue | null>(null);
 
 const STORAGE_PREFIX = "studioConsole.items.selected";
 
-function resolveTabScope(pathname: string): ItemTabScope | undefined {
+function resolveTabScope(pathname: string, stageParam?: string): ItemTabScope | undefined {
+    if (pathname.includes("/agent")) {
+        if (stageParam === "ideation" || stageParam === "planning" || stageParam === "solutioning") {
+            return stageParam;
+        }
+        return "ideation";
+    }
     if (pathname.includes("/ideation")) return "ideation";
     if (pathname.includes("/clarification")) return "clarification";
     if (pathname.includes("/planning")) return "planning";
@@ -45,10 +53,13 @@ export function ItemsProvider({
     children: React.ReactNode;
 }) {
     const pathname = usePathname();
-    const tabScope = useMemo(() => resolveTabScope(pathname), [pathname]);
+    const searchParams = useSearchParams();
+    const stageParam = searchParams.get("stage") ?? undefined;
+    const tabScope = useMemo(() => resolveTabScope(pathname, stageParam), [pathname, stageParam]);
     const storageKey = `${STORAGE_PREFIX}.${projectId}`;
 
     const [selectedItemId, setSelectedItemIdState] = useState<Id<"projectItems"> | null>(null);
+    const [selectedItemMode, setSelectedItemMode] = useState<"approved" | "draft">("approved");
     const [showDraftItems, setShowDraftItems] = useState(false);
     const [hydrated, setHydrated] = useState(false);
 
@@ -84,10 +95,12 @@ export function ItemsProvider({
             tabScope,
             selectedItemId,
             setSelectedItemId,
+            selectedItemMode,
+            setSelectedItemMode,
             showDraftItems,
             setShowDraftItems,
         }),
-        [projectId, tabScope, selectedItemId, setSelectedItemId, showDraftItems],
+        [projectId, tabScope, selectedItemId, setSelectedItemId, selectedItemMode, showDraftItems],
     );
 
     return <ItemsContext.Provider value={value}>{children}</ItemsContext.Provider>;

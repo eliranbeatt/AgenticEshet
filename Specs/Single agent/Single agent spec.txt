@@ -1,0 +1,183 @@
+Here’s a **clean mapping** from “3 tabs / many agents” → **1 tab / 1 agent** that internally routes to **separate skills** (prompts + schemas + tools), while keeping your hard requirement: **Structured Questions (שאלות מובנות) vs Free Chat (צ׳אט חופשי)**.
+
+I’ll anchor this to what already exists in your app today (routes + agents + “skills” admin table, etc.). 
+
+---
+
+## 1) New mental model: one “Studio Agent” + skill routing
+
+### The single agent has 3 responsibilities
+
+1. **Understand intent + stage** (Ideation / Planning / Solutioning / Critique / Change-request / etc.)
+2. **Choose the right skill** (like a toolbox)
+3. **Produce one of 3 output types**
+
+   * **Answer only** (chat response)
+   * **Questions only** (structured questionnaire update)
+   * **ChangeSet** (proposed updates to Elements / Tasks / Accounting / Knowledge, pending approval)
+
+### Stage is *not* a UI tab anymore — it’s a **mode**
+
+* **Auto stage** (default): agent infers stage from:
+
+  * project state (have elements? quote approved? tasks exist?)
+  * the user message intent (“need ideas” vs “break down tasks” vs “how to build”)
+* **Manual override**: user can pin stage to avoid surprises.
+
+---
+
+## 2) Skill library (what skills you need, what each does)
+
+Think of “skills” as **strict prompt+schema contracts** stored in your existing `skills` table + editable in `/admin/skills`. 
+The Studio Agent loads them dynamically and runs the selected one.
+
+### A) Router + guardrails (always first)
+
+| Skill                            | Purpose                                                                                                    | Output                                   |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| **Stage Router**                 | Classify the user need: Ideation / Planning / Solutioning / Critique / ChangeRequest / Procurement / Admin | `{stage, confidence, why, nextSkill}`    |
+| **Channel Router**               | Decide “שאלות מובנות” vs “צ׳אט חופשי” vs “ChangeSet proposal”                                              | `{channel, reasons}`                     |
+| **Element Resolver**             | Map user references (“the entrance arch”, “קיר לוגו”) → elementId(s)                                       | `{resolvedIds, ambiguities[], askUser?}` |
+| **Safety + Constraints Checker** | Hard constraints you’ve defined (budget caps, venue rules, weight limits, deadlines, brand style)          | `warnings[] + requiredQuestions[]`       |
+
+### B) Ideation skills (customer is vague)
+
+| Skill                             | What it does                                                                                                             | Output                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| **Ideation Structured Questions** | Ask minimal but high-signal questions: goals, brand, location, audience, measurements, reuse, deadline, approval process | `questions[] (grouped), “why we ask”, missingCritical[]` |
+| **Element Ideas Generator**       | Propose element concepts + variations (wow factor vs cheap)                                                              | `elementIdeas[]` with short rationale                    |
+| **ROM Budget Estimator**          | Rough budget ranges per element + drivers                                                                                | `budgetRanges[] + assumptions[]`                         |
+| **Style/References Extractor**    | Turn mood words into constraints (“industrial”, “נקי”, “צבעוניות”)                                                       | `styleFacts[]` stored as facts                           |
+
+### C) Planning skills (quote-ready, stick-to-it plan)
+
+| Skill                             | What it does                                                                                                         | Output                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| **Planning Structured Questions** | Anything needed to price accurately: sizes, materials preferences, transport/install constraints, crew, access hours | `questions[] + missingForQuote[]`  |
+| **Milestones + Phases Builder**   | Quests/milestones and phases (סטודיו/הובלה/התקנה/צילום/פירוק)                                                        | `milestones[]`                     |
+| **Task Breakdown (mid-level)**    | Tasks detailed enough for quoting (not atomic micro-steps)                                                           | `tasks[]` + dependencies           |
+| **BOM + Labor Estimator**         | Materials + labor lines into accounting buckets                                                                      | `materialLines[] + workLines[]`    |
+| **Pricing Strategy**              | Applies overhead/risk/profit rules; flags underestimation                                                            | `pricingSummary + riskBufferNotes` |
+
+### D) Solutioning skills (deep build plan, atomic)
+
+| Skill                                          | What it does                                                                                            | Output                                        |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| **Solutioning Structured Questions**           | Questions only needed for final build execution: joinery, finish, tolerances, rigging, safety, sourcing | `questions[]`                                 |
+| **Build Options Generator**                    | 2–4 build approaches (build vs buy vs outsource) with pros/cons                                         | `options[] + recommendation`                  |
+| **Atomic Task Decomposer**                     | “Smallest actionable tasks” (cut, sand, prime, drill, assemble…)                                        | `atomicTasks[]` with durations + dependencies |
+| **Materials Substitution / Value Engineering** | Cheaper/faster alternatives (with tradeoffs)                                                            | `substitutions[]`                             |
+| **Procurement Plan**                           | what to buy, where, lead times, fallback vendors                                                        | `purchasePlan[]`                              |
+
+### E) Critique + change skills (cross-cutting)
+
+| Skill                               | What it does                                                                | Output                                     |
+| ----------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------ |
+| **Plan Critic**                     | Find holes: missing tasks, unrealistic timeline, hidden costs, safety gaps  | `issues[] + severity + fixes[]`            |
+| **Risk Register Builder**           | Risks + mitigations + contingency cost                                      | `riskItems[]`                              |
+| **Customer Change Request Handler** | “Make it cheaper”, “replace material”, “remove element” → impact            | `impactSummary + proposedChangeSet`        |
+| **Diff/Version Summarizer**         | Writes the version tags/summary (“Planning: removed X, added dependencies”) | `versionTag + summary + affectedDomains[]` |
+
+### F) “Technical” skills you explicitly asked for
+
+| Skill                                  | Purpose                                                         | Output                                 |
+| -------------------------------------- | --------------------------------------------------------------- | -------------------------------------- |
+| **Generate Elements**                  | Create new element objects from chat/answers                    | `elements[]`                           |
+| **Update Elements**                    | Edit existing elements safely                                   | `ChangeSet (patchOps)`                 |
+| **Knowledge / Facts Updater**          | Convert answers & uploads into atomic facts (accepted/proposed) | `facts[]` with source                  |
+| **Tasks↔Accounting Consistency Fixer** | Ensure tasks, materials, work lines stay consistent             | `proposed reconciliations + ChangeSet` |
+
+> This aligns with your current system shape (projects/plans/tasks/accounting/quotes/knowledge + existing agents), but makes it feel like “one brain” in one tab. 
+
+---
+
+## 3) How the UI should support it (single tab, two channels)
+
+### One new project page
+
+Add (or replace the 3 pages with):
+**`/projects/[id]/studio`** (name it: **Studio Agent** / “אולפן” / whatever)
+
+You already have project layouts, agent activity panel, conversations storage, etc. 
+
+### Layout (practical + minimal)
+
+**Top bar**
+
+* Stage: **Auto / Ideation / Planning / Solutioning**
+* Channel: **שאלות מובנות / צ׳אט חופשי**
+* “Apply proposed changes” button (only when ChangeSet exists)
+
+**Left (main)**
+
+* One conversation thread (with message tags like: `Ideation • Free Chat`, `Planning • Structured`, `Solutioning • Critique`)
+* Inline “proposed actions” chips: *Create elements*, *Update tasks*, *Reprice*, *Ask next questions*
+
+**Right (workspace)**
+Tabbed mini-panels (always visible context):
+
+1. **Elements** (list + quick add)
+2. **Plan snapshot** (milestones / quests)
+3. **Tasks** (high-level counts + statuses)
+4. **Accounting** (totals + key lines)
+5. **Risks / Decisions**
+6. **Pending Changes** (diff viewer + approve/reject)
+
+### Structured Questions UX (super important)
+
+* Questions are grouped by stage (Ideation/Planning/Solutioning)
+* Each answer instantly creates/updates:
+
+  * **facts**
+  * mapped fields (Fact → `element.fieldPath` style mapping you wanted earlier)
+* “Generate next questions” is a skill call, not free chat.
+
+---
+
+## 4) Best way to implement this in your current codebase
+
+You don’t have to delete everything immediately. Implement “Studio Agent” as an **orchestrator** that can reuse your existing agent logic internally.
+
+You already have separate agent actions (clarification/planning/solutioning/architect/quote/accountingGenerator, etc.) and a `skills` admin system. The missing piece is: **one router + one unified runner** that selects prompts and then applies changes safely. 
+
+### The core mechanism: “Skill Run”
+
+Every turn produces:
+
+1. `routingDecision`
+2. `skillOutput` (validated)
+3. optionally `ChangeSet` (pending approval)
+
+Persist:
+
+* conversation message
+* routing decision
+* skill name + version
+* proposed ChangeSet (if any)
+
+---
+
+## 5) Extra skills you didn’t list (but you’ll want fast)
+
+1. **Scope Clarifier (“what are we working on?”)**
+   Prevents mixing project-level vs element-level vs task-level edits.
+2. **Decision Log Writer**
+   Keeps “why we chose option B” (huge for you + team).
+3. **Budget Guardrails Enforcer**
+   If target budget is X, it forces value-engineering suggestions instead of drifting.
+4. **Timeline Feasibility Checker**
+   Flags “cannot be done by Friday unless you add 2 workers / outsource”.
+5. **Reuse / Inventory Optimizer**
+   Suggests reusing existing studio assets; ties into materialCatalog / past purchases.
+6. **Vendor Quote Comparator**
+   If you have 2–3 supplier quotes, summarize best choice + tradeoffs.
+7. **Post-Project Learning Ingest**
+   After completion: “actual vs planned” → updates price memory + future estimates.
+
+---
+
+If you want, I can turn this into:
+
+* a **concrete “skills registry” naming convention** (IDs, schemas, inputs/outputs),
+* the **exact UI state machine** (what buttons show when),
+* and the **single orchestrator contract** (`runStudioTurn`) that your frontend calls.

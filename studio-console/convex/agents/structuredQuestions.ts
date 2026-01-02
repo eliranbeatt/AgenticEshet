@@ -13,6 +13,7 @@ import {
     summarizeKnowledgeDocs,
     summarizeElementSnapshots,
 } from "../lib/contextSummary";
+import { buildBrainContext } from "../lib/brainContext";
 
 
 export const run = action({
@@ -24,6 +25,8 @@ export const run = action({
         stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
 
         sessionId: v.id("structuredQuestionSessions"),
+
+        conversationId: v.optional(v.id("projectConversations")),
 
         runId: v.optional(v.id("agentRuns")),
 
@@ -77,7 +80,7 @@ export const run = action({
                 queryText: project?.name ?? "",
             });
 
-        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+        const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
             projectId: args.projectId,
         });
 
@@ -109,9 +112,7 @@ export const run = action({
         const systemPrompt = buildSystemPrompt(args.stage, project);
         const userPrompt = buildUserPrompt(turns, {
             elementSnapshotsSummary,
-            currentKnowledge: currentKnowledge
-                ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
-                : "(none)",
+            currentKnowledge: brain ? buildBrainContext(brain) : "(none)",
             factsSummary: factsContext.bullets,
             knowledgeBlocksSummary: summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
             knowledgeDocsSummary: summarizeKnowledgeDocs(knowledgeDocs ?? []),
@@ -143,6 +144,7 @@ export const run = action({
             await ctx.runMutation(internal.structuredQuestions.internal_createTurn, {
                 projectId: args.projectId,
                 stage: args.stage,
+                conversationId: args.conversationId,
                 sessionId: args.sessionId,
                 turnNumber: nextTurnNumber,
                 questions: normalized.questions,
@@ -509,7 +511,7 @@ function buildUserPrompt(turns: any[], context: {
             "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
             context.elementSnapshotsSummary,
             "",
-            "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
+            "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
             context.currentKnowledge,
             "",
             "KNOWN FACTS (accepted):",
@@ -553,7 +555,7 @@ User Instructions: ${t.userInstructions || "None"}`;
         "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
         context.elementSnapshotsSummary,
         "",
-        "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
+        "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
         context.currentKnowledge,
         "",
         "KNOWN FACTS (accepted):",

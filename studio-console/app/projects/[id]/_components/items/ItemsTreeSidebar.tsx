@@ -18,7 +18,7 @@ const DEFAULT_ITEMS = [
 ];
 
 export function ItemsTreeSidebar() {
-    const { projectId, selectedItemId, setSelectedItemId, tabScope, showDraftItems, setShowDraftItems } =
+    const { projectId, selectedItemId, setSelectedItemId, setSelectedItemMode, tabScope, showDraftItems, setShowDraftItems } =
         useItemsContext();
 
     const sidebarData = useQuery(api.items.listTreeSidebar, {
@@ -56,6 +56,7 @@ export function ItemsTreeSidebar() {
         if (selectedItemId && items.some((item) => item._id === selectedItemId)) return;
         const rootItems = childrenByParent.get(null) ?? [];
         if (rootItems.length > 0) {
+            setSelectedItemMode("approved");
             setSelectedItemId(rootItems[0]._id);
         } else {
             setSelectedItemId(null);
@@ -134,7 +135,10 @@ export function ItemsTreeSidebar() {
                             <div
                                 className={`flex items-start gap-2 px-2 py-2 rounded cursor-pointer hover:bg-gray-50 ${isSelected ? "bg-blue-50" : ""}`}
                                 style={{ paddingLeft: `${depth * 16 + 8}px` }}
-                                onClick={() => setSelectedItemId(item._id)}
+                                onClick={() => {
+                                    setSelectedItemMode("approved");
+                                    setSelectedItemId(item._id);
+                                }}
                             >
                                 <button
                                     type="button"

@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalQuery } from "./_generated/server";
 import { api } from "./_generated/api";
+import { buildElementDigest } from "./lib/elementDigest";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isValidBucketKey, isValidFieldPath } from "./lib/elementRegistry";
 
@@ -82,7 +83,9 @@ export const getActiveSnapshotsByItemIds = internalQuery({
             itemId: Id<"projectItems">;
             title: string;
             typeKey: string;
+            versionId?: Id<"elementVersions">;
             snapshot: unknown | null;
+            digestText?: string;
         }> = [];
 
         for (const itemId of args.itemIds) {
@@ -90,11 +93,14 @@ export const getActiveSnapshotsByItemIds = internalQuery({
             if (!item) continue;
             const versionId = item.activeVersionId ?? item.publishedVersionId;
             const version = versionId ? await ctx.db.get(versionId) : null;
+            const digestText = version?.snapshot ? buildElementDigest(version.snapshot as any) : undefined;
             results.push({
                 itemId,
                 title: item.title,
                 typeKey: item.typeKey,
+                versionId: versionId ?? undefined,
                 snapshot: version?.snapshot ?? null,
+                digestText,
             });
         }
 

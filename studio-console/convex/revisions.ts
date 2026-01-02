@@ -4,7 +4,8 @@ import { ElementPatchOpsSchema } from "./lib/zodSchemas";
 import type { Id } from "./_generated/dataModel";
 
 import { applyPatchOps, normalizeSnapshot } from "./lib/elementSnapshots";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { buildElementDigest } from "./lib/elementDigest";
 
 const originTabSchema = v.union(
   v.literal("Ideation"),
@@ -299,6 +300,19 @@ export const approve = mutation({
         elementStatus: "active", // Activate if it was suggested
         updatedAt: now,
       });
+
+      try {
+        const digestText = buildElementDigest(newSnapshot as any);
+        if (digestText) {
+          await ctx.runMutation(internal.projectBrain.markNotesCoveredByApproved, {
+            projectId: revision.projectId,
+            elementId: element._id,
+            digestText,
+          });
+        }
+      } catch (error) {
+        console.warn("Failed to mark notes covered by approved digest", error);
+      }
     }
 
     // Mark Revision Approved

@@ -17,6 +17,7 @@ import {
     summarizeKnowledgeDocs,
     summarizeElementSnapshots,
 } from "../lib/contextSummary";
+import { buildBrainContext } from "../lib/brainContext";
 
 function parseItemSpec(data: unknown): ItemSpecV2 | null {
     const parsed = ItemSpecV2Schema.safeParse(data);
@@ -128,7 +129,7 @@ export const send = action({
                 queryText: args.userContent,
             });
 
-        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+        const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
             projectId: project._id,
         });
 
@@ -161,10 +162,8 @@ export const send = action({
             "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
             elementSnapshotsSummary,
             "",
-            "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
-            currentKnowledge
-                ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
-                : "(none)",
+            "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
+            brain ? buildBrainContext(brain) : "(none)",
             "",
             "KNOWN FACTS (accepted + high-confidence proposed):",
             factsContext.bullets,
@@ -275,6 +274,23 @@ export const send = action({
                     messageId: assistantMessageId,
                     content: finalContent,
                     status: "final",
+                });
+
+                const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${finalContent}`;
+                const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+                    projectId: project._id,
+                    eventType: "agent_send",
+                    payload: {
+                        threadId: args.threadId,
+                        userMessageId,
+                        assistantMessageId,
+                        transcript: fullTranscript,
+                        source: "clarification_v2",
+                    },
+                });
+                await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+                    projectId: project._id,
+                    brainEventId,
                 });
 
                 let itemUpdate: ItemUpdateOutput | null = null;
@@ -449,6 +465,23 @@ export const send = action({
                 messageId: assistantMessageId,
                 content: finalContent,
                 status: "final",
+            });
+
+            const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${finalContent}`;
+            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+                projectId: project._id,
+                eventType: "agent_send",
+                payload: {
+                    threadId: args.threadId,
+                    userMessageId,
+                    assistantMessageId,
+                    transcript: fullTranscript,
+                    source: "clarification_v2",
+                },
+            });
+            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+                projectId: project._id,
+                brainEventId,
             });
 
             const analysisLine = finalContent

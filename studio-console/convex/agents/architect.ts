@@ -205,6 +205,9 @@ export const createChangeSet = internalMutation({
             status: "pending",
             title: `Architect Task Generation ${new Date().toISOString()}`,
             createdAt: Date.now(),
+            basedOnBulletIds: [],
+            basedOnApprovedSnapshotId: undefined,
+            conflictsReferenced: [],
         });
 
         const tempIdToRef = new Map<string, string>(); // tempId -> tempId (identity for now)

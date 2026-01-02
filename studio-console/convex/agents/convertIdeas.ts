@@ -10,6 +10,7 @@ import {
     sharedContextContract,
 } from "../prompts/itemsPromptPack";
 import { summarizeItems, summarizeKnowledgeBlocks, summarizeElementSnapshots } from "../lib/contextSummary";
+import { buildBrainContext } from "../lib/brainContext";
 
 function normalizeChangeSet(input: any, projectId: string) {
     const base = ChangeSetSchema.parse(input);
@@ -60,7 +61,7 @@ export const createChangeSet = action({
                 queryText: selection.notes ?? project.name,
             });
 
-        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+        const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
             projectId: args.projectId,
         });
 
@@ -97,10 +98,8 @@ export const createChangeSet = action({
             "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
             elementSnapshotsSummary,
             "",
-            "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
-            currentKnowledge
-                ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
-                : "(none)",
+            "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
+            brain ? buildBrainContext(brain) : "(none)",
             "",
             "KNOWN FACTS (accepted + high-confidence proposed):",
             factsContext.bullets,
@@ -123,6 +122,7 @@ export const createChangeSet = action({
             ),
             "",
             "TASK: Convert selected ideas into element ChangeSet (items.create/items.patch only).",
+            "REQUIREMENTS: Fill basedOnBulletIds with Brain bullet IDs you used. Set basedOnApprovedSnapshotId when modifying existing elements. Add conflictsReferenced if applicable.",
         ].join("\n");
 
         try {

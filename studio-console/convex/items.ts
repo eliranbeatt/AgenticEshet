@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, mutation, query, internalQuery } from "./_generated/server";
+import { action, mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { ItemSpecV2Schema, ItemUpdateOutputSchema, type ItemSpecV2, ChangeSetSchema } from "./lib/zodSchemas";
@@ -10,6 +10,22 @@ import {
     buildBaseItemSpec,
     buildSpecFromAccounting
 } from "./lib/itemHelpers";
+import { buildElementDigest } from "./lib/elementDigest";
+
+function buildItemRevisionDigest(spec: ItemSpecV2) {
+    const lines: string[] = [];
+    lines.push("## Summary");
+    lines.push(spec.identity.title);
+    if (spec.identity.description) {
+        lines.push(spec.identity.description);
+    }
+    lines.push("");
+    lines.push(`## Breakdown`);
+    lines.push(`- Materials: ${spec.breakdown.materials.length}`);
+    lines.push(`- Labor: ${spec.breakdown.labor.length}`);
+    lines.push(`- Tasks: ${spec.breakdown.subtasks.length}`);
+    return lines.join("\n").trim();
+}
 
 const tabScopeValidator = v.union(
     v.literal("ideation"),
@@ -72,6 +88,35 @@ export const listApprovedWithSpecs = query({
                 spec = buildBaseItemSpec(item.title, item.typeKey);
             }
             results.push({ item, spec });
+        }
+        return results;
+    },
+});
+
+export const listApprovedElementsWithSnapshots = query({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const items = await ctx.db
+            .query("projectItems")
+            .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", "approved"))
+            .collect();
+
+        items.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+
+        const results = [];
+        for (const item of items) {
+            const versionId = item.activeVersionId ?? item.publishedVersionId;
+            const version = versionId ? await ctx.db.get(versionId) : null;
+            if (version?.snapshot) {
+                results.push({
+                    itemId: item._id,
+                    title: item.title,
+                    typeKey: item.typeKey,
+                    snapshot: version.snapshot,
+                    digestText: buildElementDigest(version.snapshot as any),
+                    notes: item.elementNotesMarkdown,
+                });
+            }
         }
         return results;
     },
@@ -807,7 +852,12 @@ export const approveRevision = mutation({
             await ctx.db.patch(item.approvedRevisionId, { state: "superseded" });
         }
 
-        await ctx.db.patch(args.revisionId, { state: "approved" });
+        await ctx.db.patch(args.revisionId, {
+            state: "approved",
+            approvedAt: now,
+            approvedBy: "user",
+            digestText: buildItemRevisionDigest(spec),
+        });
         await ctx.db.patch(args.itemId, {
             approvedRevisionId: args.revisionId,
             status: "approved",
@@ -984,6 +1034,9 @@ export const syncFromAccountingSection = mutation({
             summaryMarkdown: "Synced from accounting section.",
             createdBy: { kind: "user" },
             createdAt: now,
+            approvedAt: now,
+            approvedBy: "user",
+            digestText: buildItemRevisionDigest(spec),
         });
 
         await ctx.db.patch(item._id, {
@@ -1007,6 +1060,26 @@ export const syncFromAccountingSection = mutation({
         });
 
         return { revisionId };
+    },
+});
+
+export const appendToNotes = internalMutation({
+    args: {
+        itemId: v.id("projectItems"),
+        contentMarkdown: v.string(),
+    },
+    handler: async (ctx, args) => {
+        const item = await ctx.db.get(args.itemId);
+        if (!item) throw new Error("Item not found");
+
+        const currentNotes = item.elementNotesMarkdown ?? "";
+        // Simple append with double newline for separation
+        const newNotes = currentNotes ? `${currentNotes}\n\n${args.contentMarkdown}` : args.contentMarkdown;
+
+        await ctx.db.patch(args.itemId, {
+            elementNotesMarkdown: newNotes,
+            updatedAt: Date.now(),
+        });
     },
 });
 
@@ -1107,6 +1180,9 @@ export const applySpec = mutation({
             summaryMarkdown: "Applied from Agentic Flow",
             createdBy: { kind: "user" },
             createdAt: now,
+            approvedAt: now,
+            approvedBy: "user",
+            digestText: buildItemRevisionDigest(spec),
         });
 
         await ctx.db.patch(itemId, {

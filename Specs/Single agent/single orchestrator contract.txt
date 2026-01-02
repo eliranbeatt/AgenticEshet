@@ -1,0 +1,234 @@
+Below is a **dev-ready single orchestrator contract** that your **Studio tab frontend calls for every user turn**—whether it’s Ideation / Planning / Solutioning / Critique / Change Request—while keeping the separation of **Structured Questions vs Free Chat** and returning **safe “proposed changes” (ChangeSet)** for approval.
+
+This contract fits your current architecture: **Next.js App Router + Convex actions + skills table + conversations + agentRuns**. 
+
+---
+
+## 0) Where this lives (recommended)
+
+* **Convex action**: `studio.runStudioTurn`
+* **UI page**: `/projects/[id]/studio` (new unified tab)
+* It replaces the need for calling separate actions like `agents.clarification.run`, `agents.planning.run`, `agents.solutioning.chat`, etc. by routing internally. 
+
+---
+
+## 1) `runStudioTurn` — TypeScript contract (frontend ↔ backend)
+
+### Input (what the frontend sends)
+
+```ts
+export type StudioStage =
+  | "auto"
+  | "ideation"
+  | "planning"
+  | "solutioning"
+  | "critique"
+  | "change_request";
+
+export type StudioChannel =
+  | "auto"
+  | "free_chat"
+  | "structured_questions"
+  | "propose_changes"; // returns ChangeSet for approval
+
+export type StudioFocus =
+  | { kind: "project" }
+  | { kind: "element"; elementIds: string[] }
+  | { kind: "section"; sectionId: string }
+  | { kind: "task"; taskIds: string[] };
+
+export type RunStudioTurnInput = {
+  // identity + idempotency
+  projectId: string;
+  idempotencyKey: string; // frontend-generated (uuid). Prevents double-submit.
+
+  // user turn
+  userMessage: string;
+
+  // user UI intent controls
+  stage: StudioStage;        // "auto" default
+  channel: StudioChannel;    // "auto" default
+  focus?: StudioFocus;       // what the user is “talking about” in the UI
+
+  // optional manual overrides (power user)
+  forcedSkillId?: string;    // if user explicitly picked a skill from dropdown
+  modelOverride?: string;    // e.g. "gpt-5-mini" (optional)
+
+  // what the UI currently knows (helps routing + diff generation)
+  uiContext?: {
+    activePlanId?: string;
+    selectedElementIds?: string[];
+    openPanel?: "elements" | "tasks" | "accounting" | "risks" | "changes" | "questions";
+    lastAppliedVersionId?: string; // concurrency hint
+  };
+
+  // how risky can the agent be?
+  changePolicy?: {
+    mode: "answer_only" | "propose_only" | "mixed"; // default "mixed"
+    allowDestructive?: boolean; // default false (tombstone, no hard deletes)
+  };
+
+  // language policy
+  locale?: "he" | "en"; // default "he"
+};
+```
+
+### Output (what the backend returns)
+
+```ts
+export type StudioRoutingDecision = {
+  inferredStage: Exclude<StudioStage, "auto">;
+  inferredChannel: Exclude<StudioChannel, "auto">;
+  chosenSkillId: string;
+  confidence: number; // 0..1
+  reasons: string[];  // short
+};
+
+export type StructuredQuestion = {
+  id: string;
+  group: "brief" | "design" | "constraints" | "measurements" | "budget" | "timeline" | "logistics" | "safety";
+  question: string;
+  answerType: "text" | "choice" | "multi_choice" | "number" | "date" | "yes_no";
+  choices?: string[];
+  required?: boolean;
+  mapsTo?: { entity: "project" | "element"; fieldPath: string }; // Fact→field mapping
+};
+
+export type StructuredQuestionsPayload = {
+  sessionId: string;       // stable per stage/session
+  stage: Exclude<StudioStage, "auto">;
+  questions: StructuredQuestion[];
+  missingCritical: string[]; // short hints
+};
+
+export type FactAtom = {
+  id: string;
+  text: string;            // atomic fact (Hebrew preferred)
+  scope: "project" | "element";
+  elementId?: string;
+  confidence: number;      // 0..1
+  status: "proposed" | "accepted";
+  source: { type: "user_message"; messageId: string };
+};
+
+export type PatchOp = {
+  // JSON-Patch-ish with strong typing
+  op: "add" | "replace" | "remove" | "move" | "copy";
+  entity: "element" | "task" | "section" | "materialLine" | "workLine" | "quote" | "plan" | "knowledge";
+  id: string;
+  path: string;            // e.g. "/title" or "/fields/heightCm"
+  value?: unknown;
+  from?: string;
+  // safety
+  destructive?: boolean;   // true for remove/overwrites
+  tombstone?: boolean;     // when destructive: mark as tombstoned, not deleted
+};
+
+export type ChangeSet = {
+  id: string;
+  createdAt: number;
+  stage: Exclude<StudioStage, "auto">;
+  summary: string;         // shown in “Pending Changes”
+  patchOps: PatchOp[];
+  warnings: string[];
+  requiresApproval: true;  // always true (your requirement)
+  derivedVersionTag: {
+    tab: "Studio";
+    subTag: "Ideation" | "Planning" | "Solutioning" | "Critique" | "ChangeRequest";
+    shortSummary: string;
+  };
+};
+
+export type StudioTurnOutput = {
+  // persistence pointers
+  agentRunId: string;
+  conversationMessageIds: { userId: string; assistantId: string };
+
+  // router result
+  routing: StudioRoutingDecision;
+
+  // assistant response (always present)
+  assistantMessage: {
+    text: string;
+    markdown?: string;
+    uiHints?: {
+      suggestOpenPanel?: "questions" | "changes" | "elements" | "tasks" | "accounting" | "risks";
+      suggestNextAction?: "answer_questions" | "apply_changes" | "generate_elements" | "generate_tasks" | "reprice";
+    };
+  };
+
+  // optional payloads (based on channel)
+  structuredQuestions?: StructuredQuestionsPayload; // for "structured_questions"
+  proposedFacts?: FactAtom[];                       // extracted from this turn
+  proposedChangeSet?: ChangeSet;                   // for "propose_changes" or "mixed"
+
+  // critique/risk mode helpers
+  risks?: Array<{ severity: "low"|"med"|"high"; title: string; mitigation: string }>;
+  blockers?: string[];
+
+  // hard guardrails
+  errors?: Array<{ code: string; message: string; retryable: boolean }>;
+};
+```
+
+---
+
+## 2) Behavioral guarantees (non-negotiable rules)
+
+These are what make this contract “stable” for your UI:
+
+1. **Always returns an assistant message** (even if also returning questions/changes).
+2. **Never applies destructive changes automatically**
+
+   * `proposedChangeSet.requiresApproval === true`
+   * Destructive ops must be `tombstone:true` unless user explicitly approves hard delete later.
+3. **Exactly one chosen skill per turn** (router decides; optional forcedSkillId bypasses).
+4. **Idempotent** by `idempotencyKey` (same input returns same run result).
+5. **All skill outputs are schema-validated** before returning to UI (no freestyle).
+
+This aligns with your existing “agents + skills + agentRuns + conversations” setup. 
+
+---
+
+## 3) Frontend usage (single call per user send)
+
+```ts
+const runStudioTurn = useAction(api.studio.runStudioTurn);
+
+async function onSend(message: string) {
+  const res = await runStudioTurn({
+    projectId,
+    idempotencyKey: crypto.randomUUID(),
+    userMessage: message,
+    stage: ui.stagePinned ? ui.stage : "auto",
+    channel: ui.channelPinned ? ui.channel : "auto",
+    focus: ui.focus,
+    uiContext: {
+      activePlanId: ui.activePlanId,
+      selectedElementIds: ui.selectedElementIds,
+      openPanel: ui.openPanel,
+      lastAppliedVersionId: ui.lastAppliedVersionId,
+    },
+    changePolicy: { mode: "mixed", allowDestructive: false },
+    locale: "he",
+  });
+
+  // Render:
+  // 1) res.assistantMessage.text in chat
+  // 2) if res.structuredQuestions → show Questions panel
+  // 3) if res.proposedChangeSet → show Pending Changes panel
+}
+```
+
+---
+
+## 4) Companion endpoints (you’ll need, but NOT called for every turn)
+
+To keep `runStudioTurn` pure + safe, approvals should be separate:
+
+* `studio.applyChangeSet({ projectId, changeSetId, approval: "approve" | "reject" })`
+* `studio.answerStructuredQuestions({ sessionId, answers[] })` *(optional; or answers go through runStudioTurn as userMessage)*
+
+This matches how your app already separates “generate” actions from “CRUD writes” across domains. 
+
+

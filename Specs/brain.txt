@@ -1,0 +1,432 @@
+Got it — your clarifications tighten the system a lot. Here’s the **updated full implementation dev plan** with your rules:
+
+* **Structured (not freeform) Brain UI**
+* Trigger only on **submit/send/upload**, not keystrokes
+* Insert into correct sections **+** append a “Recent updates” line
+* If unsure, store in **Project** until mapped to an element
+* Send **full Brain** to agents — but Brain itself is a **digest** (not full convo)
+* Conflicts are **marked**, user decides what to delete
+* **Approved Elements are the Source of Truth**: once an element is approved, its approved data **replaces** the Brain content for that element section
+
+---
+
+# 0) Core invariants (non-negotiable rules)
+
+## Invariant A — Brain is a digest, not a transcript
+
+Brain is always compact:
+
+* bullets / structured fields
+* short summaries
+* no full chat history, no raw doc text
+
+## Invariant B — Approved Element Snapshot overrides Brain
+
+For each element:
+
+* The **Approved Element Snapshot** is canonical truth
+* The Brain’s “Approved” section for that element is **derived** from the approved snapshot
+* The updater agent **cannot edit** that approved section
+
+## Invariant C — Brain is a “working memory + intake channel”
+
+Brain exists to:
+
+* summarize new info
+* keep project-level context
+* keep element “notes/proposals” that have not been approved yet
+* ground agents and drive ChangeSets
+
+## Invariant D — Conflicts are never auto-resolved
+
+If conflicting facts appear:
+
+* do not overwrite
+* mark conflict
+* user chooses what to tombstone / keep
+
+---
+
+# 1) Data model (designed for “Approved wins”)
+
+## 1.1 `ProjectBrain` (one per project)
+
+Stores **only what is NOT already truth elsewhere**, plus structure for rendering.
+
+```ts
+type ProjectBrain = {
+  projectId: string;
+  version: number;
+  updatedAt: number;
+
+  // Project-level digest (canonical here)
+  project: {
+    overview: Bullet[];
+    preferences: Bullet[];
+    constraints: Bullet[];
+    timeline: Bullet[];
+    stakeholders: Bullet[];
+  };
+
+  // Element-level working layer (NOT the approved truth)
+  elementNotes: Record<ElementId, {
+    notes: Bullet[];          // proposed / unmapped-to-fields / extra context
+    conflicts: Conflict[];    // conflicts involving this element
+  }>;
+
+  // Facts not mapped to an element yet (or not sure)
+  unmapped: Bullet[];
+
+  recentUpdates: UpdateLine[];
+};
+```
+
+### Key point
+
+There is **no “approved element content” stored inside ProjectBrain** (optional, but recommended).
+Instead: render it from the element’s **Approved ElementSnapshot** (source of truth).
+
+## 1.2 `ElementSnapshot` (already your plan)
+
+This remains canonical. When approved, it becomes truth.
+
+Add (if not already):
+
+* `approvedRevisionId` / `approvedAt`
+* `approvedBy`
+* `digestText` (optional cached digest for fast rendering/context)
+
+## 1.3 `BrainEvents` (append-only)
+
+Every trigger creates one event row.
+
+```ts
+type BrainEvent = {
+  eventId: string;
+  projectId: string;
+  eventType: "structured_submit"|"agent_send"|"file_ingested"|"manual_add"|"manual_structured_edit";
+  payload: any;
+  brainVersionAtStart: number;
+  status: "queued"|"applied"|"needs_review"|"rejected"|"conflict_retry";
+  patchOps?: BrainPatchOp[];
+  createdAt: number;
+  appliedAt?: number;
+  error?: string;
+};
+```
+
+## 1.4 Bullet + conflict primitives
+
+```ts
+type Bullet = {
+  id: string;
+  text: string;                  // Hebrew, allow embedded English tokens
+  tags?: string[];
+  status: "accepted"|"proposed"|"tombstoned";
+  confidence: "high"|"medium"|"low";
+  source: { eventId: string; type: string; ref?: string };
+  locked?: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type Conflict = {
+  id: string;
+  scope: "project"|"element";
+  elementId?: string;
+  bulletAId: string;
+  bulletBId: string;
+  reason: string;               // e.g. "budget mismatch", "dimension mismatch"
+  createdAt: number;
+  resolved?: { byUserId: string; tombstonedBulletId: string; at: number };
+};
+```
+
+---
+
+# 2) Rendering (what the “single box” shows)
+
+Even if UI is “structured”, it can still *look* like one continuous panel.
+
+## Sections
+
+1. Project Overview
+2. Preferences
+3. Constraints
+4. Timeline / Stakeholders
+5. Elements (repeat per element):
+
+   * **Approved (read-only)** ← derived from Approved ElementSnapshot
+   * **Notes / Proposed (editable structured bullets)** ← from `ProjectBrain.elementNotes[elementId]`
+   * **Conflicts**
+6. Unmapped (Project-level holding area)
+7. Recent Updates (append-only lines)
+
+### What “Approved element replaces Brain section” means in practice
+
+* The element’s “Approved” display is **always rebuilt from ElementSnapshot**.
+* The moment an element is approved, the Brain does not show older “truth bullets” there anymore.
+* Any older notes remain as Notes/Proposed (or optionally archived).
+
+---
+
+# 3) UI design (structured, not freeform)
+
+## 3.1 “One box” but structured nodes
+
+Each bullet is a row/node:
+
+* editable text
+* tags
+* status badge: accepted/proposed/conflict/tombstoned
+* lock toggle
+* move-to (Project ↔ Unmapped ↔ ElementNotes)
+* map-to-element action for unmapped bullets
+
+## 3.2 Editing rules
+
+* Editing a bullet edits that bullet only (no markdown parsing).
+* Users can reorder bullets within a section.
+* Users cannot edit “Approved” element digest in this UI (because approved snapshot is truth).
+
+  * If user wants to change truth: they create a **ChangeSet** and approve a new snapshot.
+
+---
+
+# 4) Trigger policy (exactly what you asked)
+
+Create BrainEvent and run updater only on:
+
+1. **Structured questions submit** (multiple at once)
+2. **User sends message to an AI agent** (one message)
+3. **File upload ingestion completes** (after extraction/summarization)
+4. **Manual add info** button submit
+5. **Manual structured edit** (optional: usually no need to run LLM; just save edit)
+
+No keystrokes, no streaming.
+
+---
+
+# 5) Updater agent (gpt-5-mini) responsibilities
+
+## Inputs
+
+* Current `ProjectBrain` (project + elementNotes + unmapped + conflicts)
+* List of elements: `{elementId, elementName, aliases}`
+* Event payload (structured answers / agent message / ingestion facts)
+
+## Outputs (strict PatchOps)
+
+The updater may:
+
+* add bullets to project sections
+* add bullets to `unmapped`
+* add bullets to `elementNotes[elementId].notes` **only**
+* create `Conflict` records when contradictions detected
+* add one `RecentUpdates` line
+
+**Hard disallow:**
+
+* editing Approved element digest
+* writing directly into ElementSnapshot
+
+## Mapping policy (your point #4)
+
+If uncertain element mapping:
+
+* default to **Project section** (or Unmapped)
+* add `confidence=low/medium`
+* optionally suggest candidates in metadata for UI “quick map”
+
+## Conflict policy (your point #7)
+
+If detects conflicting facts:
+
+* keep both
+* create `Conflict` record
+* mark both bullets with tag `conflict:<id>`
+* do not tombstone anything automatically
+
+---
+
+# 6) Patch engine + concurrency
+
+## 6.1 Apply PatchOps deterministically
+
+* server assigns bullet IDs, timestamps
+* verifies:
+
+  * op paths exist
+  * cannot edit locked bullets
+  * cannot target approved area
+* if invalid → event `rejected`
+
+## 6.2 Version conflicts
+
+If brain version changed between agent run and apply:
+
+* mark `conflict_retry`
+* rerun updater with latest brain + same event payload
+* apply again
+
+---
+
+# 7) Approved Elements override flow (the key new requirement)
+
+## 7.1 On element approval: `elementApproved(elementId, snapshotId)`
+
+Server action:
+
+1. Set snapshot as approved (your versioning system)
+
+2. Generate or refresh an **ElementDigest**
+
+   * Option A (fast + consistent): deterministic digest from known fields (preferred)
+   * Option B (nicer text): run `gpt-5-mini` once to summarize approved snapshot into bullets
+
+3. Update UI rendering source:
+
+   * “Approved” section now shows the approved digest
+   * ElementNotes remain separate
+
+## 7.2 What happens to existing Brain notes when approving?
+
+You have two good options (pick one as default):
+
+### Option 1 (recommended): Keep notes, but mark stale
+
+When element is approved:
+
+* any note bullet that is now “covered” by approved snapshot gets tag `covered_by_approved`
+* not deleted, not moved, just visually deemphasized
+
+### Option 2: Auto-archive notes into history
+
+Move matching notes to an `elementNotesArchive` with reference to snapshotId.
+
+Either way: **do not destroy information**.
+
+---
+
+# 8) “Send full Brain to any agent” (but Brain is digest)
+
+Your context pack for downstream agents becomes:
+
+1. **ProjectBrain (full)**: project sections + unmapped + elementNotes + conflicts
+2. **ApprovedElementDigests**: for any referenced element(s), include the approved digest
+3. (Optional) RAG retrieval chunks only when needed
+
+Because the Brain is already compact, you can send it in full as you want.
+
+---
+
+# 9) How Brain drives element ChangeSets (grounded changes)
+
+When any agent proposes changes to an element:
+
+* it must cite which bullets it relied on:
+
+  * from ProjectBrain (notes / constraints / preferences)
+  * and from ApprovedElementDigest (truth)
+* output ChangeSet includes:
+
+  * `basedOnBulletIds[]`
+  * `basedOnApprovedSnapshotId`
+  * `assumptions[]`
+  * `conflictsReferenced[]`
+
+Then your validator can enforce:
+
+* no element truth changes without referencing approved snapshot
+* no “made up” materials/labor without grounding
+
+---
+
+# 10) Suggested tickets (Jira-style epics)
+
+## EPIC A — Brain storage + events
+
+* A1 Create `ProjectBrain` schema + CRUD + versioning
+* A2 Create `BrainEvents` append-only log
+* A3 Patch engine with validation + locking + conflict retry
+
+## EPIC B — Structured Brain UI
+
+* B1 One-panel structured editor (sections + bullets)
+* B2 Bullet controls: lock, tombstone, move, tag
+* B3 Unmapped mapping flow (assign to element)
+* B4 Conflicts view + resolution UI (tombstone one side)
+
+## EPIC C — Updater agent
+
+* C1 Updater prompt + strict JSON output schema
+* C2 Event trigger wiring for:
+
+  * structured submit
+  * agent send
+  * ingestion complete
+  * manual add
+* C3 Debounce/batch rules (only per “send/submit” anyway)
+
+## EPIC D — Approved element digest + override
+
+* D1 Add `approvedSnapshot` fields if missing
+* D2 Implement `ElementDigest` generator (deterministic first)
+* D3 Render “Approved element section” from digest
+* D4 On approval: refresh digest + tag/cover notes
+
+## EPIC E — Agent context injection + grounding
+
+* E1 Context pack builder that includes full Brain + approved digests
+* E2 ChangeSet schema requires citations
+* E3 Validator enforces grounding + no edits to truth without approved base
+
+---
+
+# 11) Issues / ambiguities I see (and fixes)
+
+## Issue 1 — “Project section” vs “Unmapped” duplication
+
+You said “could be in overall project section until mapped.”
+That’s fine, but define a rule to avoid chaos:
+
+**Recommendation:**
+Use **Unmapped** as the holding pen, and allow “Project section” only for clearly project-level facts.
+If the agent is unsure whether it’s element-related → Unmapped (not Overview).
+
+## Issue 2 — How to digest approved element data
+
+If you rely on `gpt-5-mini` to create approved digests, you may get non-deterministic wording.
+
+**Recommendation:**
+Start with **deterministic digest** from snapshot fields (materials/labor/tasks/budget/dimensions).
+Optionally add one LLM “nice summary” line, but keep bullets derived from fields.
+
+## Issue 3 — Conflict detection quality
+
+LLM-based conflict detection can be noisy.
+
+**Recommendation:**
+Implement a cheap deterministic layer first for numeric conflicts:
+
+* budgets, dimensions, dates
+  Then let the updater agent flag semantic conflicts (style, intent) as “soft conflicts”.
+
+## Issue 4 — Notes vs Truth confusion in UI
+
+Users must always see what’s “truth” vs “proposed”.
+
+**Recommendation:**
+Hard visual separation:
+
+* Approved = read-only, “truth”
+* Notes = editable, “proposed”
+* Conflicts = explicit resolution actions
+
+---
+
+If you want, I’ll produce next (copy/paste-ready):
+
+1. the **exact JSON Schema** for the updater output
+2. the **updater agent prompt** (Hebrew, with examples + “do not touch approved” rules)
+3. the **ElementDigest deterministic builder spec** (field → bullet mapping)

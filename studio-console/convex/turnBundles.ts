@@ -21,12 +21,12 @@ function formatBundleText(args: {
   lines.push(`bundleId=${args.bundleId}`);
   lines.push(`stage=${args.stage}`);
   lines.push(`scope=${args.scope.type}`);
-  
+
   const itemRefsStr = args.itemRefs
     .map((r) => `{id:"${r.id}",name:"${r.name}"}`)
     .join(", ");
   lines.push(`itemRefs=[${itemRefsStr}]`);
-  
+
   const selectedIdsStr = args.scope.itemIds
     ? `["${args.scope.itemIds.join('","')}"]`
     : "[]";
@@ -77,11 +77,6 @@ function formatBundleText(args: {
   return lines.join("\n");
 }
 
-function resolveKnowledgeSource(sourceType: string) {
-  if (sourceType === "generation") return "agent_summary" as const;
-  return "user_chat" as const;
-}
-
 async function sha256(text: string): Promise<string> {
   const msgBuffer = new TextEncoder().encode(text);
   const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
@@ -102,7 +97,7 @@ export const createFromTurn = internalMutation({
       sourceIds: v.array(v.string()),
     }),
     itemRefs: v.array(v.object({ id: v.string(), name: v.string() })),
-    
+
     // Content
     structuredQuestions: v.optional(v.array(v.object({ id: v.string(), text: v.string() }))),
     userAnswers: v.optional(v.array(v.object({ qId: v.string(), quick: v.string(), text: v.optional(v.string()) }))),
@@ -118,9 +113,9 @@ export const createFromTurn = internalMutation({
     // We can insert with empty text, get ID, then update text?
     // Or use a UUID? Convex IDs are special.
     // Let's insert with a placeholder text first, then update.
-    
+
     const timestamp = Date.now();
-    
+
     const bundleId = await ctx.db.insert("turnBundles", {
       projectId: args.projectId,
       stage: args.stage,
@@ -153,29 +148,21 @@ export const createFromTurn = internalMutation({
       bundleHash,
     });
 
-    // 5. Trigger Parse (Phase 3)
-    console.log("Scheduling parseTurnBundle for bundle", bundleId);
-    const project = await ctx.runQuery(api.projects.getProject, { projectId: args.projectId });
-    if (project?.features?.factsEnabled === false) {
-      const logText = (args.freeChat ?? "").trim() || (args.agentOutput ?? "").trim() || bundleText;
-      if (logText.trim()) {
-        await ctx.runMutation(api.projectKnowledge.appendLog, {
-          projectId: args.projectId,
-          text: logText,
-          source: resolveKnowledgeSource(args.source.type),
-        });
-      }
-      return bundleId;
-    }
+    // 5. (Legacy knowledge updater removed)
 
+    /* 
+    // LEGACY FACTS PIPELINE (DISABLED)
     if (project?.features?.factsV2 !== false) {
       await ctx.scheduler.runAfter(0, internal.factsV2.extractTurnBundle, { turnBundleId: bundleId });
     } else {
       await ctx.scheduler.runAfter(0, internal.facts.parseTurnBundle, { turnBundleId: bundleId });
     }
     
+    // LEGACY KNOWLEDGE AGGREGATOR (REMOVED)
+    */
+
     return bundleId;
-    },
+  },
 });
 
 export const listByProject = query({

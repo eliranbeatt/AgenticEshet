@@ -704,6 +704,9 @@ export const ChangeSetSchema = z.object({
     assumptions: z.array(z.string()),
     openQuestions: z.array(z.string()),
     warnings: z.array(z.string()),
+    basedOnBulletIds: z.array(z.string()).default([]),
+    basedOnApprovedSnapshotId: z.string().optional(),
+    conflictsReferenced: z.array(z.string()).default([]),
     items: z.object({
         create: z.array(ItemCreateSchema),
         patch: z.array(ItemPatchSchema),
@@ -1094,3 +1097,37 @@ export const AgentSuggestionOutputSchema = z.object({
 });
 
 export type AgentSuggestionOutput = z.infer<typeof AgentSuggestionOutputSchema>;
+
+export const BrainBulletInputSchema = z.object({
+    text: z.string(),
+    tags: z.optional(z.array(z.string())),
+    status: z.optional(z.enum(["accepted", "proposed", "tombstoned"])),
+    confidence: z.optional(z.enum(["high", "medium", "low"])),
+});
+
+export const BrainPatchOpSchema = z.union([
+    z.object({
+        op: z.literal("add_bullet"),
+        target: z.object({
+            scope: z.enum(["project", "element", "unmapped"]),
+            section: z.optional(z.enum(["overview", "preferences", "constraints", "timeline", "stakeholders"])),
+            elementId: z.optional(z.string()),
+        }),
+        bullet: BrainBulletInputSchema,
+    }),
+    z.object({
+        op: z.literal("add_conflict"),
+        conflict: z.any(),
+    }),
+    z.object({
+        op: z.literal("add_recent_update"),
+        text: z.string(),
+    }),
+]);
+
+export const BrainUpdaterOutputSchema = z.object({
+    patchOps: z.array(BrainPatchOpSchema),
+    runSummary: z.string(),
+});
+
+export type BrainUpdaterOutput = z.infer<typeof BrainUpdaterOutputSchema>;

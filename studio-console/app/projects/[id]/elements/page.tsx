@@ -1,6 +1,6 @@
 "use client";
 
-import { ItemsTreeSidebar } from "../_components/items/ItemsTreeSidebar";
+import { ElementsPanel } from "../_components/elements/ElementsPanel";
 import { ElementsInspectorPanel } from "../_components/elements/ElementsInspectorPanel";
 
 export default function ElementsPage() {
@@ -16,7 +16,7 @@ export default function ElementsPage() {
             </div>
 
             <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)] min-h-0">
-                <ItemsTreeSidebar />
+                <ElementsPanel />
                 <ElementsInspectorPanel />
             </div>
         </div>

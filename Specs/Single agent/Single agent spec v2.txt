@@ -1,0 +1,547 @@
+Below is a **full dev plan** that implements *all* the changes you listed, with concrete backend + UI architecture for Convex/Next.js, including: **draft/stacked ChangeSets**, **router bypass**, **two-layer context loading**, **code-first skill registry sync**, **stage gating**, and a clean resolution for **`runStudioTurn` vs companion endpoints**.
+
+I’m aligning this to your current app reality (Next.js App Router + Convex agents + `/admin/skills`).
+
+---
+
+# 0) Target Architecture (after your critique)
+
+## What becomes true
+
+* **One tab**: `/projects/[id]/studio` (single “brain”)
+* **One orchestrator**: `agents.studio.runStudioTurn`
+* **One persistence layer for “in-progress thinking”**: `studioSessions`
+* **ChangeSets are draftable and stackable**: user can keep typing, agent updates the *draft* until Apply/Discard.
+* **Router is not always an LLM call**: only when `free-chat + stage=auto + routing ambiguous`.
+* **Context is loaded in 2 phases**:
+
+  * router gets minimal state
+  * skill gets targeted data (element/task/accounting slices + optional RAG snippets)
+* **Skill registry is code-source-of-truth**, DB holds overrides only.
+
+---
+
+# 1) Data model changes (Conversation State Layer)
+
+## 1.1 Add `studioSessions` table (Convex)
+
+**Goal:** fix Stop-and-Approve blocker + hold questionnaire state + hold draft ChangeSet.
+
+**Schema (high-level)**
+
+* `projectId`
+* `userId` (even if “all users” today—future proof)
+* `ui`:
+
+  * `pinnedStage`: `auto|ideation|planning|solutioning`
+  * `pinnedChannel`: `auto|questions|chat`
+  * `selectedElementIds`: `Id[]`
+* `projectStage` (the “gating stage”): `ideation|planning|solutioning`
+* `questionnaire`:
+
+  * `activeSkillId` (which questions skill produced current form)
+  * `visibleQids[]`, `answered{qid: value}`, `skippedQids[]`
+  * `draftAnswers{qid: value}` (unsaved form state)
+* `draftChangeSet`:
+
+  * `draftId`
+  * `revision` (int)
+  * `proposed` (full ChangeSet object: `patchOps`, `tombstones`, `summary`, `tags`)
+  * `lastUpdatedAt`
+* `lastTurn`:
+
+  * `lastSkillId`
+  * `lastRouting` (light)
+  * `status`: `idle|routing|executing`
+* `createdAt`, `updatedAt`
+
+✅ **Acceptance criteria**
+
+* A project has exactly 0..N sessions (per user).
+* A draft ChangeSet persists across refresh and page navigation.
+* Structured questions can be partially filled without DB commits.
+
+---
+
+# 2) Skill registry refactor (Schema vs DB drift)
+
+## 2.1 “Code is source of truth”
+
+Create `convex/skills/registry.ts` exporting:
+
+* `skillId` (short, unique, includes major): e.g. `planning.build_quote.v1`
+* `stage`, `channel`, `minProjectStage`
+* `inputSchema` (Zod)
+* `outputSchema` (Zod)
+* `contextNeeds` (see §4)
+* `defaultPrompt`
+* `defaultModelConfig`
+* `toolsAllowed`
+
+### Naming (your requested simplification)
+
+**Skill ID format**
+
+```
+<area>.<action>.v<major>
+```
+
+Examples:
+
+* `router.smart.v1`
+* `ideation.initial_questions.v1`
+* `planning.build_quote.v1`
+* `solutioning.decompose_atomic.v1`
+* `critique.plan_critic.v1`
+* `change.handle_customer_change.v1`
+
+## 2.2 DB skill rows become “overrides only”
+
+Keep your existing `skills` table, but treat it as:
+
+* `skillId` (PK)
+* `promptOverride` (editable)
+* `isEnabled`
+* `modelOverride` (optional)
+* `temperatureOverride` (optional)
+* `toolsOverride` (optional allowlist)
+* `notes`
+
+**Locked (NOT editable in Admin UI):**
+
+* `stage`, `channel`, `minProjectStage`
+* schema names / hashes
+* contextNeeds structure
+
+## 2.3 Add a sync script
+
+Add `convex/admin/syncSkills.ts` action (or node script) that:
+
+* reads `skills/registry.ts`
+* upserts DB rows (creating missing)
+* updates `schemaHash`, `defaultPromptHash`, metadata
+* sets `needsSync=false`
+
+Admin UI shows a badge if `needsSync=true` (developer changed code but didn’t sync).
+
+✅ **Acceptance criteria**
+
+* Changing a Zod schema in code cannot “silently break” prod: DB is synced and mismatches are visible.
+* Admin can edit prompts without touching schema/IDs.
+
+---
+
+# 3) Stop-and-Approve Flow Breaker → Draft/Stacked ChangeSets
+
+## 3.1 Draft ChangeSet lifecycle
+
+Instead of “pending ChangeSet blocks the UI”, you now have:
+
+**States**
+
+* `draftChangeSet = null` → normal
+* `draftChangeSet != null` → banner shows “Draft changes pending”
+* user can keep chatting → agent sees the draft and returns an updated draft
+
+**When do we require Apply/Discard?**
+
+* Only when user:
+
+  * clicks Apply/Discard
+  * explicitly says “apply/save/commit”
+  * tries to “finalize quote/version”
+  * tries to leave the project (optional soft prompt)
+
+## 3.2 Replace vs merge semantics (simple + robust)
+
+Implement **replace-by-default**:
+
+* Each skill run that outputs a ChangeSet returns the **entire updated draft** (not a delta).
+* Server stores it as `draftChangeSet.proposed`, bumps `revision`.
+
+Optionally support merge later with `draftHandling: merge|replace`—but you don’t need it to solve the blocker.
+
+## 3.3 “Projected view” for UI
+
+UI needs to preview changes *without* applying to DB.
+Add server helper:
+
+* `studio.getProjectedView(projectId, draftChangeSet)`
+  returns lightweight projections:
+* element list (base + adds/removes)
+* counts (tasks/materialLines/workLines)
+* high-level totals (if pricing changed)
+
+Don’t try to fully materialize 200 tasks in projection; show diffs and affected entities.
+
+✅ **Acceptance criteria**
+
+* User can do: “Add logo wall” → agent proposes draft → user: “make it blue” → agent updates same draft → single Apply at end.
+* No forced DB commit between conversational refinements.
+
+---
+
+# 4) Router Tax (Latency) → Heuristic bypass + conditional smart router
+
+## 4.1 Routing rules (exact)
+
+LLM router is called **only when**:
+
+* `session.ui.pinnedChannel` resolves to **free chat** (chat/auto→chat)
+* AND `session.ui.pinnedStage == "auto"`
+* AND heuristic routing cannot confidently decide
+
+Everything else is deterministic.
+
+## 4.2 Heuristic router (cheap)
+
+Implement `routeHeuristically()` in code:
+
+* If channel is `questions` → route to questions skill for current stage
+* If message begins with commands:
+
+  * `/task …` → tasks skill
+  * `/element …` → element update
+  * `/price …` → pricing (stage-gated)
+* Keyword patterns:
+
+  * “רעיון/קונספט/השראה” → ideation ideas
+  * “משימות/שלבים/לו״ז” → planning build_quote
+  * “איך בונים/חומרים/חיבורים/פרופיל” → solutioning decompose_atomic
+  * “להוזיל/זול יותר/להחליף חומר” → change handler
+
+## 4.3 Smart router model
+
+Use a small/fast model for router (or even a “cheap” OpenAI model) with **tiny context** (see §5).
+
+✅ **Acceptance criteria**
+
+* Structured questions mode never calls LLM router.
+* Pinned stage mode never calls LLM router (unless you explicitly want “within-stage LLM routing”—not needed initially).
+* “Hello / small tweaks” respond fast.
+
+---
+
+# 5) Context Window Trap → Two-stage context loading
+
+## 5.1 Separate Router Context vs Skill Context
+
+### Router context (minimal)
+
+* `projectId`, `projectStage`, `pinnedStage/channel`
+* counts: `elementsCount`, `tasksCount`
+* flags: `hasDraftChangeSet`, `hasQuote`, `hasPlan`
+* selected ids: `selectedElementIds`
+* last skill id
+
+That’s it. No giant summaries.
+
+### Skill context (targeted)
+
+Once you know `skillId`, you load only what the skill needs.
+
+## 5.2 Add `contextNeeds` to each skill (in code registry)
+
+Example:
+
+```ts
+contextNeeds: {
+  project: true,
+  elements: { mode: "selectedOrSearch", limit: 5 },
+  tasks: { mode: "byElements", limit: 120 },
+  accounting: { includeTotals: true, includeLines: "byElements" },
+  knowledge: { ragQuery: "auto", limit: 8 }
+}
+```
+
+## 5.3 Entity targeting
+
+When no element is selected:
+
+* skill can ask resolver to find relevant elements (cheap heuristic or LLM extraction)
+* then load only those element records + their related tasks/lines
+
+## 5.4 Optional RAG slice
+
+Only invoke `knowledge.dynamicSearch` if:
+
+* skill declares `knowledge.ragQuery != "none"`
+* and message implies doc-based reasoning (“לפי הקובץ”, “מה שהיה בפרויקט דלתא…”)
+
+✅ **Acceptance criteria**
+
+* Solutioning on huge projects doesn’t send “200 tasks/50 elements” into the model.
+* Skill gets the exact element/task slice it needs to avoid ID hallucinations.
+
+---
+
+# 6) Auto stage inference → Stage gating (minProjectStage)
+
+## 6.1 Add `projectStage` (persisted)
+
+Add `projects.stage` (or keep in session + also mirror in project).
+You want it **project-level**, because it’s a workflow milestone.
+
+Stages:
+
+* `ideation` → early, ROM cost answers only
+* `planning` → quote-ready
+* `solutioning` → atomic execution plan
+
+## 6.2 Skill registry adds `minProjectStage`
+
+Examples:
+
+* `ideation.rom_budget.v1` → min: ideation
+* `planning.build_quote.v1` → min: planning
+* `solutioning.decompose_atomic.v1` → min: solutioning
+* `change.handle_customer_change.v1` → min: ideation (allowed always)
+
+## 6.3 Router respects gating
+
+Even if the message sounds like “pricing”, in `ideation` it routes to ROM, not BOM.
+
+If user explicitly requests deep accuracy while stage is low:
+
+* return ROM + “to be precise we’d need Planning details” (no blocking)
+
+✅ **Acceptance criteria**
+
+* Asking “how much does a 4x4 stage cost?” in ideation returns ROM estimate skill, not detailed BOM.
+
+---
+
+# 7) `runStudioTurn` vs companion endpoints (resolve cleanly)
+
+## 7.1 Make `runStudioTurn` the single orchestrator
+
+UI calls **one action** for:
+
+* free chat messages
+* “Generate next questions”
+* “Regenerate plan”
+* “Apply/Discard draft”
+* “Update after form answers”
+
+### `runStudioTurn` input (key fix)
+
+Include optional `pendingAnswers` payload so you don’t depend on a prior DB write:
+
+```json
+{
+  "projectId": "...",
+  "event": {
+    "type": "chatMessage|generateQuestions|applyDraft|discardDraft",
+    "message": "optional",
+    "pendingAnswers": { "q_budget": 50000 },
+    "ui": { "pinnedStage": "auto", "pinnedChannel": "questions" }
+  }
+}
+```
+
+### Behavior
+
+* Step 1: upsert session, merge `pendingAnswers` into `session.questionnaire.draftAnswers`
+* Step 2: route (heuristic/LLM depending on rules)
+* Step 3: execute skill using skill context
+* Step 4: update session (questions state / draft changeset / last run)
+
+## 7.2 Keep companion endpoints, but make them internal helpers
+
+You can keep:
+
+* `applyChangeSet()` mutation
+* `saveAnswers()` mutation
+  …but UI doesn’t *need* to call them directly. `runStudioTurn` can call them internally (or accept answers and persist them itself).
+
+✅ **Acceptance criteria**
+
+* Clicking “Generate Next Questions” works even if form values aren’t committed yet.
+
+---
+
+# 8) UI State Machine refinement (ROUTING vs EXECUTING)
+
+## 8.1 UI states
+
+* `IDLE`
+* `ROUTING` (tiny spinner near agent avatar)
+* `EXECUTING` (bigger “Generating…” banner, progress text)
+* `DRAFT_PENDING` (non-blocking banner with Apply/Discard/View)
+* `ERROR`
+
+## 8.2 Rendering contract
+
+Every turn returns:
+
+* `uiState: { phase: "routing|executing|idle", message? }`
+* `render` payload:
+
+  * `chatMessage` OR `questionGroups` OR `draftChangeSet`
+
+## 8.3 Draft UX (non-blocking)
+
+Banner includes:
+
+* “Draft updated (rev 4)”
+* Buttons: **View Diff**, **Apply**, **Discard**
+* Optional “Keep for later” (just navigates away; session persists)
+
+✅ **Acceptance criteria**
+
+* User can continue typing while a draft exists.
+* UI communicates router vs execution clearly.
+
+---
+
+# 9) Implementation plan (epics + tickets)
+
+## Epic 1 — StudioSession persistence
+
+1. **Add `studioSessions` table + indexes**
+
+   * index by `(projectId, userId)`
+2. **Session API**
+
+   * `studio.getSession(projectId)`
+   * `studio.updateSessionUI(projectId, pinnedStage, pinnedChannel, selectedElementIds)`
+3. **Draft ChangeSet storage**
+
+   * store/replace draft, bump revision
+
+✅ Done when: draft survives refresh; questionnaire draft answers persist; multi-user safe.
+
+---
+
+## Epic 2 — Code-first Skill Registry + Sync
+
+1. **Create `skills/registry.ts`**
+2. **Add Zod schemas per skill**
+3. **Add `admin.syncSkills` action**
+4. **Lock Admin UI fields**
+
+   * only prompt/model/enabled editable
+5. **Runtime skill resolution**
+
+   * `resolveSkill(skillId)` merges code spec + DB overrides
+
+✅ Done when: changing schema in code doesn’t brick runtime; sync updates DB automatically.
+
+---
+
+## Epic 3 — `runStudioTurn` Orchestrator (with latency fixes)
+
+1. **Define `StudioTurnEvent` union**
+2. **Implement deterministic routing rules**
+
+   * questions mode bypass
+   * pinned stage bypass
+   * regex command bypass
+3. **Implement heuristic router**
+4. **Implement smart router (LLM)**
+
+   * only free-chat + auto stage + ambiguous
+5. **Agent telemetry**
+
+   * agentRuns: log routing time vs execution time
+
+✅ Done when: 80%+ of turns skip LLM router; routing latency clearly separated.
+
+---
+
+## Epic 4 — Context loading system (two-phase)
+
+1. **Router context builder**
+2. **Skill context builder**
+
+   * driven by `contextNeeds`
+3. **Element/task slicing**
+
+   * selected IDs or resolver output
+4. **Optional RAG slice**
+5. **Draft-aware context**
+
+   * include draft changes summary + affected entities list
+
+✅ Done when: big projects don’t blow tokens; solutioning uses precise slices.
+
+---
+
+## Epic 5 — Stage gating
+
+1. Add `projects.stage`
+2. Add “promote stage” controls (optional but recommended)
+3. Add `minProjectStage` to skills
+4. Router enforces gating + fallback behavior
+
+✅ Done when: ideation pricing uses ROM, not detailed BOM.
+
+---
+
+## Epic 6 — Draft/Stacked ChangeSet UX + Apply pipeline
+
+1. ChangeSet output contract: always full draft
+2. Session stores draft; UI shows diff
+3. Apply pipeline:
+
+   * `studio.applyDraft(projectId)` mutation applies patchOps in a transaction
+4. Discard pipeline:
+
+   * clears draft from session
+5. Apply triggers:
+
+   * button click
+   * explicit “apply/save”
+   * “finalize quote/version”
+
+✅ Done when: conversational refinements modify draft until single apply.
+
+---
+
+## Epic 7 — New Studio page (single tab)
+
+1. Add route `/projects/[id]/studio`
+2. Left panel: chat + message tags (stage/channel)
+3. Right panel tabs:
+
+   * Elements / Plan / Tasks / Accounting / Risks / Draft
+4. Structured Questions panel:
+
+   * form inputs bind to `session.questionnaire.draftAnswers`
+   * “Generate next questions” calls `runStudioTurn` with `pendingAnswers`
+
+✅ Done when: ideation/planning/solutioning flows work end-to-end in one page.
+
+---
+
+## Epic 8 — Migration & deprecation of old tabs
+
+1. Keep old routes but add banner “Studio page replaces this”
+2. Optionally redirect `/clarification|planning|solutioning` → `/studio` with pre-set stage
+3. Remove duplicated agent buttons over time
+
+✅ Done when: no core workflow requires the old tabs.
+
+---
+
+## Epic 9 — Testing + performance budgets
+
+1. Unit tests
+
+   * routing bypass rules
+   * stage gating
+   * session draft replace
+2. Integration tests
+
+   * “logo wall” → “make it blue” → apply once
+   * structured answers → next questions without saving separately
+3. Performance budgets
+
+   * router call frequency < 20% of turns
+   * max context tokens per skill enforced by context loader
+
+✅ Done when: latency is stable and UX feels conversational.
+
+---
+
+If you want, I can also write the **exact TypeScript types** (`StudioSession`, `StudioTurnEvent`, `ChangeSet`, `PatchOp`) and a **minimal initial skill registry** that matches these new constraints (short IDs + minProjectStage + contextNeeds).

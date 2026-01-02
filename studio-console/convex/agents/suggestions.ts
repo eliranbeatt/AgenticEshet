@@ -4,6 +4,7 @@ import { internal, api } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { summarizeElementSnapshots } from "../lib/contextSummary";
 import { AgentSuggestionOutputSchema, ChangeSetSchema } from "../lib/zodSchemas";
+import { buildBrainContext } from "../lib/brainContext";
 import type { Doc, Id } from "../_generated/dataModel";
 import { buildSearchText } from "../lib/itemHelpers";
 
@@ -39,8 +40,11 @@ export const getContext = internalQuery({
 
         let currentKnowledge = "";
         if (project.features?.elementsCanonical) {
-            const ck = await ctx.db.query("projectKnowledge").withIndex("by_project", q => q.eq("projectId", args.projectId)).unique();
-            currentKnowledge = ck?.currentText ?? "";
+            const brain = await ctx.db
+                .query("projectBrains")
+                .withIndex("by_project", q => q.eq("projectId", args.projectId))
+                .unique();
+            currentKnowledge = brain ? buildBrainContext(brain) : "";
         }
 
         return {
@@ -95,7 +99,7 @@ Strategy: ${args.strategy}
 User Instructions: ${args.userInstructions ?? "None"}
 Element Snapshots (canonical, overrides knowledge/chat):
 ${snapshotsSummary}
-Current Knowledge: ${context.currentKnowledge}
+Project Brain: ${context.currentKnowledge}
 
 Items to Analyze:
 ${JSON.stringify(context.items.map(i => ({ 
@@ -225,6 +229,9 @@ Generate a ChangeSet that addresses the strategy.
 - If "initial_breakdown": Create tasks and material lines for the items.
 - If "material_fill": Focus on missing materials.
 - If "sanity_check": Look for missing dependencies or unrealistic costs.
+- Populate basedOnBulletIds with Project Brain bullet IDs you relied on.
+- If you update existing elements, include basedOnApprovedSnapshotId (element version id when available).
+- Populate conflictsReferenced if any conflicts were considered.
 
 Start by checking the "Available Templates".
 If you propose creating a NEW Item (Op: Create Item), prefer using 'templateId' if a matching template exists.

@@ -1,0 +1,227 @@
+Below is an **exact UI state machine** for the new single **Studio Agent** tab (Ideation+Planning+Solutioning combined), including **which buttons show when** and **when they’re enabled/disabled**. It’s designed to plug into your existing patterns: `AgentActivityPanel`, `agentRuns`, `conversations`, etc. 
+
+---
+
+## 0) Glossary (flags the UI computes every render)
+
+These booleans drive *all* button visibility:
+
+* `isRunning` — there’s an active `agentRun` with status `running|queued`
+* `hasDraftQuestions` — structured questions exist for current stage & selection
+* `hasUnsavedAnswers` — user typed/selected answers not yet committed
+* `isQuestionsComplete` — all required questions answered (or user explicitly marks “continue anyway”)
+* `hasPendingChangeSet` — agent proposed edits (elements/tasks/accounting/knowledge) not applied yet
+* `hasSelectedScope` — scope resolved: `project` OR `elementId[]` OR `taskIds[]` (no ambiguity)
+* `hasAmbiguity` — unresolved references (“that wall”, “the arch”)
+* `hasErrors` — last run failed or validation errors exist
+* `stagePinned` — stage manually set (not Auto)
+* `channelPinned` — channel manually set (not Auto)
+* `canApply` — `hasPendingChangeSet && !isRunning`
+* `canRunSkill` — `!isRunning && !hasAmbiguity && (channel == FreeChat || isQuestionsComplete || userChoseContinueAnyway)`
+
+---
+
+## 1) Top-level state machine (what mode the whole page is in)
+
+### Root states
+
+1. **READY**
+2. **NEEDS_SCOPE**
+3. **QUESTIONS**
+4. **RUNNING**
+5. **REVIEW_CHANGESET**
+6. **APPLYING**
+7. **ERROR**
+
+### Transitions (events)
+
+* `RESOLVE_SCOPE` → READY
+* `OPEN_QUESTIONS` → QUESTIONS
+* `SUBMIT_CHAT` / `RUN_SKILL` → RUNNING
+* `SKILL_RETURNED_NO_CHANGESET` → READY
+* `SKILL_RETURNED_WITH_CHANGESET` → REVIEW_CHANGESET
+* `APPLY` → APPLYING → READY
+* `REJECT_CHANGESET` → READY
+* `RUN_FAILED` → ERROR
+* `DISMISS_ERROR` → READY (or NEEDS_SCOPE if ambiguity remains)
+
+#### Mermaid (high-level)
+
+```mermaid
+stateDiagram-v2
+  [*] --> NEEDS_SCOPE: hasAmbiguity || !hasSelectedScope
+  NEEDS_SCOPE --> READY: RESOLVE_SCOPE
+  READY --> QUESTIONS: OPEN_QUESTIONS
+  QUESTIONS --> READY: SAVE_ANSWERS (optional)
+  READY --> RUNNING: RUN_SKILL / SUBMIT_CHAT
+  QUESTIONS --> RUNNING: RUN_SKILL (if canRunSkill)
+  RUNNING --> READY: SKILL_RETURNED_NO_CHANGESET
+  RUNNING --> REVIEW_CHANGESET: SKILL_RETURNED_WITH_CHANGESET
+  REVIEW_CHANGESET --> APPLYING: APPLY
+  APPLYING --> READY: APPLY_SUCCESS
+  REVIEW_CHANGESET --> READY: REJECT_CHANGESET / DISCARD
+  RUNNING --> ERROR: RUN_FAILED
+  ERROR --> READY: DISMISS_ERROR
+```
+
+---
+
+## 2) Button rules by UI region
+
+## A) Header (always visible)
+
+### Controls
+
+* **Stage selector**: `Auto | Ideation | Planning | Solutioning | Critique | Change Request`
+* **Channel selector**: `Auto | Structured Questions | Free Chat`
+* **Scope chip**: `Project` / `Element: X` / `Multi: N` with “Change” link
+
+### Header buttons (exact show/enable rules)
+
+| Button                         | Shows when            | Enabled when | Action                                                      |              |             |
+| ------------------------------ | --------------------- | ------------ | ----------------------------------------------------------- | ------------ | ----------- |
+| **Reset to Auto**              | `stagePinned          |              | channelPinned`                                              | `!isRunning` | clears pins |
+| **Review Pending Changes (N)** | `hasPendingChangeSet` | `!isRunning` | jump to REVIEW_CHANGESET                                    |              |             |
+| **Cancel Run**                 | `isRunning`           | always       | requests cancel (or “stop polling” if you can’t cancel LLM) |              |             |
+| **Open Activity**              | always                | always       | expands AgentActivityPanel                                  |              |             |
+
+---
+
+## B) Left panel: Conversation + Composer
+
+### Composer is always present, but behavior changes
+
+#### Buttons under the input
+
+| Button                | Shows when                                    | Enabled when                                              |
+| --------------------- | --------------------------------------------- | --------------------------------------------------------- |
+| **Send**              | always                                        | `!isRunning && !hasAmbiguity`                             |
+| **Run (Stage Skill)** | always                                        | `canRunSkill`                                             |
+| **Ask me questions**  | always                                        | `!isRunning` (forces channel=Structured + OPEN_QUESTIONS) |
+| **Continue anyway**   | `channel==Structured && !isQuestionsComplete` | `!isRunning` (sets “continueAnyway=true”, then RUN_SKILL) |
+
+#### Inline “resolver” when ambiguity exists
+
+When `hasAmbiguity == true`, replace normal actions with:
+
+* **Resolve** (primary) — opens quick picker (elements/tasks)
+* **Ask clarification** — auto-generates 1–3 disambiguation questions
+
+Buttons:
+
+| Button                | Shows when     | Enabled when |
+| --------------------- | -------------- | ------------ |
+| **Pick element/task** | `hasAmbiguity` | `!isRunning` |
+| **Ask 1 question**    | `hasAmbiguity` | `!isRunning` |
+
+---
+
+## C) Right panel: Structured Questions (only visible in Structured mode)
+
+### Panel visibility
+
+* Panel is **visible** when: `channel==Structured`
+* Panel is **collapsed** by default when: `channel==FreeChat`
+
+### Structured Questions panel buttons
+
+| Button                      | Shows when          | Enabled when                  | Notes                                                |
+| --------------------------- | ------------------- | ----------------------------- | ---------------------------------------------------- |
+| **Generate next questions** | always              | `!isRunning && !hasAmbiguity` | calls “Structured Questions skill” for current stage |
+| **Save answers**            | `hasUnsavedAnswers` | `!isRunning`                  | commits facts + mappings                             |
+| **Mark section complete**   | `hasDraftQuestions` | `!isRunning`                  | sets `isQuestionsComplete=true` (for required set)   |
+| **Skip question**           | for each question   | `!isRunning`                  | records “skipped” with reason                        |
+| **Switch to Free Chat**     | always              | `!isRunning`                  | flips channel                                        |
+
+**Hard rule:** while `isRunning`, all question inputs become read-only; show spinner + “agent is using your answers”.
+
+---
+
+## D) Right panel: Pending ChangeSet (diff + approve)
+
+### Panel shows when
+
+* Always in a tab, but **auto-opens** when `hasPendingChangeSet`.
+
+### Buttons in REVIEW_CHANGESET
+
+| Button                  | Shows when            | Enabled when                    | Action                                                 |
+| ----------------------- | --------------------- | ------------------------------- | ------------------------------------------------------ |
+| **Apply all**           | `hasPendingChangeSet` | `canApply`                      | applies ChangeSet, creates new version tag             |
+| **Apply selected**      | `hasPendingChangeSet` | `canApply && selectionNotEmpty` | partial apply                                          |
+| **Edit before apply**   | `hasPendingChangeSet` | `!isRunning`                    | opens inline editor (patch ops)                        |
+| **Discard**             | `hasPendingChangeSet` | `!isRunning`                    | deletes pending ChangeSet (tombstone stays in history) |
+| **Ask agent to revise** | `hasPendingChangeSet` | `!isRunning`                    | runs “ChangeRequest Handler” skill with feedback       |
+
+**If the ChangeSet is “destructive”** (delete tasks/lines), show an interstitial:
+
+* **Confirm destructive changes** checkbox + “Show tombstones”
+* “Apply” stays disabled until confirmed.
+
+---
+
+## E) Bottom/right: Context workspace tabs (Elements / Tasks / Accounting / Risks)
+
+These are *always viewable*; edit buttons depend on state.
+
+### Common rules
+
+* In `RUNNING`: allow browsing, disable edits (to avoid race conditions)
+* With `hasPendingChangeSet`: edits are allowed but show warning: “You have pending agent changes”
+
+Buttons per tab:
+
+| Tab        | Button                      | Shows when              | Enabled when                                               |
+| ---------- | --------------------------- | ----------------------- | ---------------------------------------------------------- |
+| Elements   | **+ Add element**           | always                  | `!isRunning`                                               |
+| Elements   | **Link selection to scope** | when user selected rows | `!isRunning`                                               |
+| Tasks      | **Generate tasks**          | always                  | `!isRunning && stage in (Planning,Solutioning)`            |
+| Accounting | **Reprice**                 | always                  | `!isRunning && stage in (Planning,Critique,ChangeRequest)` |
+| Risks      | **Generate risk register**  | always                  | `!isRunning`                                               |
+
+---
+
+## 3) Exact “what buttons show when” cheat sheet (minimal but deterministic)
+
+### If `isRunning == true`
+
+* Show: **Cancel Run**, Activity
+* Disable: Send, Run, Generate questions, Save answers, Apply, all edits
+* Keep enabled: scope browsing, viewing tabs
+
+### If `hasAmbiguity == true` (and not running)
+
+* Hide/disable “Run” and “Send”
+* Show: **Pick element/task**, **Ask 1 question**
+* After resolution → READY
+
+### If `channel == Structured`
+
+* Show: **Generate next questions**, **Save answers** (only if dirty), **Continue anyway** (only if incomplete)
+* “Run” enabled only if `isQuestionsComplete || continueAnyway`
+
+### If `hasPendingChangeSet == true` (and not running)
+
+* Show persistent CTA: **Review Pending Changes (N)**
+* In review panel: **Apply**, **Discard**, **Ask agent to revise**
+* Any destructive ops require **Confirm destructive changes** gate
+
+---
+
+## 4) One implementation note (so the UI is actually stable)
+
+Use a single derived enum on the client:
+
+```ts
+uiMode =
+  isRunning ? "RUNNING" :
+  hasAmbiguity || !hasSelectedScope ? "NEEDS_SCOPE" :
+  hasPendingChangeSet ? "REVIEW_CHANGESET" :
+  channel === "Structured" ? "QUESTIONS" :
+  "READY";
+```
+
+Everything above becomes simple `switch(uiMode)` rendering + button guards. This fits your current “per-page agent run + AgentActivityPanel” approach cleanly. 
+
+---
+

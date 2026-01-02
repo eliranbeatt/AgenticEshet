@@ -3,6 +3,7 @@ import { action, internalAction, internalQuery } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema } from "../lib/openai";
 import { ChangeSetSchema } from "../lib/zodSchemas";
+import { buildBrainContext } from "../lib/brainContext";
 import {
   changeSetSchemaText,
   chatRules,
@@ -153,7 +154,7 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         includeSummaries: true,
       });
 
-      const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+      const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
         projectId: args.projectId,
       });
 
@@ -253,9 +254,9 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
         recentUploads: uploadedDocsSection,
         knowledgeSection,
         elementSnapshotsSummary,
-        currentKnowledge: currentKnowledge
-          ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
-          : "(none)",
+        currentKnowledge: brain ? buildBrainContext(brain) : "(none)",
+        citationRequirements:
+          "Populate basedOnBulletIds with Brain bullet IDs used. Set basedOnApprovedSnapshotId for element edits. Include conflictsReferenced if applicable.",
       };
 
       if (agentRunId) {

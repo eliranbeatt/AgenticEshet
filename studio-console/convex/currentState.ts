@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { buildDerivedCurrentState } from "./lib/currentState";
 import { api, internal } from "./_generated/api";
 import { summarizeItems } from "./lib/contextSummary";
+import { buildBrainContext } from "./lib/brainContext";
 
 const PROPOSED_CONTEXT_THRESHOLD = 0.85;
 
@@ -117,13 +118,13 @@ export const getDerived = query({
         }));
 
         if (project?.features?.factsEnabled === false) {
-            const knowledge = await ctx.db
-                .query("projectKnowledge")
+            const brain = await ctx.db
+                .query("projectBrains")
                 .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
                 .unique();
             const markdown = [
-                "# Current Knowledge",
-                knowledge?.currentText?.trim() ? knowledge.currentText : "(none)",
+                "# Project Brain",
+                brain ? buildBrainContext(brain) : "(none)",
                 "",
                 "## Items",
                 summarizeItems(filteredItems),
@@ -245,10 +246,14 @@ export const submitCurrentStateText = mutation({
         if (project.features?.factsEnabled === false) {
             const trimmed = args.text.trim();
             if (trimmed) {
-                await ctx.runMutation(api.projectKnowledge.appendLog, {
+                const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
                     projectId: args.projectId,
-                    text: trimmed,
-                    source: "agent_summary",
+                    eventType: "manual_add",
+                    payload: { source: "current_state_submit", text: trimmed },
+                });
+                await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+                    projectId: args.projectId,
+                    brainEventId,
                 });
             }
             return { ok: true, skippedFacts: true };
@@ -276,6 +281,21 @@ export const submitCurrentStateText = mutation({
             },
             itemRefs,
             freeChat: args.text,
+        });
+
+        const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+            projectId: args.projectId,
+            eventType: "manual_add",
+            payload: {
+                source: "current_state_submit",
+                text: args.text,
+                scope,
+            },
+        });
+
+        await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+            projectId: args.projectId,
+            brainEventId,
         });
 
         return { ok: true };

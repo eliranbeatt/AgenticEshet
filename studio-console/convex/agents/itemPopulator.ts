@@ -6,6 +6,7 @@ import { callChatWithSchema } from "../lib/openai";
 import { ItemSpecV2Schema, ItemUpdateOutputSchema, ItemSpecV2 } from "../lib/zodSchemas";
 import { parseItemSpec, buildBaseItemSpec, normalizeRateType } from "../lib/itemHelpers";
 import { summarizeElementSnapshots } from "../lib/contextSummary";
+import { buildBrainContext } from "../lib/brainContext";
 
 const SYSTEM_PROMPT = `
 You are an expert Production Manager for events and construction.
@@ -217,7 +218,7 @@ export const populate = action({
             ? []
             : await ctx.runQuery(internal.factsV2.listFacts, { projectId: item.projectId });
 
-        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+        const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
             projectId: item.projectId,
         });
 
@@ -275,8 +276,8 @@ ${JSON.stringify(baseSpec, null, 2)}
 Element Snapshot (canonical, overrides knowledge/chat):
 ${elementSnapshotsSummary}
 
-Current Knowledge (authoritative, overrides chat):
-${currentKnowledge ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n") : "(none)"}
+Project Brain (authoritative, overrides chat):
+${brain ? buildBrainContext(brain) : "(none)"}
 
 Available Facts:
 ${factsText || "(No facts available)"}

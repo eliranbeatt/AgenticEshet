@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { internal, api } from "./_generated/api";
 import { streamChatText } from "./lib/openai";
 
 export const getThreadMessagesByScenarioKey = internalQuery({
@@ -244,20 +244,6 @@ export const sendAndStreamText = action({
             status: "final",
         });
 
-        // --- FACTS PIPELINE INTEGRATION ---
-        const itemRefs = await ctx.runQuery(internal.items.getItemRefs, { projectId: project._id });
-        
-        const stageMap: Record<string, "ideation" | "planning" | "solutioning"> = {
-            "ideation": "ideation",
-            "clarification": "ideation",
-            "planning": "planning",
-            "solutioning": "solutioning",
-            "tasks": "planning",
-            "quote": "solutioning"
-        };
-        const bundleStage = stageMap[scenario.phase] || "ideation";
-        // ---------------------------------
-
         const assistantMessageId = await ctx.runMutation(internal.chat.createMessage, {
             projectId: project._id,
             scenarioId: scenario._id,
@@ -309,18 +295,23 @@ export const sendAndStreamText = action({
                 status: "final",
             });
 
-            await ctx.runMutation(internal.turnBundles.createFromTurn, {
+            // --- BRAIN EVENTS INTEGRATION ---
+            const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${buffer}`;
+            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
                 projectId: project._id,
-                stage: bundleStage,
-                scope: { type: "project" },
-                source: {
-                    type: "chat",
-                    sourceIds: [userMessageId, assistantMessageId],
+                eventType: "agent_send",
+                payload: {
+                    threadId: args.threadId,
+                    userMessageId,
+                    assistantMessageId,
+                    transcript: fullTranscript,
                 },
-                itemRefs,
-                freeChat: args.userContent,
-                agentOutput: buffer,
             });
+            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+                projectId: project._id,
+                brainEventId,
+            });
+            // ---------------------------------------------
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             await ctx.runMutation(internal.chat.patchMessage, {

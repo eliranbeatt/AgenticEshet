@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { action } from "../_generated/server";
 import { api, internal } from "../_generated/api";
 import { callChatWithSchema, streamChatText } from "../lib/openai";
-import type { Doc } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import { ItemSpecV2Schema } from "../lib/zodSchemas";
 import { buildFlowAgentASystemPrompt } from "../prompts/flowPromptPack";
 import {
@@ -12,23 +12,37 @@ import {
     summarizeKnowledgeDocs,
     summarizeElementSnapshots,
 } from "../lib/contextSummary";
+import { buildBrainContext } from "../lib/brainContext";
 
 const tabValidator = v.union(v.literal("ideation"), v.literal("planning"), v.literal("solutioning"));
 const modeValidator = v.union(v.literal("clarify"), v.literal("generate"));
 const scopeTypeValidator = v.union(v.literal("allProject"), v.literal("singleItem"), v.literal("multiItem"));
+const channelValidator = v.union(v.literal("structured"), v.literal("free"));
+const contextModeValidator = v.union(v.literal("none"), v.literal("selected"), v.literal("all"));
 
 export const send = action({
     args: {
         threadId: v.id("chatThreads"),
         userContent: v.string(),
-        tab: tabValidator,
-        mode: modeValidator,
+        tab: v.optional(tabValidator),
+        stage: v.optional(tabValidator),
+        channel: v.optional(channelValidator),
+        mode: v.optional(modeValidator),
         scopeType: scopeTypeValidator,
         scopeItemIds: v.optional(v.array(v.id("projectItems"))),
+        conversationId: v.optional(v.id("projectConversations")),
+        contextMode: v.optional(contextModeValidator),
+        contextElementIds: v.optional(v.array(v.id("projectItems"))),
         model: v.optional(v.string()),
         thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
+        const resolvedStage = args.stage ?? args.tab;
+        if (!resolvedStage) {
+            throw new Error("Stage is required.");
+        }
+        const resolvedMode = args.mode ?? (args.channel === "structured" ? "clarify" : "generate");
+
         await ctx.runMutation(internal.rateLimit.consume, {
             key: `flow:${args.threadId}`,
             limit: 30,
@@ -43,13 +57,13 @@ export const send = action({
             messages: Doc<"chatMessages">[];
         };
 
-        if (scenario.phase !== args.tab) {
-            throw new Error(`Thread phase mismatch. Expected ${args.tab} but got ${scenario.phase}`);
+        if (scenario.phase !== resolvedStage) {
+            throw new Error(`Thread phase mismatch. Expected ${resolvedStage} but got ${scenario.phase}`);
         }
 
         const runId = await ctx.runMutation(internal.agentRuns.createRun, {
             projectId: project._id,
-            agent: `flow:${args.tab}`,
+            agent: `flow:${resolvedStage}`,
             stage: "agent_a",
             initialMessage: "Flow turn started",
         });
@@ -62,7 +76,7 @@ export const send = action({
 
         const { workspaceId, scopeKey } = await ctx.runMutation(api.flowWorkspaces.ensure, {
             projectId: project._id,
-            tab: args.tab,
+            tab: resolvedStage,
             scopeType: args.scopeType,
             scopeItemIds: args.scopeItemIds,
             initialText: "",
@@ -70,7 +84,7 @@ export const send = action({
 
         const workspace = await ctx.runQuery(api.flowWorkspaces.get, {
             projectId: project._id,
-            tab: args.tab,
+            tab: resolvedStage,
             scopeKey,
         });
 
@@ -92,7 +106,24 @@ export const send = action({
             status: "streaming",
         });
 
-        const selectedItems = (args.scopeItemIds?.length
+        let contextItems: Doc<"projectItems">[] | null = null;
+        let contextItemIds: Array<Id<"projectItems">> = [];
+        if (args.contextMode) {
+            const approvedItems = await ctx.runQuery(api.items.listApproved, {
+                projectId: project._id,
+            }) as Doc<"projectItems">[];
+            if (args.contextMode === "all") {
+                contextItems = approvedItems;
+            } else if (args.contextMode === "selected") {
+                const allowed = new Set((args.contextElementIds ?? []).map((id) => String(id)));
+                contextItems = approvedItems.filter((item) => allowed.has(String(item._id)));
+            } else {
+                contextItems = [];
+            }
+            contextItemIds = contextItems.map((item) => item._id);
+        }
+
+        const selectedItems = (args.scopeItemIds?.length && !args.contextMode
             ? await ctx.runQuery(api.items.listByIds, { itemIds: args.scopeItemIds })
             : []) as Doc<"projectItems">[];
 
@@ -110,7 +141,7 @@ export const send = action({
                 queryText: args.userContent,
             });
 
-        const currentKnowledge = await ctx.runQuery(api.projectKnowledge.getCurrent, {
+        const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
             projectId: project._id,
         });
 
@@ -124,12 +155,16 @@ export const send = action({
             sourceTypes: ["doc_upload", "plan", "conversation"],
         });
 
-        const { items } = await ctx.runQuery(api.items.listSidebarTree, {
+        const items = contextItems ?? (await ctx.runQuery(api.items.listSidebarTree, {
             projectId: project._id,
             includeDrafts: true,
-        });
+        })).items;
 
-        const scopeElementIds = args.scopeItemIds?.length ? args.scopeItemIds : (items ?? []).map((item) => item._id);
+        const scopeElementIds = args.contextMode
+            ? contextItemIds
+            : args.scopeItemIds?.length
+                ? args.scopeItemIds
+                : (items ?? []).map((item) => item._id);
         const elementSnapshots = project.features?.elementsCanonical
             ? await ctx.runQuery(internal.elementVersions.getActiveSnapshotsByItemIds, { itemIds: scopeElementIds })
             : [];
@@ -137,8 +172,13 @@ export const send = action({
             ? summarizeElementSnapshots(elementSnapshots, 20)
             : "(none)";
 
-        const scopeSummary =
-            args.scopeType === "allProject"
+        const scopeSummary = args.contextMode
+            ? args.contextMode === "none"
+                ? "No elements selected"
+            : args.contextMode === "all"
+                ? "All approved elements"
+                : `Selected elements: ${(contextItems ?? []).map((item) => item.title).join(", ") || "(none)"}`
+            : args.scopeType === "allProject"
                 ? "All Project"
                 : args.scopeType === "singleItem"
                     ? `Single Item: ${selectedItems[0]?.title ?? String(args.scopeItemIds?.[0] ?? "")}`
@@ -153,19 +193,19 @@ export const send = action({
 
         let allProjectTranscript = "";
         if (args.scopeType !== "allProject") {
-             const allProjectMessages = await ctx.runQuery(internal.chat.getThreadMessagesByScenarioKey, {
-                 projectId: project._id,
-                 phase: args.tab,
-                 scenarioKey: "allProject:null"
-             });
-             if (allProjectMessages.length > 0) {
-                 allProjectTranscript = [
-                     "--- START OF ALL PROJECT CONTEXT ---",
-                     ...allProjectMessages.map((m) => `${m.role.toUpperCase()}: ${m.content}`),
-                     "--- END OF ALL PROJECT CONTEXT ---",
-                     ""
-                 ].join("\n");
-             }
+            const allProjectMessages = await ctx.runQuery(internal.chat.getThreadMessagesByScenarioKey, {
+                projectId: project._id,
+                phase: resolvedStage,
+                scenarioKey: "allProject:null"
+            });
+            if (allProjectMessages.length > 0) {
+                allProjectTranscript = [
+                    "--- START OF ALL PROJECT CONTEXT ---",
+                    ...allProjectMessages.map((m) => `${m.role.toUpperCase()}: ${m.content}`),
+                    "--- END OF ALL PROJECT CONTEXT ---",
+                    ""
+                ].join("\n");
+            }
         }
 
         const stageMap: Record<string, "clarification" | "planning" | "solutioning"> = {
@@ -175,23 +215,22 @@ export const send = action({
         };
         const structuredTranscript = await ctx.runQuery(internal.structuredQuestions.getTranscript, {
             projectId: project._id,
-            stage: stageMap[args.tab] || "clarification"
+            conversationId: args.conversationId,
+            stage: stageMap[resolvedStage] || "clarification"
         });
 
         const agentAUserPrompt = [
             `PROJECT: ${project.name}`,
             `CLIENT: ${project.clientName}`,
             `OVERVIEW: ${JSON.stringify(project.overview || {})}`,
-            `TAB: ${args.tab}`,
+            `TAB: ${resolvedStage}`,
             `SCOPE: ${scopeSummary}`,
             "",
             "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
             elementSnapshotsSummary,
             "",
-            "CURRENT KNOWLEDGE (AUTHORITATIVE - OVERRIDES CHAT):",
-            currentKnowledge
-                ? [currentKnowledge.preferencesText ?? "", currentKnowledge.currentText ?? ""].filter(Boolean).join("\n\n")
-                : "(none)",
+            "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
+            brain ? buildBrainContext(brain) : "(none)",
             "",
             "KNOWN FACTS (accepted + high-confidence proposed):",
             factsContext.bullets,
@@ -223,8 +262,8 @@ export const send = action({
             let lastFlushedAt = 0;
             await streamChatText({
                 systemPrompt: buildFlowAgentASystemPrompt({
-                    tab: args.tab,
-                    mode: args.mode,
+                    tab: resolvedStage,
+                    mode: resolvedMode,
                     language,
                 }),
                 userPrompt: agentAUserPrompt,
@@ -251,6 +290,22 @@ export const send = action({
                 status: "final",
             });
 
+            const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${finalAssistantMarkdown}`;
+            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+                projectId: project._id,
+                eventType: "agent_send",
+                payload: {
+                    threadId: args.threadId,
+                    userMessageId,
+                    assistantMessageId,
+                    transcript: fullTranscript,
+                },
+            });
+            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+                projectId: project._id,
+                brainEventId,
+            });
+
             try {
                 const itemRefs = await ctx.runQuery(internal.items.getItemRefs, { projectId: project._id });
                 const scope =
@@ -263,7 +318,7 @@ export const send = action({
 
                 await ctx.runMutation(internal.turnBundles.createFromTurn, {
                     projectId: project._id,
-                    stage: args.tab,
+                    stage: resolvedStage,
                     scope,
                     source: {
                         type: "chat",
@@ -313,7 +368,13 @@ export const send = action({
             });
         }
 
-        return { ok: true as const, userMessageId, assistantMessageId, agentRunId: runId };
+        return {
+            ok: true as const,
+            userMessageId,
+            assistantMessageId,
+            agentRunId: runId,
+            assistantMarkdown: finalAssistantMarkdown,
+        };
     },
 });
 

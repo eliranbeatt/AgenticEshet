@@ -10,10 +10,11 @@ import { Loader2, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
 interface StructuredQuestionsPanelProps {
     projectId: Id<"projects">;
     stage: "clarification" | "planning" | "solutioning";
+    conversationId?: Id<"projectConversations">;
 }
 
-export function StructuredQuestionsPanel({ projectId, stage }: StructuredQuestionsPanelProps) {
-    const session = useQuery(api.structuredQuestions.getActiveSession, { projectId, stage });
+export function StructuredQuestionsPanel({ projectId, stage, conversationId }: StructuredQuestionsPanelProps) {
+    const session = useQuery(api.structuredQuestions.getActiveSession, { projectId, stage, conversationId });
     const startSession = useMutation(api.structuredQuestions.startSession);
     const runAgent = useAction(api.agents.structuredQuestions.run);
     
@@ -22,8 +23,8 @@ export function StructuredQuestionsPanel({ projectId, stage }: StructuredQuestio
     const handleStart = async () => {
         setIsStarting(true);
         try {
-            const sessionId = await startSession({ projectId, stage });
-            await runAgent({ projectId, stage, sessionId, runId: undefined as any }); 
+            const sessionId = await startSession({ projectId, stage, conversationId });
+            await runAgent({ projectId, stage, sessionId, conversationId, runId: undefined as any }); 
         } catch (e) {
             console.error(e);
         } finally {

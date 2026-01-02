@@ -303,6 +303,22 @@ export const send = action({
                 status: "final",
             });
 
+            const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${finalContent}`;
+            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+                projectId: project._id,
+                eventType: "agent_send",
+                payload: {
+                    threadId: args.threadId,
+                    userMessageId,
+                    assistantMessageId,
+                    transcript: fullTranscript,
+                },
+            });
+            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+                projectId: project._id,
+                brainEventId,
+            });
+
             const extracted = await callChatWithSchema(TaskEditorPatchSchema, {
                 model,
                 systemPrompt: [

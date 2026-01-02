@@ -454,15 +454,21 @@ async function processSingleFile(
     const projectId = file.projectId ?? job.projectId;
     const trimmedText = textSource.slice(0, 12000).trim();
     if (projectId && trimmedText) {
-        const project = await ctx.runQuery(api.projects.getProject, { projectId });
-        const itemRefs = await ctx.runQuery(internal.items.getItemRefs, { projectId });
-        await ctx.runMutation(internal.turnBundles.createFromTurn, {
+        const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
             projectId,
-            stage: resolveBundleStage(project?.stage),
-            scope: { type: "project" },
-            source: { type: "chat", sourceIds: [String(file._id)] },
-            itemRefs,
-            freeChat: trimmedText,
+            eventType: "file_ingested",
+            payload: {
+                fileId: file._id,
+                jobId: job._id,
+                filename: file.originalFilename,
+                summary: enriched.summary,
+                content: trimmedText,
+            },
+        });
+
+        await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
+            projectId,
+            brainEventId,
         });
     }
 }

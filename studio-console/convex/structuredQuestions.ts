@@ -6,15 +6,25 @@ import { api, internal } from "./_generated/api";
 export const getActiveSession = query({
     args: {
         projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
         stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
     },
     handler: async (ctx, args) => {
-        const session = await ctx.db
-            .query("structuredQuestionSessions")
-            .withIndex("by_project_stage", (q) =>
-                q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
-            )
-            .first();
+        const query = ctx.db.query("structuredQuestionSessions");
+        const session = args.conversationId
+            ? await query
+                  .withIndex("by_project_conversation_stage_status", (q) =>
+                      q.eq("projectId", args.projectId)
+                          .eq("conversationId", args.conversationId)
+                          .eq("stage", args.stage)
+                          .eq("status", "active")
+                  )
+                  .first()
+            : await query
+                  .withIndex("by_project_stage", (q) =>
+                      q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
+                  )
+                  .first();
         return session;
     },
 });
@@ -50,16 +60,26 @@ export const getLatestTurn = query({
 export const startSession = mutation({
     args: {
         projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
         stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
     },
     handler: async (ctx, args) => {
         // Archive any existing active sessions
-        const existing = await ctx.db
-            .query("structuredQuestionSessions")
-            .withIndex("by_project_stage", (q) =>
-                q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
-            )
-            .collect();
+        const query = ctx.db.query("structuredQuestionSessions");
+        const existing = args.conversationId
+            ? await query
+                  .withIndex("by_project_conversation_stage_status", (q) =>
+                      q.eq("projectId", args.projectId)
+                          .eq("conversationId", args.conversationId)
+                          .eq("stage", args.stage)
+                          .eq("status", "active")
+                  )
+                  .collect()
+            : await query
+                  .withIndex("by_project_stage", (q) =>
+                      q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
+                  )
+                  .collect();
         
         for (const session of existing) {
             await ctx.db.patch(session._id, { status: "archived" });
@@ -67,6 +87,7 @@ export const startSession = mutation({
 
         const sessionId = await ctx.db.insert("structuredQuestionSessions", {
             projectId: args.projectId,
+            conversationId: args.conversationId,
             stage: args.stage,
             status: "active",
             currentTurnNumber: 0,
@@ -130,53 +151,35 @@ export const saveAnswers = mutation({
             updatedAt: Date.now(),
         });
 
-        // --- FACTS PIPELINE INTEGRATION ---
+        // --- KNOWLEDGE NOTES UPDATER INTEGRATION ---
         const session = await ctx.db.get(args.sessionId);
         if (session) {
-            const items = await ctx.db
-                .query("projectItems")
-                .withIndex("by_project_status", (q) => q.eq("projectId", session.projectId))
-                .collect();
-            
-            const itemRefs = items.map((item) => ({
-                id: item._id,
-                name: item.name ?? item.title ?? "Untitled item",
-            }));
+            const qaPairs = (turn.questions as any[]).map((q: any) => {
+                const answer = normalizedAnswers.find(a => a.questionId === q.id);
+                if (!answer) return null;
+                const answerText = answer.quick === "yes" ? "Yes" : 
+                                   answer.quick === "no" ? "No" :
+                                   answer.quick === "idk" ? "Don't Know" :
+                                   answer.quick === "irrelevant" ? "Irrelevant" : answer.quick;
+                
+                return `Q: ${q.text || q.title || q.prompt}\nA: ${answerText} ${answer.text ? `(${answer.text})` : ""}`;
+            }).filter(Boolean).join("\n\n");
 
-            const stageMap: Record<string, "ideation" | "planning" | "solutioning"> = {
-                "clarification": "ideation",
-                "planning": "planning",
-                "solutioning": "solutioning"
-            };
-            const bundleStage = stageMap[session.stage] || "ideation";
+            const fullContent = `Structured Answers (Turn ${args.turnNumber}):\n\n${qaPairs}\n\nUser Note: ${args.userInstructions || "(none)"}`;
 
-            console.log("Scheduling createFromTurn for project", session.projectId);
-            // Force update
-            await ctx.scheduler.runAfter(0, internal.turnBundles.createFromTurn, {
+            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
                 projectId: session.projectId,
-                stage: bundleStage,
-                scope: { type: "project" },
-                source: {
-                    type: "structuredQuestions",
-                    sourceIds: [turn._id],
+                eventType: "structured_submit",
+                payload: {
+                    sessionId: args.sessionId,
+                    turnNumber: args.turnNumber,
+                    contentText: fullContent,
                 },
-                itemRefs,
-                structuredQuestions: (turn.questions as any[]).map((q: any) => ({ 
-                    id: q.id, 
-                    text: q.text || q.title || q.prompt || "Question" 
-                })),
-                userAnswers: normalizedAnswers.map((a: any) => ({ 
-                    qId: a.questionId, 
-                    quick: a.quick, 
-                    text: a.text 
-                })),
-                freeChat: args.userInstructions,
             });
 
-            await ctx.scheduler.runAfter(0, api.agents.structuredQuestions.run, {
+            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
                 projectId: session.projectId,
-                stage: session.stage,
-                sessionId: session._id,
+                brainEventId,
             });
         }
     },
@@ -185,6 +188,7 @@ export const saveAnswers = mutation({
 export const internal_createTurn = internalMutation({
     args: {
         projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
         stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
         sessionId: v.id("structuredQuestionSessions"),
         turnNumber: v.number(),
@@ -194,6 +198,7 @@ export const internal_createTurn = internalMutation({
     handler: async (ctx, args) => {
         await ctx.db.insert("structuredQuestionTurns", {
             projectId: args.projectId,
+            conversationId: args.conversationId,
             stage: args.stage,
             sessionId: args.sessionId,
             turnNumber: args.turnNumber,
@@ -221,16 +226,26 @@ export const internal_updateSessionTurn = internalMutation({
 export const getTranscript = internalQuery({
     args: {
         projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
         stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
     },
     handler: async (ctx, args) => {
-        const session = await ctx.db
-            .query("structuredQuestionSessions")
-            .withIndex("by_project_stage", (q) =>
-                q.eq("projectId", args.projectId).eq("stage", args.stage)
-            )
-            .order("desc")
-            .first();
+        const query = ctx.db.query("structuredQuestionSessions");
+        const session = args.conversationId
+            ? await query
+                  .withIndex("by_project_conversation_stage_status", (q) =>
+                      q.eq("projectId", args.projectId)
+                          .eq("conversationId", args.conversationId)
+                          .eq("stage", args.stage)
+                          .eq("status", "active")
+                  )
+                  .first()
+            : await query
+                  .withIndex("by_project_stage", (q) =>
+                      q.eq("projectId", args.projectId).eq("stage", args.stage)
+                  )
+                  .order("desc")
+                  .first();
 
         if (!session) return "";
 

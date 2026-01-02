@@ -105,6 +105,7 @@ async function syncMaterialsToMaterialLines(
         }
     }
 
+    const specMaterialIds = new Set(args.spec.breakdown.materials.map((material) => material.id));
     let synced = 0;
     for (const material of args.spec.breakdown.materials) {
         const itemMaterialId = material.id;
@@ -154,6 +155,16 @@ async function syncMaterialsToMaterialLines(
         synced += 1;
     }
 
+    const staleLines = candidates.filter(
+        (line) =>
+            line.itemId === args.item._id &&
+            line.itemMaterialId &&
+            !specMaterialIds.has(line.itemMaterialId),
+    );
+    for (const line of staleLines) {
+        await ctx.db.delete(line._id);
+    }
+
     return synced;
 }
 
@@ -184,6 +195,7 @@ async function syncLaborToWorkLines(
         }
     }
 
+    const specLaborIds = new Set(args.spec.breakdown.labor.map((labor) => labor.id));
     let synced = 0;
     for (const labor of args.spec.breakdown.labor) {
         const itemLaborId = labor.id;
@@ -221,6 +233,16 @@ async function syncLaborToWorkLines(
             });
         }
         synced += 1;
+    }
+
+    const staleLines = candidates.filter(
+        (line) =>
+            line.itemId === args.item._id &&
+            line.itemLaborId &&
+            !specLaborIds.has(line.itemLaborId),
+    );
+    for (const line of staleLines) {
+        await ctx.db.delete(line._id);
     }
 
     return synced;

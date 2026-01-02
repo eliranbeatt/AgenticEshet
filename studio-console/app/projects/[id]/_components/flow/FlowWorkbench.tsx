@@ -10,7 +10,6 @@ import { ItemEditorPanel } from "../items/ItemEditorPanel";
 import type { FlowScopeType, FlowTab } from "@/src/lib/flowScope";
 import { buildFlowScopeKey } from "@/src/lib/flowScope";
 import { FlowItemsPanel } from "./FlowItemsPanel";
-import { SuggestedElementsPanel } from "./SuggestedElementsPanel";
 import { useThinkingMode } from "@/app/_context/ThinkingModeContext";
 import { useModel } from "@/app/_context/ModelContext";
 import { StructuredQuestionsPanel } from "./StructuredQuestionsPanel";
@@ -284,15 +283,6 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                 }
                             }}
                         />
-                        <div className="border-t pt-2 mt-2">
-                            <SuggestedElementsPanel
-                                projectId={projectId}
-                                selectedAllProject={selectedAllProject}
-                                selectedItemIds={selectedItemIds}
-                                phase={changeSetPhase}
-                                onGenerated={() => setReviewSignal((value) => value + 1)}
-                            />
-                        </div>
                     </div>
                 </div>
             )}

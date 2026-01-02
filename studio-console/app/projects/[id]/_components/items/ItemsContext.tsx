@@ -18,6 +18,12 @@ type ItemsContextValue = {
     tabScope?: ItemTabScope;
     selectedItemId: Id<"projectItems"> | null;
     setSelectedItemId: (value: Id<"projectItems"> | null) => void;
+    selectedItemIds: Id<"projectItems">[];
+    toggleItemSelection: (id: Id<"projectItems">) => void;
+    selectAllItems: (ids: Id<"projectItems">[]) => void;
+    deselectAllItems: () => void;
+    selectedAllProject: boolean;
+    setSelectedAllProject: (value: boolean) => void;
     selectedItemMode: "approved" | "draft";
     setSelectedItemMode: (value: "approved" | "draft") => void;
     showDraftItems: boolean;
@@ -59,6 +65,8 @@ export function ItemsProvider({
     const storageKey = `${STORAGE_PREFIX}.${projectId}`;
 
     const [selectedItemId, setSelectedItemIdState] = useState<Id<"projectItems"> | null>(null);
+    const [selectedItemIds, setSelectedItemIds] = useState<Id<"projectItems">[]>([]);
+    const [selectedAllProject, setSelectedAllProject] = useState(false);
     const [selectedItemMode, setSelectedItemMode] = useState<"approved" | "draft">("approved");
     const [showDraftItems, setShowDraftItems] = useState(false);
     const [hydrated, setHydrated] = useState(false);
@@ -78,6 +86,10 @@ export function ItemsProvider({
     const setSelectedItemId = useCallback(
         (value: Id<"projectItems"> | null) => {
             setSelectedItemIdState(value);
+            // Also add to selection if not present (optional UX choice, keeping simple for now)
+            if (value && !selectedItemIds.includes(value)) {
+                setSelectedItemIds((prev) => [...prev, value]);
+            }
             if (!hydrated) return;
             try {
                 if (value) localStorage.setItem(storageKey, value);
@@ -86,8 +98,28 @@ export function ItemsProvider({
                 // Ignore storage failures.
             }
         },
-        [hydrated, storageKey],
+        [hydrated, storageKey, selectedItemIds],
     );
+
+    const toggleItemSelection = useCallback((id: Id<"projectItems">) => {
+        setSelectedItemIds((prev) => {
+            if (prev.includes(id)) {
+                return prev.filter((i) => i !== id);
+            }
+            return [...prev, id];
+        });
+        setSelectedAllProject(false);
+    }, []);
+
+    const selectAllItems = useCallback((ids: Id<"projectItems">[]) => {
+        setSelectedItemIds(ids);
+        setSelectedAllProject(true); // Or maintain false if we just want to select current list
+    }, []);
+
+    const deselectAllItems = useCallback(() => {
+        setSelectedItemIds([]);
+        setSelectedAllProject(false);
+    }, []);
 
     const value = useMemo(
         () => ({
@@ -95,12 +127,31 @@ export function ItemsProvider({
             tabScope,
             selectedItemId,
             setSelectedItemId,
+            selectedItemIds,
+            toggleItemSelection,
+            selectAllItems,
+            deselectAllItems,
+            selectedAllProject,
+            setSelectedAllProject,
             selectedItemMode,
             setSelectedItemMode,
             showDraftItems,
             setShowDraftItems,
         }),
-        [projectId, tabScope, selectedItemId, setSelectedItemId, selectedItemMode, showDraftItems],
+        [
+            projectId,
+            tabScope,
+            selectedItemId,
+            setSelectedItemId,
+            selectedItemIds,
+            toggleItemSelection,
+            selectAllItems,
+            deselectAllItems,
+            selectedAllProject,
+            setSelectedAllProject,
+            selectedItemMode,
+            showDraftItems,
+        ],
     );
 
     return <ItemsContext.Provider value={value}>{children}</ItemsContext.Provider>;

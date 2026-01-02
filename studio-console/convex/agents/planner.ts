@@ -6,10 +6,58 @@ import { callChatWithSchema } from "../lib/openai";
 import { ItemSpecV2Schema } from "../lib/zodSchemas";
 import type { Doc } from "../_generated/dataModel";
 
+// Helper to auto-generate IDs for broken LLM outputs
+// Helper to auto-generate IDs for broken LLM outputs and fix hallucinations
+const ItemSpecV2WithAutoIds = z.preprocess((val: any) => {
+    if (!val || typeof val !== 'object' || !val.breakdown) return val;
+
+    const ensureIdsAndDefaults = (arr: any[], prefix: string, type: 'subtasks' | 'materials' | 'labor') => {
+        if (!Array.isArray(arr)) return arr;
+        return arr.map((item, idx) => {
+            if (!item || typeof item !== 'object') return item;
+
+            const newItem = { ...item };
+
+            // Ensure ID
+            if (!newItem.id) {
+                newItem.id = `${prefix}-${idx + 1}`;
+            }
+
+            // Material fixes
+            if (type === 'materials') {
+                if (!newItem.label && newItem.name) {
+                    newItem.label = newItem.name;
+                }
+                if (!newItem.label) newItem.label = "Unknown Material";
+            }
+
+            // Labor fixes
+            if (type === 'labor') {
+                if (!newItem.role && newItem.name) {
+                    newItem.role = newItem.name;
+                }
+                if (!newItem.role) newItem.role = "General Labor";
+                if (!newItem.workType) newItem.workType = "field";
+                if (!newItem.rateType) newItem.rateType = "flat";
+            }
+
+            return newItem;
+        });
+    };
+
+    // Patch known breakdown arrays if they exist
+    if (val.breakdown) {
+        if (val.breakdown.subtasks) val.breakdown.subtasks = ensureIdsAndDefaults(val.breakdown.subtasks, "st", 'subtasks');
+        if (val.breakdown.materials) val.breakdown.materials = ensureIdsAndDefaults(val.breakdown.materials, "mat", 'materials');
+        if (val.breakdown.labor) val.breakdown.labor = ensureIdsAndDefaults(val.breakdown.labor, "lab", 'labor');
+    }
+    return val;
+}, ItemSpecV2Schema);
+
 const DraftOpSchema = z.object({
     type: z.enum(["update_existing", "create_new"]),
     elementId: z.string().optional(),
-    snapshot: ItemSpecV2Schema,
+    snapshot: ItemSpecV2WithAutoIds,
     reason: z.string().optional(),
 });
 
@@ -20,7 +68,7 @@ const DisambiguationSchema = z.object({
         elementId: z.string(),
         title: z.string(),
     })).min(2),
-    snapshot: ItemSpecV2Schema,
+    snapshot: ItemSpecV2WithAutoIds,
 });
 
 const PlannerOutputSchema = z.object({
@@ -51,6 +99,8 @@ function buildSystemPrompt() {
         "Use ItemSpecV2 for every snapshot. Do not use legacy keys like itemType/title at the top level.",
         "Required keys in snapshot: version, identity, breakdown, state.",
         "identity must include title and typeKey. typeKey is a short lowercase identifier (e.g. \"runbook\", \"proposal\", \"set_piece\").",
+        "Your entire response must be a JSON object with a top-level key \"draftOps\" (array).",
+        "Do NOT output a bare ItemSpecV2 object.",
         "",
         "Rules:",
         "1) Use update_existing with elementId from the provided index when it matches.",
@@ -61,6 +111,16 @@ function buildSystemPrompt() {
         "",
         "ItemSpecV2 minimal template:",
         "{\"version\":\"ItemSpecV2\",\"identity\":{\"title\":\"\",\"typeKey\":\"\"},\"breakdown\":{\"subtasks\":[],\"materials\":[],\"labor\":[]},\"state\":{\"openQuestions\":[],\"assumptions\":[],\"decisions\":[]}}",
+        "",
+        "IMPORTANT: You MUST generate a unique 'id' string for every item in subtasks, materials, and labor arrays. Use short identifiers like 'st-1', 'mat-1', 'lab-1'.",
+        "",
+        "Use these schemas for breakdown items:",
+        "- Subtasks: { id: string, title: string, description?: string, status?: string, estMinutes?: number }",
+        "- Materials: { id: string, label: string (NOT name), qty?: number, unit?: string, unitCostEstimate?: number, category?: string }",
+        "- Labor: { id: string, role: string, workType: string (e.g. 'studio', 'install'), rateType: 'hour'|'day'|'flat', quantity?: number, unitCost?: number }",
+        "",
+        "Output template (fill values, keep structure):",
+        "{\"draftOps\":[{\"type\":\"create_new\",\"elementId\":\"NEW\",\"snapshot\":{...ItemSpecV2...},\"reason\":\"\"}],\"needsUserDisambiguation\":[]}",
         "",
         "Return JSON that matches the schema exactly.",
     ].join("\n");
@@ -145,6 +205,22 @@ function resolveDraftOps(args: {
     }
 
     return resolvedOps;
+}
+
+async function retryOnConflict<T>(fn: () => Promise<T>, attempts = 3) {
+    let lastError: unknown;
+    for (let i = 0; i < attempts; i += 1) {
+        try {
+            return await fn();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (!message.includes("Data read or written in this mutation changed while it was being run")) {
+                throw error;
+            }
+            lastError = error;
+        }
+    }
+    throw lastError ?? new Error("Mutation conflict retry failed");
 }
 
 export const chatToDrafts = action({
@@ -274,10 +350,12 @@ export const chatToDrafts = action({
                 stage: "writing_drafts",
             });
 
-            const applied = await ctx.runMutation(api.elementDrafts.applyDraftOps, {
-                projectId: args.projectId,
-                ops: resolvedOps,
-            });
+            const applied = await retryOnConflict(() =>
+                ctx.runMutation(api.elementDrafts.applyDraftOps, {
+                    projectId: args.projectId,
+                    ops: resolvedOps,
+                })
+            );
 
             await ctx.runMutation(internal.agentRuns.appendEvent, {
                 runId,
@@ -358,10 +436,12 @@ export const applyDraftOpsAction = action({
                 stage: "writing_drafts",
             });
 
-            const applied = await ctx.runMutation(api.elementDrafts.applyDraftOps, {
-                projectId: args.projectId,
-                ops: resolvedOps,
-            });
+            const applied = await retryOnConflict(() =>
+                ctx.runMutation(api.elementDrafts.applyDraftOps, {
+                    projectId: args.projectId,
+                    ops: resolvedOps,
+                })
+            );
 
             await ctx.runMutation(internal.agentRuns.appendEvent, {
                 runId,

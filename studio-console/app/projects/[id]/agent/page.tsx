@@ -10,7 +10,6 @@ import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { StructuredQuestionsPanel } from "../_components/flow/StructuredQuestionsPanel";
 import { ElementsPanel } from "../_components/elements/ElementsPanel";
 import { ElementsInspectorPanel } from "../_components/elements/ElementsInspectorPanel";
-import { SuggestedElementsPanel } from "../_components/flow/SuggestedElementsPanel";
 import { useItemsContext } from "../_components/items/ItemsContext";
 import { ChatComposer } from "../_components/chat/ChatComposer";
 import { useModel } from "@/app/_context/ModelContext";
@@ -610,12 +609,6 @@ export default function AgentPage() {
                     </div>
 
                     <div className="grid gap-4 min-h-0 grid-cols-[1fr_minmax(0,1fr)_420px]">
-                        <SuggestedElementsPanel
-                            projectId={projectId}
-                            selectedAllProject={true}
-                            selectedItemIds={[]}
-                            phase={plannerPhase}
-                        />
                         <div className="min-h-0">
                             <ElementsPanel />
                         </div>

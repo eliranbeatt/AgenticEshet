@@ -1,0 +1,559 @@
+Below is a **full, detailed dev plan** to redesign the **Elements tab** into the 3-pane **Element Explorer** (sidebar + outline tree/accordion + inspector), with **draft/approve versioning**, **virtualized trees**, and **schema-driven inspector forms**.
+
+---
+
+# 0) Goals, scope, and success criteria
+
+## Goals
+
+1. Replace the current “key/value blocks” element view with a **human-navigable UI**:
+
+   * **Accordion sections** (Overview, Configuration, Tasks, Budget, Files, History, Conflicts)
+   * **Tree rows** with progressive disclosure
+   * **Counts/totals summaries when collapsed**
+2. Provide a **fast editing experience**:
+
+   * Clicking a node opens the **Inspector** (right pane)
+   * Edits accumulate in a **Draft** (non-blocking; no “locked in review”)
+3. Support **Draft → Review → Approve** with a version timeline and diffs.
+4. Handle large task lists with **virtualized rendering** and smooth expand/collapse.
+5. Make it visually “premium”: big touch targets, icons, badges, clear hierarchy.
+
+## Non-goals (for this iteration)
+
+* Rebuilding the entire backend into fully element-native domain (unless you choose that path explicitly in Phase 0).
+* Full conflict auto-resolution engine (we’ll build flags + guided resolution first).
+
+## Success criteria (measurable)
+
+* **Time to find/edit a task/material** in an element drops (qualitative UX + internal timing).
+* 60fps scrolling on large lists (500–2,000 rows) in Tasks section.
+* No data loss: discard/restore is reliable; approvals create immutable versions.
+* Clear user mental model: “Outline for navigation, Inspector for editing, banner for draft state.”
+
+---
+
+# 1) Product requirements (detailed)
+
+## 1.1 Layout
+
+* **3-pane layout**:
+
+  * Left: element list (search/filter/pin)
+  * Center: element outline (accordion + tree)
+  * Right: inspector (selected node editor)
+* Resizable panes:
+
+  * Left default 300px, right default 420px; center flex.
+
+## 1.2 Center outline sections (accordion)
+
+Order and minimum content:
+
+1. **Overview**
+
+* Collapsed: status + last update + key totals (₪, #tasks, ETA)
+* Expanded: highlight cards (cost summary, schedule summary, safety constraints)
+
+2. **Configuration (single place for type + assumptions)**
+
+* Collapsed: type + key assumptions chips (overhead/risk/profit/labor rate)
+* Expanded: categories (Type, Constraints, Assumptions, Routing)
+
+3. **Tasks**
+
+* Collapsed: `#tasks`, blocked count, purchases count, ETA
+* Expanded: grouped tree (Domain/Phase → Tasks)
+* Each task row selectable, expandable (optional), shows badges and quick metrics.
+
+4. **Budget**
+
+* Collapsed: Materials total, Labor total, markup totals, grand total
+* Expanded: Materials accordion, Labor accordion, Markups summary
+
+5. **Files**
+
+* Collapsed: count + last upload
+* Expanded: grouped by type (Quotes/Receipts/Sketches/Photos)
+
+6. **History / Versions**
+
+* Collapsed: `vX Draft / vY Approved`
+* Expanded: version timeline cards + diff preview + restore/compare
+
+7. **Conflicts / Warnings**
+
+* Collapsed: count
+* Expanded: flagged issues + guided resolution actions
+
+## 1.3 Inspector behavior
+
+* Clicking any node updates the Inspector with:
+
+  * Breadcrumb
+  * Editable form (schema-driven)
+  * Sticky action bar (Save Draft, Discard, Request Approval, Approve if permitted)
+* Must support:
+
+  * Read-only mode on approved version
+  * Editing in draft
+  * Field validation, helpful errors, required minimal fields
+
+## 1.4 Draft/Approve behavior
+
+* User can keep navigating while dirty.
+* Global banner in center header when dirty:
+
+  * “Unsaved changes” + actions: Save Draft / Review / Discard
+* Approve creates a new **Approved version** and clears draft patch buffer.
+
+## 1.5 Tombstone behavior (soft delete)
+
+* Deleting tasks/material lines **tombstones** them (muted + “Archived” pill) and can be restored.
+* Optional “Graveyard” view under History or Conflicts.
+
+## 1.6 Performance and accessibility requirements
+
+* Virtualized lists for Tasks/Materials when count > ~100.
+* Keyboard navigation for outline rows; accessible focus rings.
+* Section headers and rows are large (44–52px min height), clickable.
+
+---
+
+# 2) Design spec (implementation-oriented)
+
+## Design tokens (must be consistent with your app)
+
+* Spacing: 8pt system
+* Text styles: 20/16/14/13/12 (Inter)
+* Radius: 12 for cards, 16 for big containers
+* UI patterns: cards + badges + icons + muted summaries
+
+## Figma deliverables (what “done” means for design)
+
+* Page frame 1440×900 with:
+
+  * All 3 panes
+  * States: loading, empty, selected, editing, conflict, tombstone
+* Component set:
+
+  * SectionHeaderRow (variants: default/hover/expanded/warning)
+  * TreeRow (variants: expandable/leaf/selected/archived)
+  * InspectorFormCard (variants: read-only/edit/error)
+  * StatusBanner (dirty/saving/error)
+  * VersionTimelineCard
+  * ConflictCallout
+
+---
+
+# 3) Technical design
+
+## 3.1 Frontend stack
+
+* Next.js App Router
+* shadcn/ui + Tailwind
+* react-hook-form + zod for forms
+* @tanstack/react-virtual for virtualization
+* Zustand (or reducer) for UI state (selection, expansions, draft patch)
+
+## 3.2 Data model / contracts (recommended)
+
+Even if your underlying storage is still tasks/materialLines/workLines tables, the Elements UI should speak a **single contract**:
+
+### ElementViewModel (read model)
+
+* `elementId, name, type, status, activeVersion`
+* `sections: { overview, configuration, tasksTree, budget, files, history, conflicts }`
+* `nodeIndex: Map<nodeId, NodePayloadRef>` for inspector lookup
+
+### Node types
+
+* `section`
+* `taskGroup`
+* `task`
+* `materialGroup`
+* `materialLine`
+* `laborGroup`
+* `laborLine`
+* `config`
+* `file`
+* `version`
+* `conflict`
+
+Each node yields:
+
+* `nodeId, nodeType, title, subtitle?, badges[], metrics[], depth, isExpandable, isArchived`
+
+## 3.3 Draft editing mechanics (patch buffer)
+
+* Keep a client-side buffer:
+
+  * `draftPatchOps: PatchOp[]` (JSON-patch-like: add/replace/remove)
+  * `dirty: boolean`
+* “Save Draft” sends patch ops to backend:
+
+  * backend returns updated Draft version snapshot
+* “Approve” seals draft → new approved version.
+
+## 3.4 Expand/collapse + virtualization strategy
+
+* Don’t render nested DOM trees for large lists.
+* Maintain:
+
+  * `expandedNodeIds: Set<string>`
+  * `flattenVisibleNodes(viewModel, expandedNodeIds) -> FlatRow[]`
+* Virtualize `FlatRow[]` with TanStack Virtual.
+
+---
+
+# 4) Backend plan (Convex-oriented)
+
+You have two viable paths. Pick one in Phase 0.
+
+## Path A (recommended): Element Versions + Snapshot table (element-native)
+
+Add new tables:
+
+* `elements`
+* `elementVersions` (draft/approved)
+* `elementSnapshots` (or embed snapshot in version)
+* `elementConflicts` (optional) / or compute conflicts on read
+
+Convex functions:
+
+* `elements.listByProject(projectId)`
+* `elements.getViewModel(elementId, versionId?)` **(builds the UI read model)**
+* `elements.createElement(projectId, initialConfig)`
+* `elements.saveDraftPatch(elementId, baseVersionId, patchOps[])`
+* `elements.requestApproval(elementId, draftVersionId)` (optional)
+* `elements.approveDraft(elementId, draftVersionId, metaTags)`
+* `elements.restoreVersion(elementId, versionId)`
+
+Pros: clean UI contract, scalable versioning.
+Cons: requires mapping current domain data into snapshots.
+
+## Path B: Adapter layer (keep existing tables as source of truth for now)
+
+* Build `getViewModel()` by composing existing tables (tasks/materialLines/workLines/etc.)
+* Patch ops map into existing mutations (updateTask, updateMaterialLine, etc.)
+* Version history may be limited initially (or stored separately)
+
+Pros: less migration now.
+Cons: harder to guarantee “approved element is source of truth” long-term.
+
+**My suggestion:** Do Path A if you’re already moving to element-centric architecture; otherwise Path B as a bridge.
+
+---
+
+# 5) Phased execution plan (with concrete tasks)
+
+## Phase 0 — Discovery + contract lock (1–2 days of work)
+
+**Deliverables**
+
+* Final UI contract (`ElementViewModel`, `Node`, `PatchOp`)
+* Decide Path A vs B
+* Identify current element schema fields you must support in v1
+
+**Tasks**
+
+1. Audit current Elements tab data shape (what fields exist, what’s required).
+2. Define “minimal required fields” per node type.
+3. Write TypeScript types for:
+
+   * `ElementViewModel`
+   * `FlatRow`
+   * `PatchOp`
+   * `InspectorFormRegistry`
+4. Define version meta tags: `{sourceTab, createdAt, summary, labels[]}`
+
+**Risks to watch**
+
+* Over-scoping: avoid supporting every legacy field in v1.
+* Mismatched naming/IDs: normalize node IDs early.
+
+---
+
+## Phase 1 — UI shell + read-only explorer (MVP visual redesign)
+
+**Goal:** new layout + accordion/tree navigation, no editing yet.
+
+**Frontend tasks**
+
+1. Add new route/page for Elements Explorer (or replace existing Elements tab content).
+2. Implement `ResizablePanelGroup` 3-pane layout.
+3. Implement Sidebar:
+
+   * search, filter chips, element list cards, selection state
+4. Implement Center outline:
+
+   * Accordion sections
+   * SectionHeaderRow with summary chips
+5. Implement Inspector placeholder:
+
+   * “Select a node to edit”
+6. Loading + empty states skeletons.
+
+**Acceptance**
+
+* User can select an element and navigate sections.
+* Tree rows show readable summaries and counts (no key/value dumps).
+* Layout is responsive and doesn’t jitter.
+
+---
+
+## Phase 2 — Tree rows + virtualization + selection model
+
+**Goal:** tasks/budget lists are fast and scalable.
+
+**Tasks**
+
+1. Implement `expandedNodeIds` state and row expand toggles.
+2. Implement `flattenVisibleNodes()` for Tasks section.
+3. Integrate TanStack Virtual for flat rows.
+4. Selection model:
+
+   * click row → set `selectedNodeId`
+   * inspector receives selected node payload ref
+5. Keyboard navigation (basic): up/down, enter expand.
+
+**Acceptance**
+
+* 1,000 task rows scroll smoothly.
+* Expand/collapse doesn’t re-render everything.
+* Selected row highlights and updates inspector header.
+
+---
+
+## Phase 3 — Inspector forms + Draft patch buffer (editable draft)
+
+**Goal:** edit nodes through inspector; draft banner; save/discard.
+
+**Tasks**
+
+1. Add RHF + zod infrastructure.
+2. Create `InspectorFormRegistry` with at least:
+
+   * Config
+   * Task
+   * Material line
+   * Labor line
+3. Implement patch buffer:
+
+   * On field change → generate patch ops (debounced)
+4. Add Dirty banner + Save Draft / Discard.
+5. Backend: `saveDraftPatch()` mutation/action (Path A) or mapping (Path B).
+6. Persist draft and reload view model.
+
+**Acceptance**
+
+* Edits appear immediately in UI (optimistic) and persist after Save Draft.
+* Discard reverts to last saved snapshot.
+* Validation works (required fields, numeric constraints).
+
+---
+
+## Phase 4 — Versions, history timeline, approval flow
+
+**Goal:** proper Draft → Approved lifecycle and history UI.
+
+**Tasks**
+
+1. Implement History section:
+
+   * timeline cards, tags, createdAt, summary
+2. Diff preview (MVP):
+
+   * list of changed fields / changed nodes count
+3. Request Approval (optional) → Review sheet/dialog
+4. Approve Draft:
+
+   * backend creates new approved version
+   * UI switches to approved and clears patch buffer
+5. Restore version:
+
+   * create new draft from old approved version or set active (your choice)
+
+**Acceptance**
+
+* Approved versions are immutable and readable.
+* Approval creates a new version with tags.
+* User can compare versions and restore.
+
+---
+
+## Phase 5 — Tombstones + Conflicts/Warn flags
+
+**Goal:** safe deletion and consistency helpers.
+
+**Tasks**
+
+1. Implement tombstone UI state:
+
+   * archived badge, muted row, restore action
+2. Implement delete actions:
+
+   * “Archive task” in row menu
+3. Conflicts detection:
+
+   * basic rules (e.g., deleted task references existing budget line)
+4. Conflicts section UI:
+
+   * callouts + “Resolve” actions (manual for v1)
+5. Graveyard list (optional in History).
+
+**Acceptance**
+
+* No hard delete by default.
+* Archived items can be restored.
+* Conflicts are visible and actionable (even if not auto-fixed).
+
+---
+
+## Phase 6 — Polish: search-in-element, focus mode, a11y, telemetry
+
+**Tasks**
+
+1. Outline search (filters visible flat rows)
+2. Focus mode (collapse others, show subtree)
+3. Better quick-add UX (+ Task, + Material)
+4. Accessibility pass (ARIA, focus management)
+5. Telemetry (optional): log usage events (expand, edit, approve)
+
+**Acceptance**
+
+* Users can find items quickly.
+* Keyboard and screen readers behave correctly.
+* UI feels “finished”.
+
+---
+
+# 6) Component list (build checklist)
+
+## Layout
+
+* `ElementsExplorerPage`
+* `ElementsExplorerLayout`
+* `ResizablePanels`
+
+## Sidebar
+
+* `ElementsSidebar`
+* `ElementsSearch`
+* `ElementsFilters`
+* `ElementListItemCard`
+
+## Center Outline
+
+* `ElementHeaderBar`
+* `OutlineSearchBar`
+* `SectionsAccordion`
+* `SectionHeaderRow`
+* `VirtualizedTreeList`
+* `TreeRow`
+* `RowBadges`
+* `RowMetrics`
+
+## Inspector
+
+* `InspectorPanel`
+* `InspectorHeader` (breadcrumb)
+* `InspectorFormRenderer`
+* `InspectorActionBar`
+* `ValidationSummary`
+
+## Versions & Conflicts
+
+* `VersionTimeline`
+* `VersionCard`
+* `DiffPreview`
+* `ConflictPanel`
+* `ConflictCallout`
+
+---
+
+# 7) Testing plan (practical and complete)
+
+## 7.1 Unit tests
+
+* `flattenVisibleNodes()` correctness:
+
+  * expand/collapse behavior
+  * ordering and depth
+  * archived node behavior
+* Patch op generation:
+
+  * dedupe ops
+  * correct paths and values
+* Diff generation (if client-side)
+
+## 7.2 Component tests (React Testing Library)
+
+* Accordion section headers show correct summary counts.
+* Selecting a row updates inspector.
+* Dirty banner appears on edit.
+* Save Draft triggers mutation and clears dirty state on success.
+* Discard resets fields.
+
+## 7.3 E2E tests (Playwright)
+
+Scenarios:
+
+1. Load element → expand Tasks → select task → edit title → save draft → reload page → persists
+2. Archive a task → appears archived → restore → reappears active
+3. Approve draft → version timeline updated → UI switches to approved view
+4. Large list perf sanity:
+
+   * navigate 1,000 rows (no crashes, scroll works)
+
+## 7.4 Performance tests (lightweight)
+
+* Render 2,000 rows and measure:
+
+  * scroll jank (qualitative)
+  * time to expand group (<150ms target)
+* Ensure no “render all children” regressions.
+
+## 7.5 Accessibility checks
+
+* Keyboard navigation works (tab/arrow/enter)
+* Focus is visible
+* Accordion and tree rows have proper roles/labels
+
+---
+
+# 8) Issues / pitfalls to pay attention to
+
+1. **Over-rendering**
+   Nested accordions inside expanded rows can blow up DOM. Keep the center panel mostly a virtualized flat list.
+
+2. **Draft confusion**
+   Users must always know if they’re editing draft vs viewing approved. Strong banner + status pill + version selector.
+
+3. **Patch merge conflicts**
+   Two sessions editing same element: backend should detect baseVersion mismatch and return a conflict object.
+
+4. **Schema drift**
+   Keep inspector registry strict; unknown fields should not silently drop. Prefer “Unsupported field” placeholders.
+
+5. **Deletion safety**
+   Tombstone by default; any permanent delete should be a separate action behind confirmation.
+
+6. **Computed summaries**
+   Avoid expensive recomputation on every keystroke. Memoize and compute summaries from the view model (not raw tables).
+
+7. **ID stability**
+   Tree node IDs must be stable across refreshes; otherwise selection and expansion states break.
+
+---
+
+# 9) Definition of Done (DoD)
+
+* Elements tab fully replaced by Element Explorer UI.
+* All core sections implemented with collapsible summaries.
+* Tasks section virtualized and stable with large datasets.
+* Inspector edits produce draft patches, Save/Discard works.
+* Approve flow creates immutable versions + timeline.
+* Tombstone + restore supported.
+* Automated tests (unit + RTL + Playwright) green in CI.
+

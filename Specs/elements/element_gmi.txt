@@ -1,0 +1,101 @@
+# Elements Explorer Redesign Plan (Gemini)
+
+## 1. Overview
+This plan outlines the refactoring of the Elements Tab into a **3-Pane Elements Explorer**, strictly adhering to the requirements in `Specs/elements tab view.txt`. The goal is to move from a document-style editor to a navigational explorer optimized for structure and speed.
+
+## 2. Architecture & State Management
+
+### 2.1 Global State (`ExplorerContext`)
+We need a more granular state than the current `ItemsContext`.
+*   **Path:** `studio-console/app/projects/[id]/_components/elements/explorer/ExplorerContext.tsx`
+*   **State:**
+    *   `selectedElementId`: Id<"projectItems"> | null
+    *   `selectedNodeId`: string | null (Global ID for Section, Task, Material, etc.)
+    *   `expandedNodeIds`: Set<string> (For the Center Outline tree)
+    *   `draftPatch`: Record<string, any> (Client-side draft buffer before saving)
+    *   `dirty`: boolean
+
+### 2.2 Data Model (View Model)
+We will create a helper to transform the `ItemSpec` and `ProjectItem` into a navigational tree.
+*   **Helper:** `useElementViewModel(itemId)`
+*   **Structure:**
+    *   `sections`: [
+        { id: "overview", label: "Overview", type: "section" },
+        { id: "config", label: "Configuration", type: "section" },
+        { id: "tasks", label: "Tasks", type: "section", children: [ ...taskNodes ] },
+        { id: "budget", label: "Budget", type: "section", children: [ ...materialNodes, ...laborNodes ] },
+        ...
+      ]
+
+---
+
+## 3. UI Components Implementation
+
+### 3.1 Layout (`ElementsExplorerPage`)
+*   **File:** `studio-console/app/projects/[id]/elements/page.tsx`
+*   **Structure:**
+    *   Container: `h-screen flex overflow-hidden`
+    *   **Pane 1 (Left):** `ElementsSidebar` (280px - 320px) - *Reuse refined FlowItemsPanel logic*
+    *   **Pane 2 (Center):** `ElementOutline` (Flex grow) - *New Core Component*
+    *   **Pane 3 (Right):** `InspectorPanel` (400px fixed/resizable) - *Context-sensitive Form*
+
+### 3.2 Center Pane: Element Outline (`ElementOutline`)
+The heart of the new design.
+*   **Header:** Breadcrumb (Project > Element Name), Status Badge, "Save Draft" / "Discard" banner.
+*   **Content:** A virtualized list (using `@tanstack/react-virtual` or simple map for v1 if list < 200 items) of `OutlineRow` components.
+*   **Row Types:**
+    *   **SectionHeaderRow:** "Tasks (12)", "Budget ($5,000)". Click to expand/collapse.
+    *   **TreeRow:** Indented items (Tasks, Materials).
+        *   **Visuals:** Icon, Title, Subtext/Badge (e.g., "Assigned to X", "Blocked").
+        *   **Interaction:** Click selects node -> Updates Inspector.
+
+### 3.3 Right Pane: Inspector (`InspectorPanel`)
+Replaces the monolithic `ItemEditorPanel`. It renders a specific form based on `selectedNodeId`.
+*   **Switch Logic:**
+    *   `node.type === 'config'`: Render `IdentityForm` + `QualityForm`
+    *   `node.type === 'task'`: Render `TaskDetailsForm`
+    *   `node.type === 'material'`: Render `MaterialLineForm`
+    *   `selection === null`: Render "Select an item to edit" empty state.
+*   **Action Bar:** Sticky footer with "Apply Changes" (Update Draft) if editing a specific node.
+
+---
+
+## 4. Implementation Steps
+
+### Step 1: Foundation (State & Context)
+1.  Create `ExplorerContext.tsx`.
+2.  Define `ElementViewModel` types in `lib/explorerTypes.ts`.
+3.  Implement `useElementViewModel` hook to parse `Doc<"projectItems">` + `ItemSpecV2` into the tree structure.
+
+### Step 2: The Shell
+1.  Rename existing `elements/page.tsx` to `elements/page.old.tsx` (safety).
+2.  Create new `elements/page.tsx` with the 3-pane CSS grid.
+3.  Port `FlowItemsPanel` logic into `ElementsSidebar` (stripping out the "Suggestions" view specific to Planning if needed, or keeping it if it fits).
+
+### Step 3: The Outline (Center Pane)
+1.  Create `ElementOutline.tsx`.
+2.  Implement `SectionsAccordion` component.
+3.  Implement `TaskTree` rendering inside the Tasks section.
+4.  Implement `BudgetTree` rendering inside the Budget section.
+5.  **Crucial:** Ensure clicking a row sets `selectedNodeId` in context.
+
+### Step 4: The Inspector (Right Pane)
+1.  Create `InspectorPanel.tsx`.
+2.  Break down `ItemEditorPanel` into smaller sub-forms:
+    *   `InspectorConfig.tsx`
+    *   `InspectorTask.tsx`
+    *   `InspectorBudget.tsx`
+3.  Wire up the `draftPatch` state to these forms.
+
+### Step 5: Draft & Persistence
+1.  Implement the "Unsaved Changes" Banner in `ElementOutline` header.
+2.  Wire "Save Draft" to `api.elementDrafts.upsert` (or `revisions.createDraft`).
+3.  Wire "Approve" to `api.revisions.approve`.
+
+---
+
+## 5. Migration & Verification
+*   **Verify:** Navigate to `/elements`.
+*   **Check:** Click "Tasks" section -> Tree expands -> Click Task A -> Inspector shows Task A details only.
+*   **Check:** Edit Task A title -> "Unsaved Changes" banner appears.
+*   **Check:** Switch elements -> Sidebar updates selection -> Outline refreshes.

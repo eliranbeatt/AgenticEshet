@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, internalMutation, mutation, query } from "./_generated/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { ItemSpecV2Schema } from "./lib/zodSchemas";
 import { buildBaseItemSpec, buildSearchText, parseItemSpec } from "./lib/itemHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -188,7 +188,7 @@ export const applyDraftOps = mutation({
     },
 });
 
-const logDraftApproval = internalMutation({
+export const logDraftApproval = internalMutation({
     args: {
         projectId: v.id("projects"),
         elementId: v.id("projectItems"),
@@ -232,8 +232,12 @@ export const approveFromDraft = action({
         ),
     },
     handler: async (ctx, args) => {
-        const draft = await ctx.db.get(args.draftId);
-        if (!draft || draft.projectId !== args.projectId) {
+        const data = await ctx.runQuery(api.elementDrafts.getWithApproved, {
+            projectId: args.projectId,
+            draftId: args.draftId,
+        });
+        const draft = data?.draft ?? null;
+        if (!draft) {
             throw new Error("Draft not found");
         }
 
@@ -252,7 +256,7 @@ export const approveFromDraft = action({
             revisionId: result.revisionId,
         });
 
-        await ctx.runMutation(logDraftApproval, {
+        await ctx.runMutation(internal.elementDrafts.logDraftApproval, {
             projectId: args.projectId,
             elementId: draft.elementId as Id<"projectItems">,
             draftId: draft._id,
@@ -260,7 +264,7 @@ export const approveFromDraft = action({
             approvedBy: "user",
         });
 
-        await ctx.db.delete(args.draftId);
+        await ctx.runMutation(api.elementDrafts.deleteDraft, { draftId: args.draftId });
         return { approvedRevisionId: result.revisionId };
     },
 });

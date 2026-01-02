@@ -87,7 +87,7 @@ function findApprovedRevision(revisions: Doc<"itemRevisions">[], approvedRevisio
 }
 
 export function ItemEditorPanel() {
-    const { projectId, selectedItemId, selectedItemMode, tabScope } = useItemsContext();
+    const { projectId, selectedItemId, selectedItemMode, setSelectedItemMode, tabScope } = useItemsContext();
     const project = useQuery(api.projects.getProject, { projectId });
     const itemData = useQuery(
         api.items.getItem,
@@ -101,9 +101,11 @@ export function ItemEditorPanel() {
     const allFacts = useQuery(api.factsV2.listFacts, factsEnabled ? { projectId } : "skip");
     const upsertRevision = useMutation(api.items.upsertRevision);
     const upsertDraft = useMutation(api.elementDrafts.upsert);
+    const approveDraft = useAction(api.elementDrafts.approveFromDraft);
     const populateFromFacts = useAction(api.agents.itemPopulator.populate);
 
     const [specDraft, setSpecDraft] = useState<ItemSpecV2 | null>(null);
+    const [initialSpecString, setInitialSpecString] = useState("");
     const [changeReason, setChangeReason] = useState("");
     const [isSaving, setIsSaving] = useState(false);
     const [isPopulating, setIsPopulating] = useState(false);
@@ -132,6 +134,7 @@ export function ItemEditorPanel() {
     useEffect(() => {
         if (!item) {
             setSpecDraft(null);
+            setInitialSpecString("");
             return;
         }
         const base = createEmptyItemSpec(item.title, item.typeKey);
@@ -141,33 +144,18 @@ export function ItemEditorPanel() {
         const merged = sourceSpec ? mergeItemSpec(base, sourceSpec) : base;
         setSpecDraft(merged);
         setChangeReason("");
+        setInitialSpecString(JSON.stringify(merged));
     }, [approvedRevision?.data, draftData?.data, draftRevision?.data, item, item?.title, item?.typeKey, selectedItemMode]);
 
-    if (!selectedItemId) {
-        return (
-            <div className="bg-white border rounded-lg shadow-sm p-4 text-sm text-gray-500">
-                Select an element to edit its details.
-            </div>
-        );
-    }
-
-    if (!item || !specDraft) {
-        return (
-            <div className="bg-white border rounded-lg shadow-sm p-4 text-sm text-gray-500">
-                Loading element details...
-            </div>
-        );
-    }
-
-    const identity = specDraft.identity;
-    const quality = specDraft.quality ?? { tier: "medium", notes: "" };
-    const budgeting = specDraft.budgeting ?? {};
-    const procurement = specDraft.procurement ?? { required: false, channel: "none" };
-    const studioWork = specDraft.studioWork ?? { required: false };
-    const logistics = specDraft.logistics ?? { transportRequired: false };
-    const onsite = specDraft.onsite ?? {};
-    const safety = specDraft.safety ?? {};
-    const quote = specDraft.quote ?? { includeInQuote: true };
+    const identity = specDraft?.identity ?? { title: "", typeKey: "" };
+    const quality = specDraft?.quality ?? { tier: "medium", notes: "" };
+    const budgeting = specDraft?.budgeting ?? {};
+    const procurement = specDraft?.procurement ?? { required: false, channel: "none" };
+    const studioWork = specDraft?.studioWork ?? { required: false };
+    const logistics = specDraft?.logistics ?? { transportRequired: false };
+    const onsite = specDraft?.onsite ?? {};
+    const safety = specDraft?.safety ?? {};
+    const quote = specDraft?.quote ?? { includeInQuote: true };
 
     const updateSpec = (next: ItemSpecV2) => setSpecDraft(next);
 
@@ -187,8 +175,12 @@ export function ItemEditorPanel() {
         });
     };
 
+    const specDraftString = useMemo(() => (specDraft ? JSON.stringify(specDraft) : ""), [specDraft]);
+    const isDirty = specDraftString !== initialSpecString;
+    const canSaveDraft = selectedItemMode === "draft" || !tabScope;
+
     const saveRevision = async () => {
-        if (selectedItemMode === "draft") {
+        if (canSaveDraft) {
             if (!selectedItemId || !specDraft) return;
             setIsSaving(true);
             try {
@@ -197,6 +189,7 @@ export function ItemEditorPanel() {
                     elementId: selectedItemId,
                     data: specDraft,
                 });
+                setSelectedItemMode("draft");
             } finally {
                 setIsSaving(false);
             }
@@ -233,6 +226,22 @@ export function ItemEditorPanel() {
         }
     };
 
+    if (!selectedItemId) {
+        return (
+            <div className="bg-white border rounded-lg shadow-sm p-4 text-sm text-gray-500">
+                Select an element to edit its details.
+            </div>
+        );
+    }
+
+    if (!item || !specDraft) {
+        return (
+            <div className="bg-white border rounded-lg shadow-sm p-4 text-sm text-gray-500">
+                Loading element details...
+            </div>
+        );
+    }
+
     return (
         <div className="bg-white border rounded-lg shadow-sm p-4 space-y-4">
             <div className="flex items-center justify-between gap-3">
@@ -264,17 +273,34 @@ export function ItemEditorPanel() {
                     <button
                         type="button"
                         className="text-sm px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                        disabled={(selectedItemMode !== "draft" && !tabScope) || isSaving}
+                        disabled={(!canSaveDraft && !tabScope) || !isDirty || isSaving}
                         onClick={saveRevision}
                     >
                         {isSaving
                             ? "Saving..."
-                            : selectedItemMode === "draft"
+                            : canSaveDraft
                                 ? "Save element draft"
                                 : tabScope
                                     ? `Save ${tabScope} draft`
                                     : "Save draft"}
                     </button>
+                    {draftData && (
+                        <button
+                            type="button"
+                            className="text-sm px-3 py-2 rounded border border-green-600 text-green-700 hover:bg-green-50"
+                            disabled={isDirty}
+                            onClick={async () => {
+                                await approveDraft({
+                                    projectId,
+                                    draftId: draftData._id,
+                                    tabScope: tabScope ?? "planning",
+                                });
+                                setSelectedItemMode("approved");
+                            }}
+                        >
+                            Approve draft
+                        </button>
+                    )}
                 </div>
             </div>
 

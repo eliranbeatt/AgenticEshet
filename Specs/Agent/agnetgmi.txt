@@ -1,0 +1,144 @@
+# Magnetic Studio — Agentic Migration Plan (AgnetGMI)
+
+This document outlines the revised plan to implement the **Single Autonomous Controller** architecture, migrating from the current hardcoded agents (`flow.ts`, `orchestrator.ts`) to a **Skills Registry** driven system.
+
+## 1. Infrastructure & Gap Analysis
+
+### 1.1 Existing Infrastructure (Leverage)
+*   **`skills` Table**: Exists in `schema.ts`. Currently unused/empty. Will be the core registry.
+*   **`itemChangeSets` Table**: Exists. Matches the "Pending ChangeSet" requirement.
+*   **`trelloMappings` Table**: Exists. Base for Trello integration.
+*   **`flowWorkspaces` Table**: Exists. Partial match for "Workspace State", but `projectWorkspaces` is richer.
+*   **`agentRuns` Table**: Exists. Useful for the "Run Timeline".
+*   **`structuredQuestionSessions` Table**: Exists. Matches the "Question Gate" requirement.
+
+### 1.2 Missing Infrastructure (Build)
+*   **`projectWorkspaces` Table**: Required. Needs fields for `stagePinned`, `skillPinned`, `artifactsIndex`, `progressChecklist`. `flowWorkspaces` is too text-centric.
+*   **`printing` Tables**: `elements.printing` (or linked table), `printFiles`, `printQaRuns`, `printQaFindings`.
+*   **`trelloSyncPlans` Table**: For storing the deterministic plan before execution.
+
+## 2. Master Skills List (Target State)
+
+The goal is to move logic from `convex/agents/*.ts` into `skills` table rows.
+
+### A. Orchestration
+1.  `controller.autonomousPlanner` (The Brain)
+2.  `router.stageChannelSkill`
+3.  `router.scopeResolver`
+4.  `ux.suggestedActionsTop3`
+5.  `ux.threadSummarizer`
+
+### B. Ideation (Migration from `ideation.ts` / `flow.ts`)
+6.  `ideation.questionsPack5`
+7.  `ideation.elementIdeas`
+8.  `ideation.romBudgetEstimator`
+9.  `ideation.styleConstraintsExtractor`
+
+### C. Planning (Migration from `planning.ts`)
+10. `planning.questionsPack5`
+11. `planning.milestonesPhasesBuilder`
+12. `planning.taskBreakdownQuoteLevel`
+13. `planning.bomAndLaborEstimator`
+14. `planning.pricingStrategyPack`
+
+### D. Solutioning (Migration from `solutioning.ts`)
+15. `solutioning.questionsPack5`
+16. `solutioning.buildOptionsGenerator`
+17. `solutioning.atomicTaskDecomposer`
+18. `solutioning.valueEngineeringSubstitutions`
+19. `solutioning.methodPlaybookWriter`
+
+### E. Procurement
+20. `procurement.shoppingOrganizerAndRoute`
+21. `procurement.deepOnlinePriceHunter`
+22. `procurement.materialsMethodsDeepResearch`
+23. `procurement.procurementPlan`
+
+### F. Tasks / Scheduling
+24. `scheduling.taskOptimizerDependenciesAndDates`
+25. `tasks.taskEnhancer`
+26. `tasks.dependenciesCritic`
+
+### G. Accounting / Quote
+27. `accounting.costModelBuilder`
+28. `accounting.quoteDraftGenerator`
+29. `accounting.actualsIngestAndReconcile`
+30. `accounting.planVsActualAnalyzer`
+
+### H-L. Specialized (Critique, Risk, Logistics, Retro)
+*   Standardize these as per the original spec.
+
+### N. Printing (New)
+53. `printing.specBuilder`
+54. `printing.questionsPack5`
+55. `printing.fileMetadataExtractor` (Non-LLM Tool)
+56. `printing.qaValidator`
+57. `printing.vendorPrepPack`
+58. `printing.orderTrackerUpdater`
+
+### O. Trello (New)
+59. `trello.syncTranslator`
+60. `trello.syncPlanValidator`
+61. `trello.syncExecutor` (Non-LLM Tool)
+
+## 3. Revised Development Plan
+
+### Phase 1: Infrastructure & Schema (Foundational)
+*   **Schema Update**:
+    *   Add `projectWorkspaces` table.
+    *   Add `printing` related tables (`printFiles`, `printQaRuns`, `printQaFindings`).
+    *   Add `trelloSyncPlans` table.
+*   **Skills Registry Seed**:
+    *   Create a seeder script (`convex/skills/seed.ts`) to populate the `skills` table with the Prompts and JSON Schemas from the `Specs/Agent` docs.
+    *   Ensure all `inputSchema` and `outputSchema` are valid JSON Schema objects.
+
+### Phase 2: The Controller Runtime
+*   **Skill Runner (`convex/lib/skills.ts`)**:
+    *   Generic function to load a skill by key, validate input, call LLM (using `convex/lib/openai.ts` or similar), validate output.
+*   **Controller Logic (`convex/agents/controller.ts`)**:
+    *   Implement the "Autonomy Loop":
+        1.  Read `projectWorkspaces` & `items`.
+        2.  Check for "Gates" (Questions needed? Pending ChangeSet?).
+        3.  If blocked -> return "Stop" state.
+        4.  If free -> Select next skill (using `router.stageChannelSkill` or logic).
+        5.  Execute Skill.
+        6.  Update Workspace.
+        7.  Repeat (up to N steps).
+*   **Tools Integration**:
+    *   Wrap `changeset.propose` (existing) as a tool callable by the Controller.
+    *   Wrap `research.start` (existing) as a tool.
+
+### Phase 3: The "Studio" UI (Single Page)
+*   **Layout**: Create `studio-console/app/projects/[id]/studio/page.tsx`.
+    *   **Top Bar**: Stage Pin, Skill Pin, Channel Mode (Auto/Questions/Free).
+    *   **Left**: Thread List (`projectConversations`).
+    *   **Center**:
+        *   **Chat View**: Standard message stream.
+        *   **Timeline View**: Vertical list of `agentRuns` events (Skill Called -> Artifact Generated -> Gate Hit).
+    *   **Right**: Artifact Tabs (Overview, Elements, Tasks, *Printing*, *Trello*, Changes).
+*   **Interaction**:
+    *   "Continue (Auto)" button triggers `controller.run()`.
+    *   "Answer Questions" panel for the Question Gate.
+    *   "Review Changes" panel for the Approval Gate.
+
+### Phase 4: Printing & Trello Module
+*   **Printing**:
+    *   Implement `convex/printing.ts` (backend actions).
+    *   Implement `printing.fileMetadataExtractor` (using a library to read PDF/Image headers).
+    *   UI: "Printing" tab in the Artifact Inspector.
+*   **Trello**:
+    *   Implement `convex/trello.ts` (sync logic).
+    *   Use `trello.syncTranslator` skill to generate the plan.
+    *   Use `trello.syncExecutor` to apply it.
+
+### Phase 5: Migration & Cleanup
+*   **Deprecate Old Agents**:
+    *   Once `controller` + `skills` are stable, mark `ideation.ts`, `planning.ts` etc. as legacy.
+    *   Redirect UI calls from old tabs to the new "Studio" controller if possible, or keep them as specific "Skill Runs".
+*   **Refactor `orchestrator.ts`**:
+    *   Make it a thin wrapper that calls the new Controller.
+
+## 4. Immediate Next Steps
+1.  **Write Schema**: Update `studio-console/convex/schema.ts` with missing tables.
+2.  **Seed Skills**: Create the seed file and populate the DB.
+3.  **UI Scaffold**: Create the empty `studio/page.tsx` with the 3-pane layout.

@@ -1,0 +1,549 @@
+Awesome — yes, **Printing QA** and **TrelloSyncTranslator** absolutely belong in the same Skills Registry, and they fit perfectly into the “single autonomous controller + tools/skills” architecture.
+
+Below you’ll get:
+
+1. **Updated master Skills List** (everything you and I discussed, plus the 2 you pasted: Printing + Trello).
+2. **Full dev plan**: architecture, data, tools, UI/UX (manual + autonomous + stage selection), flows, prompts, evaluation, and a concrete build roadmap.
+
+---
+
+# 1) Master Skills List (complete, updated)
+
+I’m listing these as stable `skillKey`s you can seed into `/admin/skills`. Grouped by **Stage** and **Domain**.
+
+## A. Orchestration & UX meta-skills
+
+1. `controller.autonomousPlanner` *(the “single brain” controller)*
+2. `router.stageChannelSkill` *(Auto mode routing)*
+3. `router.scopeResolver` *(project vs element vs tasks vs accounting; element name resolution)*
+4. `ux.suggestedActionsTop3` *(3 buttons + “More”)*
+5. `ux.threadSummarizer` *(short thread summary + pending items)*
+
+## B. Ideation
+
+6. `ideation.questionsPack5` *(Structured Questions: exactly 5)*
+7. `ideation.elementIdeas`
+8. `ideation.romBudgetEstimator`
+9. `ideation.styleConstraintsExtractor`
+
+## C. Planning
+
+10. `planning.questionsPack5` *(exactly 5)*
+11. `planning.milestonesPhasesBuilder` *(סטודיו/הובלה/התקנה/יום צילום/פירוק/אדמין)*
+12. `planning.taskBreakdownQuoteLevel`
+13. `planning.bomAndLaborEstimator`
+14. `planning.pricingStrategyPack`
+
+## D. Solutioning
+
+15. `solutioning.questionsPack5` *(exactly 5)*
+16. `solutioning.buildOptionsGenerator` *(build vs buy vs outsource)*
+17. `solutioning.atomicTaskDecomposer`
+18. `solutioning.valueEngineeringSubstitutions`
+19. `solutioning.methodPlaybookWriter`
+
+## E. Procurement / Shopping / Research
+
+20. `procurement.shoppingOrganizerAndRoute`
+21. `procurement.deepOnlinePriceHunter`
+22. `procurement.materialsMethodsDeepResearch`
+23. `procurement.procurementPlan`
+
+## F. Tasks / Scheduling
+
+24. `scheduling.taskOptimizerDependenciesAndDates`
+25. `tasks.taskEnhancer` *(naming, tags, estimates completeness)*
+26. `tasks.dependenciesCritic`
+
+## G. Accounting / Quote / Actuals
+
+27. `accounting.costModelBuilder`
+28. `accounting.quoteDraftGenerator`
+29. `accounting.actualsIngestAndReconcile`
+30. `accounting.planVsActualAnalyzer`
+
+## H. Critique / Risk / Change Requests
+
+31. `critique.planCritic`
+32. `risk.riskRegisterBuilder`
+33. `change.customerChangeRequestHandler`
+34. `change.budgetAndScopeOptimizer`
+35. `decision.decisionLogWriter`
+
+## I. Elements / Knowledge / Facts
+
+36. `elements.generateElementsFromBrief`
+37. `elements.updateElementsChangeSet`
+38. `knowledge.updateCurrentKnowledge`
+39. `facts.extractAndMapFacts`
+
+## J. Consistency / Reconciliation / Versions / Tombstones
+
+40. `reconcile.tasksAccountingConsistencyFixer`
+41. `reconcile.tombstoneManager`
+42. `versions.diffAndTagSummarizer`
+43. `changeset.reviewer`
+
+## K. Logistics / Install / Safety
+
+44. `logistics.installAndSitePlanner`
+45. `safety.complianceChecklist`
+
+## L. Retro (end of project)
+
+46. `retro.bootstrap`
+47. `retro.questionsPack5` *(exactly 5)*
+48. `retro.lessonsLearnedWriter`
+49. `retro.updateStudioMemory`
+
+## M. Quality guardrails
+
+50. `quality.promptAndSchemaValidator`
+51. `quality.outputSanityChecker`
+52. `research.queryPlanner`
+
+---
+
+## N. NEW: Printing dimension + Print QA (added)
+
+53. `printing.specBuilder` *(helps define printing components & requirements per element)*
+54. `printing.questionsPack5` *(exactly 5: printing-specific blockers)*
+55. `printing.fileMetadataExtractor` *(extract size/pixels/DPI/color mode where possible)*
+56. `printing.qaValidator` *(pass/warn/fail findings + verdict)*
+57. `printing.vendorPrepPack` *(what to send to בית דפוס / printer: spec + files checklist)*
+58. `printing.orderTrackerUpdater` *(ordered/delivered/installed status + purchase linkage)*
+
+---
+
+## O. NEW: Trello integration “translator” skill (added)
+
+59. `trello.syncTranslator` *(your TrelloSyncTranslator deterministic JSON plan generator)*
+60. `trello.syncPlanValidator` *(checks plan idempotency rules, missing IDs, unsafe deletes)*
+61. `trello.syncExecutor` *(non-LLM tool/executor that runs the plan against Trello API — deterministic)*
+
+---
+
+# 2) Full Dev Plan (architecture + UI + flows + prompts + tasks)
+
+## 2.1 The simplest “one autonomous agent” architecture that still stays safe
+
+### Core idea
+
+A **single Controller** can run **one or more skills** per iteration, but it stops at **two gates**:
+
+* **Question Gate**: it needs input → asks exactly **5 structured questions**.
+* **Approval Gate**: it wants to change your data → creates **Pending ChangeSet** → waits.
+
+### Components
+
+1. **Controller Runtime** (single agent)
+
+   * reads workspace state
+   * selects next steps
+   * calls skills (tools)
+   * stops at gates
+
+2. **Skills Registry** (DB rows editable in `/admin/skills`)
+
+   * prompt template + schemas + tool policy
+   * stage tags + channel tags
+   * versioned
+
+3. **Workspace State** (per project + thread)
+
+   * the evolving “working memory” of the plan: brief facts, open questions, artifacts pointers, last decisions, etc.
+
+4. **Tools / Executors** (non-LLM)
+
+   * apply ChangeSets
+   * run deep research jobs
+   * generate buying suggestions
+   * compute schedule
+   * Trello Sync executor
+   * print metadata extraction job
+
+---
+
+## 2.2 Data & Schema additions
+
+### A) `projectWorkspaces` (recommended)
+
+One doc per `{projectId, threadId}`.
+
+Fields (high-level):
+
+* `stagePinned?: ideation|planning|solutioning|...`
+* `skillPinned?: skillKey | null`
+* `channelPinned?: structured|free|auto`
+* `facts`: key-value facts accumulated (brief, measurements, constraints)
+* `openQuestions`: current 5-question set + history
+* `artifactsIndex`: pointers to latest artifacts (plan/tasks/procurement/accounting/quote/risk/printing/trello)
+* `pendingChangeSetId?: ...`
+* `progressChecklist`: which milestones are “done” (brief, elements, tasks, procurement, accounting, quote, critique…)
+
+### B) `questionSessions`
+
+To enforce “exactly 5 per turn” and avoid repeats.
+
+* `sessionId, projectId, threadId, stage`
+* `asked[]` / `answered[]`
+* `lastFocus`, `missingCritical[]`
+
+### C) `pendingChangeSets`
+
+* `projectId, threadId, createdAt, createdBy`
+* `skillKey, stage`
+* `patchOps[]`
+* `summary`, `riskFlags[]`
+* `status: PENDING|APPLIED|DISCARDED`
+
+### D) Printing schema + tables (use exactly what you pasted)
+
+Implement:
+
+* `elements.printing` (optional)
+* `printFileGroups`
+* `printFiles`
+* `printQaRuns`
+* `printQaFindings`
+  Optional:
+* `printProfiles`
+* `vendors.printing`
+
+**Important MVP note:** keep printing uploads separate from RAG ingestion. These are operational files, not knowledge chunks.
+
+### E) Trello sync tables (likely already exist)
+
+You already have `convex/trelloSync.ts` and a Trello UI page, so add:
+
+* `trelloSyncPlans` (store last generated plan JSON + hash)
+* `trelloMappings` (taskId -> cardId + contentHash)
+* `trelloSyncRuns` (audit trail)
+
+---
+
+## 2.3 “Single UI” design (manual + autonomous + stage selection)
+
+### Page: `/projects/[id]/studio`
+
+This replaces the 3 tabs.
+
+#### Top bar
+
+* **Stage** dropdown: `Auto / Ideation / Planning / Solutioning / Procurement / Scheduling / Critique / Retro / Printing / Trello`
+* **Skill** dropdown: `Auto / (filtered list)`
+* **Channel** toggle: `Auto / Structured Questions / Free Chat`
+* **Primary CTA**:
+
+  * `Continue (Auto)` (runs controller loop until it hits a gate)
+  * or `Run Skill` if a specific skill is selected
+* **Apply Pending Changes** button (when exists)
+
+#### Conversation header (your request)
+
+* **3 suggested actions buttons** + **More**
+
+  * computed by `ux.suggestedActionsTop3`
+  * always stage-aware
+
+#### Main layout
+
+* Left: thread list + search
+* Center: chat + step-by-step “run timeline”
+* Right: Artifact Inspector tabs:
+
+  * Overview / Facts
+  * Elements
+  * Tasks
+  * Schedule
+  * Procurement
+  * Research
+  * Accounting
+  * Quote
+  * Risks
+  * **Printing**
+  * **Trello**
+  * Pending Changes (diff)
+
+#### “Watch the process”
+
+The controller emits `agentRuns` events:
+
+* `selectedSkill`
+* `calledTool`
+* `generatedArtifact`
+* `hitQuestionGate`
+* `hitApprovalGate`
+
+UI shows it like a vertical timeline.
+
+---
+
+## 2.4 Manual vs Autonomous workflows
+
+### Manual mode (pin stage/skill)
+
+* User pins Stage + Skill and runs exactly that.
+* Great for expert workflows.
+
+### Autonomous mode (default)
+
+* User writes a brief.
+* User hits **Continue (Auto)**.
+* Controller loops:
+
+  1. ask 5 questions (if needed)
+  2. generate artifacts (tasks/procurement/accounting/quote)
+  3. critique/improve
+  4. propose ChangeSets for approval
+  5. stop at gates
+
+---
+
+# 3) Prompts (Controller + skill families + the 2 new skills)
+
+You don’t want 61 totally different styles. You want:
+
+* **One global studio voice + rules**
+* A **small per-skill delta** section
+* Strict output schemas
+
+## 3.1 Controller prompt (final form)
+
+Use the controller prompt we already defined (single brain, gates, Hebrew default, NIS, Approved elements, etc.) and add:
+
+* “Stage may be pinned by user; respect it.”
+* “If Printing tab is active or printing.enabled exists, prioritize printing QA steps.”
+
+## 3.2 Question Pack prompt (shared by all `*questionsPack5`)
+
+```text
+You are a Structured Questions skill.
+Hard rule: output EXACTLY 5 questions (1–5). No more, no less.
+
+Goal: choose the 5 highest-impact questions that unblock the next artifact for this stage.
+
+Constraints:
+- Ask at most 1 open-ended question in the pack.
+- Prefer measurable constraints: sizes, deadlines, budget range, install window, venue rules, approvals.
+- Never repeat questions already answered in questionSession. If user partially answered, refine (don’t repeat).
+
+Output JSON:
+{
+  "recap": "up to 4 lines in Hebrew",
+  "questions": [
+    {"id":"Q1","text":"...","type":"select|text|number|date","options":[]},
+    {"id":"Q2","text":"...","type":"...","options":[]},
+    {"id":"Q3","text":"...","type":"...","options":[]},
+    {"id":"Q4","text":"...","type":"...","options":[]},
+    {"id":"Q5","text":"...","type":"...","options":[]}
+  ],
+  "whyThese5": ["short bullets"],
+  "factsToWrite": []
+}
+```
+
+## 3.3 Printing QA prompt (your “Print QA agent”)
+
+```text
+You are “PrintQAValidator”.
+
+Goal:
+Given a PrintComponent spec + attached printFiles metadata, validate print readiness.
+
+Rules:
+- Output must be strict JSON; no prose.
+- Never assume a file is correct if metadata is missing; create findings about missing metadata.
+- Use expected spec snapshot (size, bleed, minDpi, preferred color space, cutting mode).
+- Produce pass/warn/fail findings with ruleId and suggestions.
+- Final verdict per component: APPROVED / NEEDS_FIXES / REJECTED.
+
+Checks (minimum):
+- Size match (including bleed if required)
+- Aspect ratio mismatch
+- DPI at final size >= minDpi (for raster)
+- Color space mismatch (CMYK vs RGB)
+- Missing cut path when cutting requires it
+- PDF: missing embedded fonts / linked assets (when detectable)
+- Transparency/overprint warnings (when detectable)
+
+Output JSON:
+{
+  "componentVerdict": "APPROVED|NEEDS_FIXES|REJECTED",
+  "summary": "short Hebrew",
+  "score": 0,
+  "findings": [
+    {
+      "ruleId": "DPI_TOO_LOW",
+      "severity": "INFO|WARN|FAIL",
+      "message": "...",
+      "suggestion": "...",
+      "measurements": { "dpi": 72, "minDpi": 150 }
+    }
+  ]
+}
+```
+
+## 3.4 TrelloSyncTranslator prompt (exactly your pasted rules)
+
+Keep it as-is, but I’d add one more guardrail:
+
+* “Never mutate Trello outside the plan; executor is the only thing that touches Trello.”
+
+And define the output schema `TrelloSyncPlan` with:
+
+* `operations[]` (ENSURE_LISTS, ENSURE_LABELS, UPSERT_CARD, UPSERT_CHECKLIST, SET_CUSTOM_FIELD, etc.)
+* `warnings[]`
+* `mappingPatches[]`
+
+---
+
+# 4) Tooling (non-LLM executors) you’ll implement
+
+## 4.1 Skill runner
+
+`skill.run(projectId, threadId, skillKey, input)`:
+
+* loads prompt + schema
+* assembles context pack
+* calls model with schema validation
+* returns result + artifact suggestions + optional ChangeSet proposal
+
+## 4.2 Controller runner
+
+`controller.continue(projectId, threadId)`:
+
+* reads workspace + stage/skill pins
+* routes or uses pinned skill
+* may run multiple skills in sequence
+* stops at question/approval gates
+
+## 4.3 Print metadata extraction job
+
+When a file is uploaded into `printFiles`:
+
+* compute page size (PDF)
+* compute pixel size (PNG/JPG)
+* compute DPI at expected size (if both known)
+* attempt color mode detection where possible
+
+Store into `printFiles.extraction`.
+
+## 4.4 Print QA persistence
+
+* create `printQaRuns` + `expectedSpecSnapshot`
+* write `printQaFindings`
+* update `elements.printing.overallStatus`
+
+## 4.5 Trello sync pipeline
+
+* Translator skill generates `trelloSyncPlan`
+* Validator checks constraints/idempotency
+* Executor runs plan via Trello REST API
+* Update `trelloMappings` with new `contentHash`
+
+---
+
+# 5) Evaluation & optimization (build it like a product)
+
+### Online metrics
+
+* # of question turns until first usable plan
+* # of manual overrides vs auto
+* how often “Apply ChangeSet” is pressed vs discarded
+* quote generation success rate
+* % of tasks with estimates and dependencies
+* printing QA: % approved on first run; common fail rules
+* trello sync: % operations SKIP vs update
+
+### Offline evaluation sets
+
+Create “true projects”:
+
+* brief → expected tasks coverage
+* printing component → expected findings outcomes
+* task set → expected trello plan stability
+
+---
+
+# 6) Concrete build roadmap (epics + tasks)
+
+## Epic 1 — Skills Registry v1 (foundation)
+
+* Create/extend `skills` schema: stageTags, channelTags, toolPolicy, schemas, versions
+* Seed all skill rows (from the list above)
+* Admin UI: edit prompt + schema + enable/disable
+
+## Epic 2 — Studio single page UI
+
+* `/projects/[id]/studio` layout
+* Top bar: stage pin + skill pin + channel pin
+* Suggested Actions bar: 3 buttons + More drawer
+* Run timeline (agentRuns events)
+* Artifact inspector tabs + viewers
+
+## Epic 3 — Workspace + Question sessions
+
+* projectWorkspaces CRUD
+* questionSessions enforcing “exactly 5”
+* UI structured questions answering panel
+
+## Epic 4 — Controller autonomy loop
+
+* `controller.continue`
+* stop gates (questions, pending changes)
+* support “run multiple skills per iteration”
+* persist artifacts references in workspace
+
+## Epic 5 — ChangeSet system
+
+* pendingChangeSets table
+* diff viewer
+* apply/discard
+* tombstone integration
+
+## Epic 6 — Procurement + Research integration
+
+* shopping organizer artifact view (route + carts)
+* deep online research runs
+* price observations writeback
+* procurement plan builder
+
+## Epic 7 — Accounting + Quote
+
+* cost model builder
+* quote generator artifacts
+* plan vs actual analyzer
+* actuals ingest (manual entry + purchase linking)
+
+## Epic 8 — Printing module
+
+* `elements.printing` UI
+* print file upload UI
+* extraction job
+* Print QA run UI (verdict badge + open findings)
+* purchase/vendor linkage
+* statuses (READY_FOR_QA → NEEDS_FIXES → APPROVED_FOR_PRINT…)
+
+## Epic 9 — Trello sync
+
+* Trello context/config UI (board/lists/labels/custom fields mapping)
+* Translator skill output panel (plan preview)
+* Validator warnings
+* Executor run + mapping updates
+* idempotent SKIP behavior
+
+## Epic 10 — Retro agent
+
+* retro bootstrap + 5 question loop
+* plan vs actual + lessons learned report
+* update studio memory (prices/vendor ratings/templates)
+
+## Epic 11 — Quality guardrails
+
+* prompt+schema validator (pre-run)
+* output sanity checker (post-run)
+* regression snapshots for skills
+* logging + dashboards
+
+

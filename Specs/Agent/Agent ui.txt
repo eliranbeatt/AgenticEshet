@@ -1,0 +1,200 @@
+Got it — you’re describing a **second structured “Stop” view** called **Suggestions**, plus a small upgrade to the **Questions** stop with two submit modes.
+
+Below is a concrete UI + flow spec that plugs into the same “Run → Stop → Resolve → Continue” model.
+
+---
+
+## 1) New structured Stop type: Suggestions
+
+### What it is
+
+A **Stop=SUGGESTIONS** mode where the agent presents a **curated set of suggestions** (stage-specific), each with a short explanation, and you can:
+
+* Select **one / many / none**
+* Optionally add **free-text instructions** at the bottom (e.g., “all bad, propose cheaper options under 2,000 NIS”)
+* Submit in two ways:
+
+  * “Apply selections” (agent uses them as chosen direction)
+  * “Regenerate suggestions” (agent reruns the suggestions skill using your instructions)
+
+### Where it sits in flow
+
+The agent can stop for suggestions:
+
+* **before questions** (“here are options, pick direction”)
+* **after questions** (“based on your answers, choose from these”)
+* **before approval** (“choose plan/materials approach, then I’ll create a ChangeSet”)
+
+---
+
+## 2) Suggestions UI (center panel mode)
+
+### Header
+
+* `Stop #N • Suggestions • Stage: Ideation/Planning/Solutioning`
+* Filter chips (optional): `Low cost`, `Fast`, `Premium`, `Reuse past`, `No print`, `Outdoor`, etc.
+* Buttons: `Back to logs` (does not resume), `Save for later`
+
+### Body layout
+
+**A) Grouped sections (stage-specific)**
+Each section is a collapsible group with a count:
+
+* Ideation: **Element ideas**, **Design directions**, **Reference styles**, **Budget tiers**
+* Planning: **Project plan options**, **Per-element plans**, **Missing elements you should add**, **Milestones**
+* Solutioning: **Build approaches**, **Material options**, **Purchase sources/vendors**, **Risk warnings**, **Optimizations**
+
+**B) Suggestion cards**
+Each card includes:
+
+* Title + 1-line summary
+* “Why this suggestion” (2–3 bullets)
+* Estimated impact (tiny badges): `₪`, `time`, `risk`, `complexity`
+* Dependencies (e.g., “requires printing file”, “needs transport”, “needs test piece”)
+* Actions preview (what it would change): “Adds 1 element”, “Creates 12 tasks”, “Adds materials list”, etc.
+* Checkbox (multi-select)
+
+**C) Selection bar (sticky)**
+
+* `Selected: 0` … shows selected chips
+* Buttons:
+
+  * **Use selected**
+  * **Use none (continue)**
+  * **Regenerate with instructions**
+
+### Bottom: Free-text instruction bar (required by you)
+
+A persistent input like:
+
+* Placeholder: “Give feedback or constraints (e.g., budget cap, materials to avoid, style direction, vendors to prefer)…”
+* Supports quick chips: `Cheaper`, `Faster`, `More premium`, `More options`, `Only local vendors`, `No PVC`, etc.
+
+This text is always sent with the submission payload (even empty).
+
+---
+
+## 3) What gets passed back to the agent (selection payload)
+
+When you submit, the UI sends a structured object like:
+
+```ts
+type SuggestionSubmitMode = "USE_SELECTION" | "USE_NONE" | "REGENERATE";
+
+type SuggestionSelection = {
+  mode: SuggestionSubmitMode;
+  stage: "IDEATION" | "PLANNING" | "SOLUTIONING";
+  suggestionSetId: string;              // the batch the agent showed
+  selectedSuggestionIds: string[];      // can be []
+  rejectedSuggestionIds: string[];      // optional but useful for learning
+  freeTextInstruction: string;          // your bottom bar
+};
+```
+
+**Agent behavior rules**
+
+* `USE_SELECTION`: treat selected items as explicit choices → likely produce a **ChangeSet** next (or next questions)
+* `USE_NONE`: proceed without adopting any suggestion → usually return to logs and continue reasoning
+* `REGENERATE`: run the suggestions skill again, using your instruction + rejected IDs to avoid repeats
+
+---
+
+## 4) “Suggestions skills” per stage (what the agent runs)
+
+You’ll have a dedicated skill family that only does one thing: **propose options** in a structured format.
+
+* `suggestions.ideation` → suggests **elements** + design directions
+* `suggestions.planning` → suggests **plans** (project-level + per-element) and missing components
+* `suggestions.solutioning` → suggests **how to build**, **materials**, **vendors/sources**, risk/efficiency ideas
+
+Each skill returns a **SuggestionSet**:
+
+```ts
+type SuggestionKind =
+  | "ELEMENT_IDEA"
+  | "PROJECT_PLAN"
+  | "ELEMENT_PLAN"
+  | "BUILD_APPROACH"
+  | "MATERIAL_OPTION"
+  | "VENDOR_SOURCE"
+  | "RISK_WARNING"
+  | "OPTIMIZATION";
+
+type Suggestion = {
+  id: string;
+  kind: SuggestionKind;
+  title: string;
+  summary: string;
+  rationaleBullets: string[];
+  impact?: { cost?: "LOW"|"MID"|"HIGH"; time?: "LOW"|"MID"|"HIGH"; risk?: "LOW"|"MID"|"HIGH" };
+  dependencies?: string[];
+  previewActions?: string[]; // human-readable (“creates 8 tasks”, “adds material list”)
+  // optional: machine actions if you want “select → generate ChangeSet”
+  proposedActions?: Array<{ type: string; payload: any }>;
+};
+
+type SuggestionSet = {
+  suggestionSetId: string;
+  stage: "IDEATION" | "PLANNING" | "SOLUTIONING";
+  sections: Array<{ title: string; items: Suggestion[] }>;
+};
+```
+
+---
+
+## 5) Integrating Suggestions into the same Stop-based state machine
+
+Add one more stop:
+
+* **STOP_SUGGESTIONS**
+
+Typical sequences:
+
+* **Ideation flow**
+
+  * Logs → Suggestions (pick elements) → Questions (refine) → Suggestions (2nd pass) → Approval (create element drafts)
+* **Planning flow**
+
+  * Questions → Suggestions (choose plan template) → Approval (ChangeSet tasks/milestones)
+* **Solutioning flow**
+
+  * Questions → Suggestions (materials/build/vendor options) → Approval (ChangeSet materials/tasks/vendors)
+
+Also: Suggestions can be **postponed** to the Pending queue like approvals/artifacts.
+
+---
+
+## 6) Upgrade: Questions UI needs two submit buttons
+
+Inside **Stop=QUESTIONS**, replace “Submit” with two explicit CTAs:
+
+### Button A — “Send answers & get more questions”
+
+* Meaning: “stay in structured-question mode; ask me the next batch”
+* Expected agent response: either
+
+  * returns another **STOP_QUESTIONS** immediately (next 5), or
+  * decides it has enough and moves to logs / suggestions / approval
+
+### Button B — “Send & continue”
+
+* Meaning: “answers are final for now; continue the run”
+* Expected agent response: return to **Logs view**, proceed until next stop
+
+Payload difference:
+
+```ts
+type QuestionSubmitIntent = "ASK_MORE_QUESTIONS" | "CONTINUE_RUN";
+
+type QuestionsSubmit = {
+  stopId: string;
+  answers: Record<string, any>;
+  intent: QuestionSubmitIntent;
+};
+```
+
+UI detail: when you click **A**, you should see a fast transition:
+
+* “Answer sent → generating next questions…” (still same center mode)
+  instead of bouncing back to logs.
+

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
     ChevronDown,
     ChevronRight,
@@ -90,7 +90,7 @@ type DraftLabor = {
 };
 
 export function ElementsOutlinePanel() {
-    const { projectId, selectedItemId } = useItemsContext();
+    const { projectId, selectedItemId, tabScope } = useItemsContext();
     const [expandedSections, setExpandedSections] = useState<Set<OutlineSectionKey>>(
         () => new Set(DEFAULT_EXPANDED),
     );
@@ -107,6 +107,7 @@ export function ElementsOutlinePanel() {
         selectedItemId ? { projectId, elementId: selectedItemId } : "skip",
     );
     const upsertDraft = useMutation(api.elementDrafts.upsert);
+    const approveDraft = useAction(api.elementDrafts.approveFromDraft);
 
     const content = useMemo(() => {
         if (!details) return null;
@@ -372,6 +373,20 @@ export function ElementsOutlinePanel() {
                         className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded shadow-sm hover:bg-blue-700 disabled:opacity-50"
                     >
                         {isSavingDraft ? "Saving..." : "Save element draft"}
+                    </button>
+                    <button
+                        onClick={async () => {
+                            if (!draftData || !selectedItemId) return;
+                            await approveDraft({
+                                projectId,
+                                draftId: draftData._id,
+                                tabScope: tabScope ?? "planning",
+                            });
+                        }}
+                        disabled={!draftData}
+                        className="text-xs px-3 py-1.5 bg-green-600 text-white rounded shadow-sm hover:bg-green-700 disabled:opacity-50"
+                    >
+                        Approve element
                     </button>
                     <button
                         onClick={expandAll}
@@ -838,9 +853,8 @@ function OutlineSection({
 }) {
     return (
         <div className="border-b last:border-0">
-            <button
-                type="button"
-                className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left hover:bg-gray-50"
+            <div
+                className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left hover:bg-gray-50 cursor-pointer"
                 onClick={onToggle}
             >
                 <div className="flex items-center gap-2">
@@ -864,7 +878,7 @@ function OutlineSection({
                     {!isOpen && <div className="hidden sm:flex">{summary}</div>}
                     <span className="text-gray-400">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
                 </div>
-            </button>
+            </div>
             {isOpen && (
                 <div className="px-4 pb-4">
                     <div className="mb-3">{summary}</div>

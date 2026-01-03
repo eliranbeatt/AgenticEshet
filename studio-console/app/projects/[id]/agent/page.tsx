@@ -258,7 +258,7 @@ export default function AgentPage() {
     };
 
     return (
-        <div className="flex flex-col gap-4 min-h-[85vh]">
+        <div className="flex flex-col gap-4 h-[calc(100vh-2rem)] min-h-0 overflow-hidden">
             <div className="bg-white border rounded-lg shadow-sm p-4 flex flex-wrap items-center gap-4 justify-between">
                 <div className="flex flex-wrap items-center gap-3">
                     <label className="text-sm flex items-center gap-2">
@@ -500,8 +500,8 @@ export default function AgentPage() {
                     </div>
                 </div>
 
-                <div className="grid grid-rows-2 gap-4 min-h-0">
-                    <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0">
+                <div className="grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 min-h-0">
+                    <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0 overflow-hidden">
                         <div className="p-3 border-b flex items-center justify-between">
                             <div>
                                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Agent</div>
@@ -566,7 +566,7 @@ export default function AgentPage() {
                                 </button>
                             </div>
                         </div>
-                        <div className="flex-1 min-h-0 relative">
+                        <div className="flex-1 min-h-0 relative overflow-hidden">
                             {!selectedConversation ? (
                                 <div className="p-4 text-sm text-gray-500">
                                     Select a conversation or create a new one to begin.

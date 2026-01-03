@@ -1,0 +1,365 @@
+Absolutely — a **Retro Agent** is a perfect “closing loop” to make your studio smarter every project.
+
+Below is a **detailed plan** for a **Retro stage + agent** that:
+
+* understands the finished project automatically from your data,
+* analyzes **plan vs actual** (costs + time + scope changes),
+* asks you **exactly 5 guided questions per turn** (adaptive, high-signal),
+* and produces **actionable learnings** that update your studio memory (prices, vendors, task templates, risk checklists).
+
+---
+
+## 1) Where this lives in the new unified Studio Agent
+
+### Add a new Stage
+
+* **Retro** (רטרו / סיכום פרויקט)
+
+### Add skills to the Skill dropdown
+
+* `Auto`
+* `Retro · Questions (5)`
+* `Retro · Plan vs Actual Analysis`
+* `Retro · Lessons Learned Writer`
+* `Retro · Update Studio Memory (prices/vendors/templates)`
+
+Router rule:
+
+* If project status is “Done / Completed” **or** user says “סיימנו / סיכום / רטרו” → stage = Retro.
+
+---
+
+## 2) What the Retro Agent produces (outputs)
+
+The Retro Agent generates a **Retro Report artifact** + **memory updates**:
+
+### A) Retro Report (human readable)
+
+Sections (fixed):
+
+1. **Project Snapshot** (what was built, dates, location)
+2. **What went well**
+3. **What didn’t / friction**
+4. **Top 5 surprises**
+5. **Plan vs Actual** (cost + time + scope)
+6. **Biggest drivers** (what caused overruns/savings)
+7. **Vendor scorecard**
+8. **Estimation mistakes** (where your heuristics were wrong)
+9. **Reusable assets / inventory gained**
+10. **Next time playbook** (concrete changes)
+
+### B) Studio Memory Updates (structured)
+
+* `priceObservations[]` (actual purchase prices + date + vendor)
+* `vendorRatings[]` (lead time, reliability, quality)
+* `taskTemplateUpdates[]` (duration heuristics + missing tasks)
+* `riskChecklistUpdates[]` (new recurring risks + mitigations)
+* `processNotes[]` (what to change in workflow/UI)
+
+These go into your “Management Hub” / catalogs so future planning becomes better.
+
+---
+
+## 3) Plan vs Actual: how we compute it (even if data is partial)
+
+Retro needs a **baseline plan** and **actuals**.
+
+### A) Baseline plan (the “Plan” side)
+
+Choose the baseline automatically:
+
+* the **approved quote version** (best)
+* else the latest **approved plan/tasks/accounting** snapshot before execution started
+
+Store a pointer:
+
+* `project.baselineRevisionId` (or `baselineElementVersionTag`)
+
+### B) Actuals (the “Actual” side)
+
+Actual data can come from:
+
+* **Purchases/receipts** you logged (best)
+* actual hours per task (if you track)
+* vendor invoices
+* manual “actual totals” entered at end (fallback)
+
+**Key point:** the retro agent will detect missing actuals and use the 5-question loop to fill gaps.
+
+### C) Core deltas it computes
+
+* **Cost delta**: planned vs actual by category:
+
+  * חומרים (materials)
+  * עבודה (labor)
+  * ספקי משנה (subcontractors)
+  * הובלה/לוגיסטיקה (transport)
+  * הדפסות / בית דפוס (prints)
+  * אדמין/רזרבות (overhead/risk)
+* **Time delta**:
+
+  * planned install hours vs actual
+  * planned studio build days vs actual
+* **Scope delta**:
+
+  * tasks added/removed
+  * change requests count
+  * elements revised count
+
+---
+
+## 4) The 5-question mechanic (Retro Structured Questions)
+
+Retro questions must be **adaptive**, always **exactly 5 per turn**, and always chosen to maximize insight.
+
+### Retro question packs (in priority order)
+
+The agent picks the next pack based on what’s missing / largest uncertainty.
+
+**Pack 1: Baseline + actual totals (only if missing)**
+
+1. What was the final delivery date vs planned?
+2. Total actual cost ₪?
+3. Biggest overrun category (choose)?
+4. Biggest unexpected issue (short)?
+5. Would you do the same build approach again? (yes/no + why)
+
+**Pack 2: Labor reality**
+
+1. How many studio days did you actually spend?
+2. How many workers on average per day?
+3. Where did labor spike? (select)
+4. Any rework loops? (what + why)
+5. One process improvement for labor efficiency?
+
+**Pack 3: Purchasing + vendors**
+
+1. Which 3 purchases were the most painful? (items)
+2. Any vendor delays? (who)
+3. Any quality surprises? (what)
+4. Any price surprises? (what)
+5. Which vendors would you reuse? (list)
+
+**Pack 4: Estimation mistakes**
+
+1. What did you underestimate most? (time/materials/logistics)
+2. What did you overestimate?
+3. Which task was missing from the plan?
+4. What assumption was wrong?
+5. What heuristic should change for next time?
+
+**Pack 5: Template + playbook extraction**
+
+1. What’s the “golden checklist” for this project type?
+2. What are the top 3 risks next time?
+3. What should be automated in the app?
+4. What reusable asset did you create?
+5. What would you tell “future Eliran” in one paragraph?
+
+---
+
+## 5) Skills list (Retro stage) — full new list with explanation
+
+### 1) `retro.bootstrap`
+
+**Purpose:** initial understanding + missing data detection
+**Does:**
+
+* reads project summary + elements + tasks + accounting + purchases
+* finds baseline plan
+* computes preliminary plan vs actual if possible
+* chooses the *first* 5 questions
+  **Outputs:** `retroDraft + questions(5)`
+
+### 2) `retro.questionsPack`
+
+**Purpose:** iterative guided discovery
+**Rule:** ALWAYS output exactly 5 questions
+**Does:**
+
+* updates retro facts from your answers
+* re-evaluates where uncertainty is highest
+* asks the next best 5 questions
+  **Outputs:** updated `retroState + questions(5)`
+
+### 3) `retro.planVsActualAnalyzer`
+
+**Purpose:** produce the clean “numbers truth”
+**Does:**
+
+* generates breakdown tables
+* highlights top drivers
+* flags anomalies (“labor doubled because install window changed”)
+  **Outputs:** `deltaTables + insights`
+
+### 4) `retro.lessonsLearnedWriter`
+
+**Purpose:** final narrative report for you (and optionally client case study)
+**Does:**
+
+* writes the Retro Report sections
+* produces “Do this next time” playbook
+  **Outputs:** `retroReport`
+
+### 5) `retro.updateStudioMemory`
+
+**Purpose:** convert learnings into reusable structured data
+**Does:**
+
+* extracts price observations
+* updates vendor ratings
+* proposes template changes (task library + estimates)
+* adds new risk checklist items
+  **Outputs:** `memoryPatch` (not auto-applied; approval optional)
+
+---
+
+## 6) Prompts for Retro agents (copy/paste ready)
+
+### Global Retro System Header (used by all Retro skills)
+
+```text
+You are the “Retro Agent” for a real-world build studio.
+
+Goal:
+- Extract lessons learned from a finished project.
+- Compute Plan vs Actual (cost/time/scope).
+- Produce reusable improvements: price memory, vendor ratings, template tasks, risk checklists.
+
+Hard rules:
+- When Channel = Structured Questions: ask EXACTLY 5 questions, numbered 1-5.
+- Questions must maximize insight; never waste a question.
+- If actual data is missing, ask questions to fill it instead of guessing.
+- Clearly separate: Facts (known) vs Assumptions vs Insights.
+- Output must match the JSON schema exactly. No extra keys.
+```
+
+### Skill prompt: `retro.bootstrap`
+
+```text
+Task:
+1) Summarize what this project was (elements + plan shape).
+2) Identify baseline plan version.
+3) Compute preliminary Plan vs Actual if possible.
+4) Ask the first EXACTLY 5 questions that unlock the most insight.
+
+Return JSON:
+{
+  "assistantSummary": "short hebrew summary",
+  "retroState": {
+    "baselineRef": "string",
+    "knownFacts": {},
+    "unknowns": [],
+    "planVsActual": { "cost": {}, "time": {}, "scope": {} },
+    "topSuspicions": []
+  },
+  "questions": [
+    {"id":"Q1","text":"...","type":"select|number|text","options":[]},
+    {"id":"Q2","text":"...","type":"...","options":[]},
+    {"id":"Q3","text":"...","type":"...","options":[]},
+    {"id":"Q4","text":"...","type":"...","options":[]},
+    {"id":"Q5","text":"...","type":"...","options":[]}
+  ]
+}
+```
+
+### Skill prompt: `retro.questionsPack`
+
+```text
+Given:
+- retroState (facts + unknowns)
+- user answers
+Update retroState and ask the next EXACTLY 5 best questions.
+
+Rules:
+- Never repeat answered questions.
+- Always choose questions that reduce the biggest uncertainty or unlock the biggest insight.
+- Prefer quantitative questions when doing plan vs actual.
+
+Return the same JSON shape as bootstrap (assistantSummary + retroState + questions[5]).
+```
+
+### Skill prompt: `retro.planVsActualAnalyzer`
+
+```text
+Compute clean plan vs actual tables and top drivers.
+
+Return JSON:
+{
+  "tables": {
+    "costByCategory": [{"category":"...", "planned":0, "actual":0, "delta":0, "notes":"..."}],
+    "timeByPhase": [{"phase":"...", "plannedHours":0, "actualHours":0, "deltaHours":0}],
+    "scopeChanges": [{"type":"taskAdded|taskRemoved|elementRevised", "count":0, "why":"..."}]
+  },
+  "drivers": [{"driver":"...", "impact":"cost|time|both", "why":"...", "fixNextTime":"..."}],
+  "risksForNextTime": [{"risk":"...", "mitigation":"..."}]
+}
+```
+
+### Skill prompt: `retro.lessonsLearnedWriter`
+
+```text
+Write the Retro Report in Hebrew, structured, action-oriented.
+
+Return JSON:
+{
+  "retroReport": {
+    "snapshot": "...",
+    "whatWentWell": ["..."],
+    "whatDidnt": ["..."],
+    "topSurprises": ["..."],
+    "planVsActualSummary": "...",
+    "vendorNotes": ["..."],
+    "estimationMistakes": ["..."],
+    "reusableAssets": ["..."],
+    "nextTimePlaybook": ["..."]
+  }
+}
+```
+
+### Skill prompt: `retro.updateStudioMemory`
+
+```text
+Convert retroState + retroReport into structured memory updates.
+Do not apply automatically; propose patches.
+
+Return JSON:
+{
+  "priceObservations": [{"item":"...", "vendor":"...", "price":0, "date":"YYYY-MM-DD", "notes":"..."}],
+  "vendorRatings": [{"vendor":"...", "score":1-5, "notes":"..."}],
+  "taskTemplateUpdates": [{"templateKey":"...", "change":"...", "why":"..."}],
+  "riskChecklistUpdates": [{"risk":"...", "mitigation":"...", "when":"..."}],
+  "processNotes": ["..."]
+}
+```
+
+---
+
+## 7) UI additions for Retro (minimal + powerful)
+
+Add a new right-panel tab: **Retro**
+
+* “Start Retro” button (only if project status done)
+* shows:
+
+  * Retro progress (answered questions count)
+  * plan vs actual summary tiles
+  * “Generate Report” button
+  * “Apply memory updates” (optional approvals)
+
+Also add a “Project Complete” banner in Overview:
+
+* “Mark as completed”
+* “Start Retro (15 min)”
+
+---
+
+## 8) 3 extra Retro sub-skills (optional but super useful)
+
+1. **Client Case Study Writer**
+   Turns retro into a short portfolio write-up (no internal costs).
+2. **Vendor RFQ Feedback Generator**
+   Generates a feedback email/message to vendors (good/bad).
+3. **Automation Opportunities Extractor**
+   Produces a prioritized list of app automations based on pain points.
+

@@ -1,0 +1,269 @@
+Got it. This is a **“Suggested Actions” launcher** that sits on every conversation/thread and gives you **3 best next agent buttons + “More”** to open all options.
+
+Below is a detailed plan that plugs directly into the **Studio Agent + Skills Registry + Router** architecture we designed.
+
+---
+
+## 1) UX spec: 3 suggested buttons + “More”
+
+### Where it appears
+
+**In the conversation header** (top of the chat area), for every thread:
+
+* **Suggested Actions Bar** (always visible)
+
+  * 3 primary buttons (the best next actions)
+  * **More** button → opens a drawer/modal with all skills
+
+### Button design (each suggestion)
+
+Each of the 3 buttons shows:
+
+* **Label** (short): “Run Ideation Questions”, “Generate Tasks”, “Create Quote”
+* **Micro subtitle** (optional, smaller): “Missing 3 quote fields”, “No tasks yet”, “Actuals missing”
+* **Icon** by category (Elements / Tasks / Accounting / Quote / Procurement / Retro)
+
+### “More” drawer
+
+* Search input
+* Groups by category:
+
+  * Ideation, Planning, Solutioning
+  * Elements
+  * Tasks + Schedule
+  * Accounting + Quote
+  * Procurement + Research
+  * Retro
+  * Knowledge / Admin
+* Filters: Stage (Auto/Ideation/Planning/Solutioning/Retro), Channel (Structured/Chat)
+
+### When suggestions refresh
+
+* On new thread creation
+* After each user message + assistant response
+* When stage changes (Auto → pinned stage)
+* When you apply/discard a ChangeSet
+* When key project state changes (quote approved, project completed, etc.)
+
+---
+
+## 2) How we decide the “Top 3” suggestions
+
+You want “most likely for me” — that means we should use **project state + stage + your workflow preferences** (elements-first, tasks+accounting consistent, structured questions in packs of 5, approval workflow).
+
+### Core signals the engine uses
+
+**Stage-aware signals**
+
+* Ideation: no elements / weak brief / missing constraints
+* Planning: elements exist but tasks missing or incomplete; accounting missing; quote not generated
+* Solutioning: element exists but too high-level; missing build method; risks unresolved
+* Execution: tasks exist but no schedule/dependencies; procurement not planned
+* Retro: project marked done or actual accounting exists → prompt analysis
+
+**Domain completeness signals**
+
+* Elements coverage: count, missing required fields, drafts pending
+* Tasks: missing estimates, missing dependencies, missing milestone mapping
+* Accounting: missing labor lines/material lines, pricing buffers not applied
+* Quote: quote not generated / outdated vs plan version
+* Actuals: purchases logged? actual labor logged? invoices? (or missing)
+* Pending ChangeSet: exists → suggestion becomes “Review & Apply Changes”
+
+**User friction heuristics**
+
+* If you’re stuck in questions: suggest “Generate Elements / Generate Tasks”
+* If you keep editing: suggest “Critique Plan / Change Request Handler”
+* If procurement tasks exist: suggest “Shopping Organizer”
+* If schedule messy: suggest “Task Optimizer + Scheduler”
+
+---
+
+## 3) Architecture: “Suggestion Agent” + rule pre-filter
+
+Do this as a 2-step system (fast + robust):
+
+### Step A — Deterministic pre-filter (no LLM)
+
+Generate a candidate list of skills from the registry:
+
+* Filter by stage (pinned stage if exists; otherwise inferred stage)
+* Filter by channel if user pinned it
+* Remove skills not enabled / not allowed
+* Score with simple rules (missing tasks → +30 for planning tasks skill, etc.)
+
+This makes the system reliable and prevents “random” suggestions.
+
+### Step B — LLM reranker (“Suggestion Agent” skill)
+
+From the top ~10 candidates, ask the LLM to pick the best **3** with short rationales, ensuring diversity:
+
+* not all 3 are “questions”
+* not all 3 are “accounting”
+* pick the *best next step*, not just “possible”
+
+This makes it feel “smart” and personalized.
+
+---
+
+## 4) Backend contract
+
+### New Convex action
+
+`studio.getSuggestedActions({ projectId, threadId, uiState })`
+
+**Returns:**
+
+```json
+{
+  "stage": "ideation|planning|solutioning|retro|auto",
+  "suggestions": [
+    {
+      "skillKey": "planning.questions",
+      "label": "שאלות לתכנון (5)",
+      "category": "Planning",
+      "why": "חסרים נתונים קריטיים להצעת מחיר",
+      "primaryOutcome": "5 שאלות + עדכון עובדות",
+      "confidence": 0.84,
+      "ctaStyle": "primary"
+    },
+    {
+      "skillKey": "planning.taskBreakdown",
+      "label": "בנה משימות להצעת מחיר",
+      "category": "Tasks",
+      "why": "יש אלמנטים אבל אין פירוק עבודה",
+      "primaryOutcome": "משימות + הערכות זמן",
+      "confidence": 0.78,
+      "ctaStyle": "secondary"
+    },
+    {
+      "skillKey": "accounting.quote",
+      "label": "צור הצעת מחיר",
+      "category": "Quote",
+      "why": "קיימים חומרים/עבודה אבל אין מסמך הצעה",
+      "primaryOutcome": "טיוטת Quote",
+      "confidence": 0.73,
+      "ctaStyle": "secondary"
+    }
+  ],
+  "more": {
+    "groups": [
+      { "group": "Ideation", "skills": ["ideation.questions", "ideation.elements"] },
+      { "group": "Planning", "skills": ["planning.questions", "planning.taskBreakdown", "accounting.estimate"] }
+    ]
+  }
+}
+```
+
+### Where it’s called
+
+* On thread load + after each message
+* Or: include suggestions as part of `runStudioTurn()` response (recommended to reduce calls)
+
+---
+
+## 5) UI implementation plan (React/shadcn)
+
+### Components
+
+* `SuggestedActionsBar`
+
+  * renders 3 buttons + “More”
+  * shows tooltip for `why`
+* `SkillPickerDrawer`
+
+  * searchable list + grouped accordion
+* `SkillRunButton`
+
+  * triggers `runStudioTurn({ forcedSkillKey })`
+
+### UX rules
+
+* Clicking a suggestion runs the skill immediately
+* If the skill is “question skill” → it outputs **exactly 5** structured questions (your rule)
+* If a pending ChangeSet exists:
+
+  * suggestion #1 becomes **“Review & Apply Pending Changes”**
+  * and “More” still shows all skills
+
+---
+
+## 6) Suggestion Agent prompt (the reranker)
+
+This is the prompt template for the LLM rerank step.
+
+```text
+You are the “Suggested Actions Agent” for a production studio project.
+
+Goal:
+Pick the 3 most likely next actions the user should run now.
+
+Inputs:
+- stage (auto or pinned)
+- project state summary (elements/tasks/accounting/quote/actuals/pendingChangeSet)
+- last user message + last assistant message
+- candidateSkills[] with metadata (category, stageTags, channelTags, description)
+
+Rules:
+- Return EXACTLY 3 suggestions.
+- Prefer actions that unblock the next concrete step.
+- Ensure diversity: don’t return 3 question skills unless everything is missing.
+- If pendingChangeSet exists, suggestion #1 must be “Review & Apply Changes”.
+- Keep rationales short and specific (point to missing artifact).
+
+Output JSON:
+{
+  "suggestions": [
+    {
+      "skillKey": "...",
+      "label": "...",
+      "category": "...",
+      "why": "...",
+      "primaryOutcome": "...",
+      "confidence": 0.0
+    },
+    { ... },
+    { ... }
+  ]
+}
+```
+
+---
+
+## 7) What the 3 suggestions usually look like (examples)
+
+### Ideation stage (early)
+
+1. **Ideation Questions (5)** – “brief missing size/location/budget”
+2. **Generate Element Ideas** – “need options for client”
+3. **ROM Budget Estimator** – “need fast range before deep planning”
+
+### Planning stage (quote time)
+
+1. **Planning Questions (5)** – “missing install window & approvals”
+2. **Task Breakdown (quote-level)** – “elements exist, no task plan”
+3. **Accounting Estimator / Quote Draft** – “need numbers + margin pack”
+
+### Execution stage (already building)
+
+1. **Shopping Organizer + Route** – “purchase tasks exist but not grouped”
+2. **Task Optimizer + Scheduler** – “dependencies missing, timeline unclear”
+3. **Risk Register** – “high risk tasks with no mitigations”
+
+### Project done
+
+1. **Retro Questions (5)** – “actual totals missing”
+2. **Plan vs Actual Analyzer** – “generate deltas and drivers”
+3. **Update Studio Memory** – “store price observations and vendor score”
+
+---
+
+## 8) Acceptance criteria (so it’s not “nice-to-have”, it’s shippable)
+
+1. Every conversation shows **exactly 3 suggestion buttons** + More.
+2. Suggestions update after each run and reflect stage/project state.
+3. Clicking a suggestion runs the correct skill (manual override).
+4. If pending changes exist, the #1 suggestion is “Review & Apply”.
+5. “More” drawer shows **all skills**, searchable and grouped.
+6. Telemetry: record `suggestions_shown`, `suggestion_clicked`, `skill_ran`, `applied_changes`.
+

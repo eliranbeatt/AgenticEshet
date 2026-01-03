@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
+import { STUDIO_PHASES, TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
 import {
     evidenceSchema,
     factValueSchema,
@@ -1104,6 +1104,15 @@ export default defineSchema({
         ),
         tags: v.optional(v.array(v.string())),
         assignee: v.optional(v.union(v.string(), v.null())),
+        studioPhase: v.optional(
+            v.union(
+                v.literal(STUDIO_PHASES[0]),
+                v.literal(STUDIO_PHASES[1]),
+                v.literal(STUDIO_PHASES[2]),
+                v.literal(STUDIO_PHASES[3]),
+                v.literal(STUDIO_PHASES[4])
+            )
+        ),
 
         // AI metadata
         source: v.union(v.literal("user"), v.literal("agent")),
@@ -1127,7 +1136,8 @@ export default defineSchema({
     })
         .index("by_project", ["projectId"])
         .index("by_project_item", ["projectId", "itemId"])
-        .index("by_project_parentTask", ["projectId", "parentTaskId"]),
+        .index("by_project_parentTask", ["projectId", "parentTaskId"])
+        .index("by_project_phase", ["projectId", "studioPhase"]),
 
     // 3. TRELLO MAPPINGS: Task <-> Trello Card
     trelloMappings: defineTable({

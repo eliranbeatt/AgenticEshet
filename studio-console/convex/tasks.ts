@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
-import { TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
+import { STUDIO_PHASES, TASK_STATUSES, TASK_CATEGORIES, TASK_PRIORITIES } from "./constants";
 
 export const listByProject = query({
     args: { projectId: v.id("projects"), itemId: v.optional(v.id("projectItems")) },
@@ -76,6 +76,15 @@ export const createTask = mutation({
         workstream: v.optional(v.string()),
         isManagement: v.optional(v.boolean()),
         source: v.optional(v.union(v.literal("user"), v.literal("agent"))),
+        studioPhase: v.optional(
+            v.union(
+                v.literal(STUDIO_PHASES[0]),
+                v.literal(STUDIO_PHASES[1]),
+                v.literal(STUDIO_PHASES[2]),
+                v.literal(STUDIO_PHASES[3]),
+                v.literal(STUDIO_PHASES[4])
+            )
+        ),
         // Gantt fields
         estimatedDuration: v.optional(v.number()), // in milliseconds
         dependencies: v.optional(v.array(v.id("tasks"))),
@@ -115,6 +124,7 @@ export const createTask = mutation({
             isManagement: args.isManagement,
             source: args.source ?? "user",
             taskNumber,
+            studioPhase: args.studioPhase ?? STUDIO_PHASES[0],
             estimatedDuration: args.estimatedDuration,
             dependencies: args.dependencies,
             estimatedMinutes: args.estimatedMinutes,
@@ -164,6 +174,15 @@ export const updateTask = mutation({
         itemSubtaskId: v.optional(v.string()),
         workstream: v.optional(v.string()),
         isManagement: v.optional(v.boolean()),
+        studioPhase: v.optional(
+            v.union(
+                v.literal(STUDIO_PHASES[0]),
+                v.literal(STUDIO_PHASES[1]),
+                v.literal(STUDIO_PHASES[2]),
+                v.literal(STUDIO_PHASES[3]),
+                v.literal(STUDIO_PHASES[4])
+            )
+        ),
 
         // Gantt fields
         startDate: v.optional(v.number()),

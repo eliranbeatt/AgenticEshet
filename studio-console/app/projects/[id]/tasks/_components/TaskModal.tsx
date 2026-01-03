@@ -8,10 +8,13 @@ import { AgentChatThread } from "../../_components/chat/AgentChatThread";
 import { ImageGeneratorPanel } from "../../_components/images/ImageGeneratorPanel";
 import { ImagePicker } from "../../_components/images/ImagePicker";
 import { ItemSpecV2 } from "@/lib/items";
+import { STUDIO_PHASES, StudioPhase } from "@/convex/constants";
+import { useTaskUpdater } from "../useTaskUpdater";
 
 const statusOptions: Array<Doc<"tasks">["status"]> = ["todo", "in_progress", "blocked", "done"];
 const categoryOptions: Array<Doc<"tasks">["category"]> = ["Logistics", "Creative", "Finance", "Admin", "Studio"];
 const priorityOptions: Array<Doc<"tasks">["priority"]> = ["High", "Medium", "Low"];
+const phaseOptions: StudioPhase[] = [...STUDIO_PHASES];
 
 export function TaskModal({
     projectId,
@@ -29,7 +32,7 @@ export function TaskModal({
     elementsById?: Map<string, Doc<"projectItems">>;
 }) {
     const ensureThread = useMutation(api.chat.ensureThread);
-    const updateTask = useMutation(api.tasks.updateTask);
+    const { updateTaskShared } = useTaskUpdater();
     const patchElement = useMutation(api.revisions.patchElement);
     const sendAiPatch = useAction(api.agents.taskEditor.send);
     const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
@@ -44,6 +47,7 @@ export function TaskModal({
     const [status, setStatus] = useState<Doc<"tasks">["status"]>(task.status);
     const [category, setCategory] = useState<Doc<"tasks">["category"]>(task.category);
     const [priority, setPriority] = useState<Doc<"tasks">["priority"]>(task.priority);
+    const [studioPhase, setStudioPhase] = useState<StudioPhase | "">(task.studioPhase ?? "");
     const [questId, setQuestId] = useState<Id<"quests"> | "">(task.questId ?? "");
     const [estimatedMinutes, setEstimatedMinutes] = useState<string>(
         task.estimatedMinutes === null || task.estimatedMinutes === undefined ? "" : String(task.estimatedMinutes)
@@ -146,6 +150,7 @@ export function TaskModal({
             status !== task.status ||
             category !== task.category ||
             priority !== task.priority ||
+            studioPhase !== (task.studioPhase ?? "") ||
             questId !== (task.questId ?? "") ||
             linkedItemId !== (task.itemId ?? "") ||
             linkedSubtaskId !== (task.itemSubtaskId ?? "") ||
@@ -164,6 +169,7 @@ export function TaskModal({
         priority,
         questId,
         status,
+        studioPhase,
         stepsText,
         subtasks,
         task,
@@ -188,13 +194,14 @@ export function TaskModal({
         const nextSubtaskId = elementsCanonical ? (ensureTaskKey ?? previousTaskKey) : (linkedSubtaskId || undefined);
 
         if (!draftOnlyMode) {
-            await updateTask({
+            await updateTaskShared({
                 taskId: task._id,
                 title: title.trim() || task.title,
                 description: description.trim() ? description : undefined,
                 status,
                 category,
                 priority,
+                studioPhase: studioPhase || undefined,
                 questId: questId || undefined,
                 itemId: linkedItemId || undefined,
                 itemSubtaskId: nextSubtaskId,
@@ -324,6 +331,25 @@ export function TaskModal({
                                     {statusOptions.map((s) => (
                                         <option key={s} value={s}>
                                             {s}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                                    Phase
+                                </label>
+                                <select
+                                    className="w-full border rounded px-3 py-2 text-sm bg-white"
+                                    value={studioPhase}
+                                    onChange={(e) => setStudioPhase(e.target.value as StudioPhase)}
+                                    disabled={draftOnlyMode}
+                                >
+                                    <option value="">Unassigned</option>
+                                    {phaseOptions.map((phase) => (
+                                        <option key={phase} value={phase}>
+                                            {phase}
                                         </option>
                                     ))}
                                 </select>

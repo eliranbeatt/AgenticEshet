@@ -1,0 +1,94 @@
+# Implementation Plan: Trello Sync Agent Redesign
+
+## 1. Objective
+Redesign the existing Trello synchronization system to follow the "Agent + Executor" pattern. This moves the sync logic from hardcoded TypeScript into an LLM-based Agent that generates a deterministic plan, which is then executed by a robust Executor.
+
+## 2. Architecture
+
+### Current State (To be replaced)
+- `convex/trelloSync.ts`: Contains everything (Schema, Auth, Trello API calls, Sync Logic).
+- Logic is hardcoded: Loop tasks -> Calculate Hash -> PUT/POST.
+
+### Target State
+1.  **Agent (`convex/agents/trelloSyncAgent.ts`)**:
+    -   **Input**: Project Tasks, Existing Mappings, Trello Context (Board/Lists/Labels).
+    -   **Process**: LLM analyzes state and generates a "Sync Plan".
+    -   **Output**: `TrelloSyncPlan` (JSON) containing specific operations (`UPSERT_CARD`, `ENSURE_LIST`, etc.).
+
+2.  **Executor (`convex/lib/trelloExecutor.ts`)**:
+    -   **Input**: `TrelloSyncPlan`.
+    -   **Process**: Executes the plan against Trello API with retries, rate limiting, and error handling.
+    -   **Output**: `TrelloExecutionReport` (Results + produced IDs).
+
+3.  **Orchestrator (`convex/trelloSync.ts`)**:
+    -   **Role**: The Convex Action exposed to the UI.
+    -   **Flow**:
+        1.  Load Project Data (Tasks, Mappings, Config).
+        2.  Call Agent to generate Plan.
+        3.  Call Executor to run Plan.
+        4.  Update `trelloMappings` table based on Report.
+
+## 3. File Structure Changes
+
+| File | Status | Description |
+| :--- | :--- | :--- |
+| `studio-console/convex/lib/trelloTypes.ts` | **New** | Shared TypeScript types (`TrelloSyncPlan`, `TrelloOp`, etc.). |
+| `studio-console/convex/lib/trelloExecutor.ts` | **New** | The TypeScript logic to execute the plan (pure TS + fetch). |
+| `studio-console/convex/agents/trelloSyncAgent.ts` | **New** | LLM interaction logic (Prompt + Zod Schema). |
+| `studio-console/convex/trelloSync.ts` | **Refactor** | Updates the `sync` action to orchestrate the new components. |
+| `studio-console/convex/schema.ts` | **Verify** | Ensure `trelloMappings` has necessary fields (looks good). |
+
+## 4. Implementation Steps
+
+### Step 1: Define Types (`convex/lib/trelloTypes.ts`)
+Create a shared types file to avoid circular dependencies and ensure contract safety.
+-   **Content**: Copy `TrelloSyncPlan`, `TrelloOp`, `TrelloExecutionReport`, `TrelloContext` definitions from `Specs/Trello.txt` and `Specs/trello executor.txt`.
+
+### Step 2: Implement Executor (`convex/lib/trelloExecutor.ts`)
+Implement the engine that talks to Trello.
+-   **Source**: `Specs/trello executor.txt`.
+-   **Key Components**:
+    -   `TrelloClient` class (Auth, Fetch, Retries).
+    -   `executeTrelloSyncPlan` function (Iterate ops, handle `ENSURE_*` and `UPSERT_*`).
+    -   **Note**: Ensure it handles the "runtime variables" (e.g., resolving `$list.todo` to a real ID).
+
+### Step 3: Implement Agent (`convex/agents/trelloSyncAgent.ts`)
+Create the "Brain" of the operation.
+-   **Imports**: `callChatWithSchema` (from `../lib/openai`), Zod (from `zod`).
+-   **Components**:
+    -   `TrelloSyncPlanSchema` (Zod definition matching the JSON output).
+    -   `generateTrelloSyncPlan` (Internal Action).
+        -   **Prompt**: Use the system prompt from `Specs/Trello.txt`.
+        -   **Context Construction**: Format tasks, mappings, and board context into a clean JSON string for the LLM.
+
+### Step 4: Refactor Orchestrator (`convex/trelloSync.ts`)
+Update the main entry point.
+-   **Keep**: `saveConfig`, `verifyCredentials`, `getConfig`, `getMappings` (CRUD helpers).
+-   **Rewrite**: `sync` action.
+    1.  **Data Loading**: Fetch all tasks, existing mappings, and Trello config.
+    2.  **Context Building**: Fetch current Board state (lists, labels) to pass to Agent (optimization: reduce Trello calls if possible, or let Executor handle checks). *Correction*: Agent needs context to know if lists exist. Fetch Lists/Labels/CustomFields first.
+    3.  **Agent Call**: `await ctx.runAction(internal.agents.trelloSyncAgent.generateTrelloSyncPlan, { ... })`.
+    4.  **Executor Call**: `await executeTrelloSyncPlan(plan, auth)`.
+    5.  **Persistence**: Iterate `report.opResults` and `plan.mappingUpserts`. Call `internal.trelloSync.updateMapping` for successful syncs.
+
+### Step 5: Clean Up
+-   Remove the old hardcoded sync logic from `convex/trelloSync.ts`.
+-   Ensure `package.json` has `zod` (it likely does).
+
+## 5. Detailed Component Logic
+
+### Agent Prompt (System)
+Use the prompt provided in `Specs/Trello.txt`:
+"You are 'TrelloSyncTranslator', an expert integration agent..."
+Include strict instructions on JSON output and Idempotency.
+
+### Executor Idempotency
+The executor must be smart enough to:
+-   `ENSURE_LIST`: Check if list exists by name. If yes, return ID. If no, create.
+-   `UPSERT_CARD`: Check if card exists (by ID from mapping). Update if changed. Create if new.
+
+## 6. Migration Strategy
+-   The existing `trelloMappings` table is compatible.
+-   The new `sync` action will simply read the existing mappings and continue managing them.
+-   **Risk**: The Agent might decide to re-sync everything if the hash calculation differs from the old logic.
+    -   **Mitigation**: Accept that the first run might be a "full update" (no data loss, just API calls).

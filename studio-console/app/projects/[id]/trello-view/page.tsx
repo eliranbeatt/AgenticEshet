@@ -33,20 +33,20 @@ const createEmptyMappings = (): StatusMappings => ({
 export default function TrelloViewPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
-    
+
     // API
     const config = useQuery(api.trelloSync.getConfig, { projectId });
     const syncState = useQuery(api.trelloSync.getSyncState, { projectId });
     const saveConfig = useMutation(api.trelloSync.saveConfig);
-    const fetchLists = useAction(api.trelloSync.fetchLists);
-    const syncToTrello = useAction(api.trelloSync.sync);
-    const snapshotBoard = useAction(api.trelloSync.snapshotBoard);
+    const fetchLists = useAction(api.trelloActions.fetchLists);
+    const syncToTrello = useAction(api.trelloActions.sync);
+    const snapshotBoard = useAction(api.trelloActions.snapshotBoard);
 
     // State
     const [apiKey, setApiKey] = useState("");
     const [token, setToken] = useState("");
     const [boardId, setBoardId] = useState("");
-    
+
     const [lists, setLists] = useState<TrelloList[]>([]);
     const [mappings, setMappings] = useState<StatusMappings>(createEmptyMappings());
     const [isLoadingLists, setIsLoadingLists] = useState(false);
@@ -78,9 +78,9 @@ export default function TrelloViewPage() {
             const fetched = await fetchLists({ apiKey, token, boardId });
             const normalized: TrelloList[] = Array.isArray(fetched)
                 ? fetched.map((list) => ({
-                      id: String(list.id),
-                      name: String(list.name ?? list.id),
-                  }))
+                    id: String(list.id),
+                    name: String(list.name ?? list.id),
+                }))
                 : [];
             setLists(normalized);
         } catch (error: unknown) {
@@ -183,25 +183,25 @@ export default function TrelloViewPage() {
 
             <div className="bg-white p-6 rounded shadow border">
                 <h2 className="text-xl font-bold mb-4">Trello Configuration</h2>
-                
+
                 <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-gray-700">API Key</label>
-                            <input 
-                                type="password" 
-                                className="w-full border rounded p-2 mt-1" 
-                                value={apiKey} 
-                                onChange={(e) => setApiKey(e.target.value)} 
+                            <input
+                                type="password"
+                                className="w-full border rounded p-2 mt-1"
+                                value={apiKey}
+                                onChange={(e) => setApiKey(e.target.value)}
                             />
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700">Token</label>
-                            <input 
-                                type="password" 
-                                className="w-full border rounded p-2 mt-1" 
-                                value={token} 
-                                onChange={(e) => setToken(e.target.value)} 
+                            <input
+                                type="password"
+                                className="w-full border rounded p-2 mt-1"
+                                value={token}
+                                onChange={(e) => setToken(e.target.value)}
                             />
                         </div>
                     </div>
@@ -209,13 +209,13 @@ export default function TrelloViewPage() {
                     <div>
                         <label className="block text-sm font-medium text-gray-700">Board ID</label>
                         <div className="flex gap-2 mt-1">
-                            <input 
-                                type="text" 
-                                className="flex-1 border rounded p-2" 
-                                value={boardId} 
-                                onChange={(e) => setBoardId(e.target.value)} 
+                            <input
+                                type="text"
+                                className="flex-1 border rounded p-2"
+                                value={boardId}
+                                onChange={(e) => setBoardId(e.target.value)}
                             />
-                            <button 
+                            <button
                                 onClick={handleFetchLists}
                                 disabled={isLoadingLists}
                                 className="bg-gray-100 px-4 rounded hover:bg-gray-200 border"
@@ -229,36 +229,36 @@ export default function TrelloViewPage() {
                         <div className="bg-gray-50 p-4 rounded border">
                             <h3 className="font-bold text-sm mb-3">Map Status to Trello Lists</h3>
                             <div className="space-y-3">
-                                <ListSelect 
-                                    label="To Do" 
-                                    lists={lists} 
-                                    value={mappings.todo} 
-                                    onChange={(v) => setMappings(m => ({ ...m, todo: v }))} 
+                                <ListSelect
+                                    label="To Do"
+                                    lists={lists}
+                                    value={mappings.todo}
+                                    onChange={(v) => setMappings(m => ({ ...m, todo: v }))}
                                 />
-                                <ListSelect 
-                                    label="In Progress" 
-                                    lists={lists} 
-                                    value={mappings.in_progress} 
-                                    onChange={(v) => setMappings(m => ({ ...m, in_progress: v }))} 
+                                <ListSelect
+                                    label="In Progress"
+                                    lists={lists}
+                                    value={mappings.in_progress}
+                                    onChange={(v) => setMappings(m => ({ ...m, in_progress: v }))}
                                 />
-                                <ListSelect 
-                                    label="Blocked" 
-                                    lists={lists} 
-                                    value={mappings.blocked} 
-                                    onChange={(v) => setMappings(m => ({ ...m, blocked: v }))} 
+                                <ListSelect
+                                    label="Blocked"
+                                    lists={lists}
+                                    value={mappings.blocked}
+                                    onChange={(v) => setMappings(m => ({ ...m, blocked: v }))}
                                 />
-                                <ListSelect 
-                                    label="Done" 
-                                    lists={lists} 
-                                    value={mappings.done} 
-                                    onChange={(v) => setMappings(m => ({ ...m, done: v }))} 
+                                <ListSelect
+                                    label="Done"
+                                    lists={lists}
+                                    value={mappings.done}
+                                    onChange={(v) => setMappings(m => ({ ...m, done: v }))}
                                 />
                             </div>
                         </div>
                     )}
-                    
+
                     <div className="pt-4 flex justify-end">
-                        <button 
+                        <button
                             onClick={handleSave}
                             disabled={isSaving}
                             className="bg-blue-600 text-white px-6 py-2 rounded font-medium disabled:opacity-50"
@@ -272,15 +272,15 @@ export default function TrelloViewPage() {
             <div className="bg-white p-6 rounded shadow border text-center">
                 <h2 className="text-xl font-bold mb-2">Sync Engine</h2>
                 <p className="text-gray-500 mb-6">Push current project tasks to the configured Trello Board.</p>
-                
-                <button 
+
+                <button
                     onClick={handleSync}
                     disabled={isSyncing || !config}
                     className="bg-green-600 text-white px-8 py-3 rounded-lg font-bold text-lg disabled:opacity-50 hover:bg-green-700 shadow"
                 >
                     {isSyncing ? "Syncing..." : "Sync Now"}
                 </button>
-                
+
                 {!config && <p className="text-red-500 text-sm mt-2">Configuration required first.</p>}
             </div>
 
@@ -341,7 +341,7 @@ function ListSelect({
     return (
         <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-600">{label}</span>
-            <select 
+            <select
                 className="w-1/2 border rounded p-1 text-sm"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}

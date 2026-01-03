@@ -39,6 +39,7 @@ export function applyBrainPatchOps(args: {
 }) {
     const next = JSON.parse(JSON.stringify(args.brain ?? {}));
     const now = Date.now();
+    const withTag = (tags: string[], tag: string) => (tags.includes(tag) ? tags : [...tags, tag]);
 
     const tagBulletById = (bulletId: string, tag: string) => {
         const applyToList = (list?: any[]) => {
@@ -70,10 +71,15 @@ export function applyBrainPatchOps(args: {
 
     for (const op of args.patchOps) {
         if (op.op === "add_bullet") {
+            let tags = op.bullet.tags ?? [];
+            const section = op.target.scope === "project" ? op.target.section ?? "overview" : undefined;
+            if (op.target.scope === "project" && !op.target.section) {
+                tags = withTag(tags, "missing_section");
+            }
             const bullet = {
                 id: randomId("bullet"),
                 text: op.bullet.text,
-                tags: op.bullet.tags ?? [],
+                tags,
                 status: op.bullet.status ?? "accepted",
                 confidence: op.bullet.confidence ?? "medium",
                 source: { eventId: args.eventId, type: args.eventType },
@@ -82,15 +88,14 @@ export function applyBrainPatchOps(args: {
             };
 
             if (op.target.scope === "project") {
-                if (!op.target.section) {
-                    throw new Error("add_bullet project target missing section");
-                }
                 next.project = next.project ?? {};
-                next.project[op.target.section] = next.project[op.target.section] ?? [];
-                next.project[op.target.section].push(bullet);
+                next.project[section] = next.project[section] ?? [];
+                next.project[section].push(bullet);
             } else if (op.target.scope === "element") {
                 if (!op.target.elementId) {
-                    throw new Error("add_bullet element target missing elementId");
+                    next.unmapped = next.unmapped ?? [];
+                    next.unmapped.push({ ...bullet, tags: withTag(bullet.tags, "missing_element") });
+                    continue;
                 }
                 next.elementNotes = next.elementNotes ?? {};
                 next.elementNotes[op.target.elementId] = next.elementNotes[op.target.elementId] ?? {

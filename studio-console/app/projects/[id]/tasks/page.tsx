@@ -19,8 +19,9 @@ import { TasksKanban } from "./_components/TasksKanban";
 import TasksGantt from "./_components/TasksGantt";
 import { TasksByCategory } from "./_components/TasksByCategory";
 import { TasksByElement } from "./_components/TasksByElement";
-import { LayoutGrid, GanttChartSquare, Layers, Box } from "lucide-react";
+import { LayoutGrid, GanttChartSquare, Layers, Box, Settings, Trello, RefreshCw } from "lucide-react";
 import { TaskControlsBar } from "./_components/TaskControlsBar";
+import { TrelloConfigModal } from "./_components/TrelloConfigModal";
 
 // Re-using types from TasksKanban or defining here
 type UpdateTaskInput = {
@@ -78,6 +79,7 @@ export default function TasksPage() {
     const approveDraft = useMutation(api.revisions.approve);
     const discardDraft = useMutation(api.revisions.discardDraft);
     const patchElement = useMutation(api.revisions.patchElement);
+    const syncTrello = useAction(api.trelloActions.sync);
 
     const [isGenerating, setIsGenerating] = useState(false);
     const [isRefining, setIsRefining] = useState(false);
@@ -90,6 +92,9 @@ export default function TasksPage() {
     const [editMode, setEditMode] = useState(false);
     const [draftRevisionId, setDraftRevisionId] = useState<Id<"revisions"> | null>(null);
     const [viewMode, setViewMode] = useState<ViewMode>("kanban");
+
+    const [showTrelloConfig, setShowTrelloConfig] = useState(false);
+    const [isSyncingTrello, setIsSyncingTrello] = useState(false);
 
     const refinerStatus = taskRefinerRuns?.[0]?.status;
     const isRefinerActive = refinerStatus === "queued" || refinerStatus === "running";
@@ -455,6 +460,20 @@ export default function TasksPage() {
         return null;
     };
 
+    const handleTrelloSync = async () => {
+        setIsSyncingTrello(true);
+        try {
+            const res = await syncTrello({ projectId });
+            const errors = res.errors.length > 0 ? `\nErrors: ${res.errors.length}` : "";
+            alert(`Trello Sync Complete: ${res.syncedCount} tasks synced, ${res.archivedCount} archived.${errors}`);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            alert("Trello Sync Failed: " + msg);
+        } finally {
+            setIsSyncingTrello(false);
+        }
+    };
+
     return (
         <div className="flex flex-col gap-6 h-full">
             <ChangeSetReviewBanner projectId={projectId} phase="tasks" />
@@ -545,6 +564,30 @@ export default function TasksPage() {
                             {isGenerating ? "..." : "Auto-Gen"}
                         </button>
 
+                        <div className="h-6 w-px bg-gray-300 mx-1" />
+
+                        <button
+                            onClick={handleTrelloSync}
+                            disabled={isSyncingTrello}
+                            className="flex items-center gap-2 bg-blue-600 text-white px-3 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                            title="Sync to Trello"
+                        >
+                            {isSyncingTrello ? (
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                            ) : (
+                                <Trello className="w-4 h-4" />
+                            )}
+                            <span className="hidden xl:inline">Sync Trello</span>
+                        </button>
+
+                        <button
+                            onClick={() => setShowTrelloConfig(true)}
+                            className="text-gray-500 hover:text-gray-700 p-2 rounded hover:bg-gray-100"
+                            title="Trello Configuration"
+                        >
+                            <Settings className="w-5 h-5" />
+                        </button>
+
                         <button
                             onClick={handleRefineTasks}
                             disabled={isRefiningActive || isGenerating || draftOnlyMode}
@@ -589,6 +632,13 @@ export default function TasksPage() {
                     elementsCanonical={elementsCanonical}
                     draftRevisionId={draftRevisionId}
                     elementsById={elementsById}
+                />
+            )}
+
+            {showTrelloConfig && (
+                <TrelloConfigModal
+                    projectId={projectId}
+                    onClose={() => setShowTrelloConfig(false)}
                 />
             )}
         </div>

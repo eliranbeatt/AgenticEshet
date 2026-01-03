@@ -1,0 +1,480 @@
+Below is a **copy/paste-ready** package you can use to (1) implement Trello upload correctly, and (2) define an **LLM agent** that translates your Convex `tasks` into a deterministic **Trello Sync Plan** (API operations).
+
+---
+
+## 1) Trello API “exact formats” you’ll use
+
+### Auth (all requests)
+
+Trello’s “API key + token” are typically sent as query params:
+
+* `key=...`
+* `token=...`
+
+---
+
+### A) Create a board (Project → Board)
+
+**POST** `/1/boards`
+Example (curl):
+
+```bash
+curl --request POST \
+  --url 'https://api.trello.com/1/boards/?name=My%20Project&key=APIKey&token=APIToken'
+```
+
+Board endpoints are documented under “Boards”. ([developer.atlassian.com][1])
+
+---
+
+### B) Create lists (workflow columns)
+
+You’ll normally create canonical lists like: `To Do`, `In Progress`, `Blocked`, `Done`.
+
+**POST** `/1/boards/{id}/lists?name=...&pos=...` ([developer.atlassian.com][1])
+
+```bash
+curl --request POST \
+  --url 'https://api.trello.com/1/boards/{boardId}/lists?name=To%20Do&pos=top&key=APIKey&token=APIToken'
+```
+
+---
+
+### C) Create labels (your “tags”)
+
+Trello “tags” are **labels**.
+
+**POST** `/1/boards/{id}/labels?name=...&color=...` ([developer.atlassian.com][1])
+
+```bash
+curl --request POST \
+  --url 'https://api.trello.com/1/boards/{boardId}/labels?name=Priority%3AHigh&color=red&key=APIKey&token=APIToken'
+```
+
+Common label strategy:
+
+* `Category:Logistics | Creative | Finance | Admin | Studio`
+* `Priority:High | Medium | Low`
+* plus your freeform `tags[]`
+
+---
+
+### D) Create cards (your Tasks)
+
+A task is usually a **card**.
+
+**POST** `/1/cards` with query params (or JSON body). Key fields include:
+
+* `idList` (**required**)
+* `name`, `desc`
+* `start`, `due`
+* `idMembers[]`, `idLabels[]` ([developer.atlassian.com][2])
+
+```bash
+curl --request POST \
+  --url 'https://api.trello.com/1/cards?idList={listId}&name=Book%20installers&desc=Schedule%20crew&start=2026-01-10T08:00:00.000Z&due=2026-01-12T18:00:00.000Z&idLabels={labelId1}&idLabels={labelId2}&key=APIKey&token=APIToken'
+```
+
+> Your “status” is typically modeled by **which list the card is in** (move card between lists when status changes).
+
+---
+
+### E) Checklists & sub-tasks
+
+You have **two layers**:
+
+1. Create checklist on the card
+2. Create checkitems on that checklist
+
+**Create checklist on card**: **POST** `/1/cards/{id}/checklists?name=...` ([developer.atlassian.com][2])
+
+```bash
+curl --request POST \
+  --url 'https://api.trello.com/1/cards/{cardId}/checklists?name=Subtasks&key=APIKey&token=APIToken'
+```
+
+**Create checkitem**: **POST** `/1/checklists/{id}/checkItems?name=...&checked=...&due=...` ([developer.atlassian.com][3])
+
+```bash
+curl --request POST \
+  --url 'https://api.trello.com/1/checklists/{checklistId}/checkItems?name=Call%20vendor&checked=false&key=APIKey&token=APIToken'
+```
+
+Mapping:
+
+* `task.subtasks[]` → checklist “Subtasks”
+* `task.steps[]` → checklist “Steps”
+
+---
+
+### F) Estimations (hours/minutes) via Custom Fields
+
+If you want estimates to be structured (not just text), use **Custom Fields** on the board.
+
+**Create custom field (on board)**: **POST** `/1/customFields` JSON body requires:
+
+* `idModel` (boardId)
+* `modelType: "board"`
+* `name`
+* `type`
+* `pos` ([developer.atlassian.com][4])
+
+```bash
+curl --request POST \
+  --url 'https://api.trello.com/1/customFields?key=APIKey&token=APIToken' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "idModel": "{boardId}",
+    "modelType": "board",
+    "name": "Estimate (hours)",
+    "type": "number",
+    "pos": "top",
+    "display_cardFront": true
+  }'
+```
+
+**Set custom field value on a card**: **PUT** `/1/cards/{idCard}/customField/{idCustomField}/item` with JSON body:
+
+* `{"value": {"number": 2.5}}` (or text/checked/date) ([developer.atlassian.com][2])
+
+```bash
+curl --request PUT \
+  --url 'https://api.trello.com/1/cards/{cardId}/customField/{customFieldId}/item?key=APIKey&token=APIToken' \
+  --header 'Content-Type: application/json' \
+  --data '{ "value": { "number": 2.5 } }'
+```
+
+---
+
+## 2) Your current dev schema (fields, types, examples)
+
+> I don’t have your repo files mounted here (so I can’t literally open `studio-console/convex/schema.ts`). The schema below is a **faithful TypeScript contract** based on the detailed field list you provided.
+
+### A) Canonical `tasks` (TypeScript contract)
+
+```ts
+export type TaskStatus = "todo" | "in_progress" | "blocked" | "done";
+export type TaskCategory = "Logistics" | "Creative" | "Finance" | "Admin" | "Studio";
+export type TaskPriority = "High" | "Medium" | "Low";
+
+export type TaskSubtask = { title: string; done: boolean };
+
+export type TaskOrigin =
+  | { source: "template"; templateId?: string; version?: string; templateTaskId?: string }
+  | { source: "user" }
+  | { source: "ai" };
+
+export type TaskDerivedFrom = {
+  elementId?: string;
+  elementVersionId?: string;
+  projectVersionId?: string;
+  derivationRunId?: string;
+};
+
+export type TaskDoc = {
+  // Identity
+  _id?: string; // Convex adds
+  projectId: string; // Id<"projects">
+  title: string;
+  description?: string;
+
+  // Workflow classification
+  status: TaskStatus;
+  category: TaskCategory;
+  priority: TaskPriority;
+
+  // Hierarchy & ordering
+  parentTaskId?: string; // Id<"tasks">
+  sortKey?: string;
+
+  // Planning windows
+  durationHours?: number;
+  plannedStart?: string | number; // timestamp or ISO
+  plannedEnd?: string | number;
+
+  // Cross-links
+  questId?: string;
+  accountingSectionId?: string;
+  accountingLineType?: "material" | "work";
+  accountingLineId?: string; // Id<"materialLines"> | Id<"workLines">
+  itemId?: string; // Id<"projectItems">
+  itemSubtaskId?: string;
+  workstream?: string;
+  isManagement?: boolean;
+
+  // Dependency graph
+  taskNumber: number;
+  dependencies: string[]; // Array<Id<"tasks">>
+
+  // Gantt scheduling
+  startDate?: number; // ms
+  endDate?: number; // ms
+  estimatedDuration?: number; // ms
+
+  // Task body
+  estimatedMinutes?: number | null;
+  steps?: string[];
+  subtasks?: TaskSubtask[];
+  tags?: string[];
+  assignee?: string | null;
+
+  // AI provenance
+  source: "user" | "agent";
+  confidenceScore?: number;
+  origin?: TaskOrigin;
+  generation?: "generated" | "manual";
+  lock?: boolean;
+  derivedFrom?: TaskDerivedFrom;
+
+  // Timestamps
+  createdAt: number;
+  updatedAt: number;
+};
+```
+
+### Example task document (as JSON)
+
+```json
+{
+  "projectId": "abcdef123",
+  "title": "Book installers",
+  "description": "Schedule crew for install day",
+  "status": "in_progress",
+  "category": "Logistics",
+  "priority": "High",
+  "taskNumber": 12,
+  "dependencies": ["taskIdA", "taskIdB"],
+  "itemId": "elem123",
+  "estimatedMinutes": 90,
+  "subtasks": [{ "title": "Call vendor", "done": false }],
+  "assignee": "ops@studio.local",
+  "source": "user",
+  "createdAt": 1714500000000,
+  "updatedAt": 1714586400000
+}
+```
+
+---
+
+### B) `trelloMappings` (idempotent sync table)
+
+```ts
+export type TrelloMappingDoc = {
+  projectId: string;     // Id<"projects">
+  taskId: string;        // Id<"tasks">
+  trelloCardId: string;
+  trelloListId: string;
+  lastSyncedAt: number;  // ms timestamp
+  contentHash: string;   // hash of “what we pushed”
+};
+```
+
+---
+
+## 3) Deterministic mapping rules (Tasks → Trello)
+
+### Board + Lists
+
+* **1 Project = 1 Trello Board**
+* Lists correspond to `status`:
+
+  * `todo` → “To Do”
+  * `in_progress` → “In Progress”
+  * `blocked` → “Blocked”
+  * `done` → “Done”
+
+### Labels (“tags”)
+
+Create labels for:
+
+* `Category:<category>`
+* `Priority:<priority>`
+* every `tags[]` string (prefixed or raw; your choice)
+* optional: `Workstream:<workstream>`, `Management:true`
+
+### Card fields
+
+* `name` = `task.title`
+* `desc` = a composed description block:
+
+  * `task.description` (if exists)
+  * “Studio IDs” (taskId, taskNumber, itemId, accountingLineId…) for traceability
+  * Dependencies as plain text (Trello has no native dependency model)
+
+### Dates
+
+Choose a precedence (agent enforces it consistently):
+
+* `start` = `plannedStart` else `startDate`
+* `due`   = `plannedEnd` else `endDate`
+  (Always normalized to ISO string)
+
+### Checklists
+
+* Checklist “Subtasks” from `task.subtasks[]` (checked = `done`)
+* Checklist “Steps” from `task.steps[]` (checked defaults false)
+
+### Estimates
+
+* Use Custom Field “Estimate (hours)”:
+
+  * from `durationHours` else `estimatedMinutes / 60` else `estimatedDuration(ms)/3600000`
+
+---
+
+## 4) The agent you asked for (prompt + schemas)
+
+### A) Agent system prompt (drop-in)
+
+```text
+You are “TrelloSyncTranslator”, an expert integration agent.
+
+Goal:
+Translate Convex Task documents into a deterministic TrelloSyncPlan JSON that an executor will run against Trello’s REST API.
+
+Hard rules:
+- Output MUST be valid JSON matching the TrelloSyncPlan schema exactly. No prose.
+- Never invent Trello IDs. Use provided IDs (boardId, listIds, labelIds, customFieldIds) or create operations to obtain them.
+- Be idempotent: if a task has a trelloMapping and the computed contentHash is unchanged, emit a SKIP operation.
+- Do not delete Trello data unless explicitly asked via input flags. Prefer “archive/close” suggestions over deletion.
+
+Mapping rules (default):
+- Project → board.
+- status → list (todo/in_progress/blocked/done).
+- category/priority/tags/workstream/isManagement → labels.
+- task.subtasks → checklist “Subtasks”.
+- task.steps → checklist “Steps”.
+- estimates → custom field “Estimate (hours)” when available.
+- dates → card.start + card.due in ISO.
+
+You receive:
+- tasks[]
+- existing trelloMappings[]
+- trelloContext: boardId, known lists/labels/customFields/member mapping
+- config overrides (optional)
+
+You produce:
+- TrelloSyncPlan with ordered operations:
+  1) ensure lists exist
+  2) ensure labels exist
+  3) ensure custom fields exist
+  4) upsert cards
+  5) upsert checklists + checkitems
+  6) set custom field values
+  7) update trelloMappings patch suggestions
+
+If something is impossible (e.g., assignee email not mapped to Trello member id), emit a WARNING in plan.warnings and skip member assignment.
+```
+
+---
+
+### B) Input schema (what you pass to the agent)
+
+```ts
+export type TrelloContext = {
+  boardId: string;
+
+  // lists keyed by status
+  listsByStatus?: Partial<Record<"todo"|"in_progress"|"blocked"|"done", { id: string; name: string }>>;
+
+  // labels known on the board
+  labelsByName?: Record<string, { id: string; color?: string }>;
+
+  // custom fields known on the board
+  customFieldsByName?: Record<string, { id: string; type: "number"|"text"|"checkbox"|"date"|"list" }>;
+
+  // optional: map your assignee string (email) → Trello member id
+  memberIdByAssignee?: Record<string, string>;
+};
+
+export type TrelloSyncTranslatorInput = {
+  projectId: string;
+  tasks: TaskDoc[];
+  trelloMappings: TrelloMappingDoc[];
+
+  trelloContext: TrelloContext;
+
+  config?: {
+    listNames?: Partial<Record<"todo"|"in_progress"|"blocked"|"done", string>>;
+    labelColorByPrefix?: Record<string, string>; // e.g. {"Priority:":"red"}
+    estimateCustomFieldName?: string; // default "Estimate (hours)"
+    includeTraceabilityBlock?: boolean; // default true
+  };
+};
+```
+
+---
+
+### C) Output schema (the TrelloSyncPlan JSON)
+
+This is what your backend executor can run step-by-step.
+
+```ts
+export type TrelloOp =
+  | { op: "ENSURE_LIST"; status: "todo"|"in_progress"|"blocked"|"done"; listName: string; resultVar: string }
+  | { op: "ENSURE_LABEL"; labelName: string; color: string; resultVar: string }
+  | { op: "ENSURE_CUSTOM_FIELD"; name: string; type: "number"|"text"|"checkbox"|"date"|"list"; displayCardFront: boolean; resultVar: string }
+  | {
+      op: "UPSERT_CARD";
+      taskId: string;
+      trelloCardId?: string;         // if already mapped
+      idList: string;                // resolved list id
+      name: string;
+      desc: string;
+      start?: string;                // ISO
+      due?: string;                  // ISO
+      idLabels?: string[];
+      idMembers?: string[];
+      resultVar: string;             // captures cardId if created
+      contentHash: string;           // computed by agent
+    }
+  | { op: "ENSURE_CHECKLIST"; cardId: string; name: string; resultVar: string }
+  | { op: "UPSERT_CHECKITEMS"; checklistId: string; items: Array<{ name: string; checked?: boolean; due?: string; idMember?: string }> }
+  | { op: "SET_CUSTOM_FIELD_NUMBER"; cardId: string; customFieldId: string; value: number }
+  | { op: "SKIP"; taskId: string; reason: string };
+
+export type TrelloSyncPlan = {
+  projectId: string;
+  boardId: string;
+
+  warnings: string[];
+
+  ops: TrelloOp[];
+
+  // what to write back to Convex after successful execution
+  mappingUpserts: Array<{
+    taskId: string;
+    trelloCardIdVarOrValue: string; // e.g. "$card_abc" or "64f..."
+    trelloListId: string;
+    contentHash: string;
+  }>;
+};
+```
+
+---
+
+## 5) A tiny example (1 task → plan)
+
+Input task:
+
+* status: `in_progress`
+* priority: `High`
+* subtasks: `Call vendor`
+
+Plan will use:
+
+* create list if missing ([developer.atlassian.com][1])
+* create labels if missing ([developer.atlassian.com][1])
+* create card with `idList`, `name`, `desc`, `start/due`, `idLabels` ([developer.atlassian.com][2])
+* create checklist on card ([developer.atlassian.com][2])
+* add checkitem ([developer.atlassian.com][3])
+* set estimate field (if configured) ([developer.atlassian.com][2])
+
+---
+
+If you want, I can also give you the **executor contract** (TypeScript) that takes a `TrelloSyncPlan` and runs it against Trello (with retries + rate limiting + safe idempotency), and writes back `trelloMappings` only after each task’s card is confirmed created/updated.
+
+[1]: https://developer.atlassian.com/cloud/trello/rest/api-group-boards/ "The Trello REST API"
+[2]: https://developer.atlassian.com/cloud/trello/rest/api-group-cards/ "The Trello REST API"
+[3]: https://developer.atlassian.com/cloud/trello/rest/api-group-checklists/ "The Trello REST API"
+[4]: https://developer.atlassian.com/cloud/trello/rest/api-group-customfields/ "The Trello REST API"

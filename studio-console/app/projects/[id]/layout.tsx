@@ -66,14 +66,13 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
         setNameError(null);
     };
 
-    const tabs = [
+    const tabs: { name: string; href: string; phaseKey?: "clarification" | "planning" }[] = [
         { name: "Overview", href: "overview" },
         { name: "Agent", href: "agent" },
         { name: "Elements", href: "elements" },
         { name: "Accounting", href: "accounting" },
         { name: "Tasks", href: "tasks" },
         { name: "Quote", href: "quote" },
-        { name: "Trello View", href: "trello-view" },
         { name: "Knowledge", href: "knowledge" },
         { name: "History", href: "history" },
     ];

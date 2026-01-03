@@ -1,0 +1,270 @@
+Here’s a **Convex-ready skeleton** that matches how Convex *should* do this in production:
+
+* **Action** orchestrates: load tasks + mappings → call your agent → call Trello → compute mapping upserts
+* **Internal mutation** persists `trelloMappings` (idempotent upsert)
+
+I’m including the minimal **queries + action + internalMutation** in one file for clarity.
+
+```ts
+// convex/trelloSync.ts
+import { v } from "convex/values";
+import { action, internalMutation, query } from "./_generated/server";
+import type { Id, Doc } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
+
+// =========================
+// Types (align to your plan/executor)
+// =========================
+
+type TrelloID = string;
+
+type TrelloSyncPlan = {
+  planVersion: "1.0";
+  context: {
+    projectId: Id<"projects">;
+    targetBoardId?: TrelloID;
+    targetBoardName?: string;
+  };
+  operations: any[]; // keep loose in skeleton; use your strict union in real code
+  // Optional: agent can include explicit mapping intentions
+  mappingUpserts?: Array<{
+    taskId: Id<"tasks">;
+    trelloCardIdVarOrValue: string; // e.g. "$card.task.<id>" OR actual cardId
+    trelloListIdVarOrValue: string; // e.g. "$list.todo" OR actual listId
+    contentHash: string;
+  }>;
+};
+
+type TrelloExecutionReport = {
+  runId: string;
+  startedAt: number;
+  finishedAt: number;
+  boardId?: TrelloID;
+  opResults: Array<{
+    opId: string;
+    op: string;
+    ok: boolean;
+    producedVars?: Record<string, string>; // runtime var outputs, e.g. {"card.task.abc":"<cardId>"}
+    error?: { message: string; status?: number; details?: unknown };
+  }>;
+};
+
+type TrelloAuth = {
+  apiKey: string;
+  token: string;
+};
+
+// =========================
+// Queries (actions must use ctx.runQuery)
+// =========================
+
+export const listTasksByProject = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, { projectId }) => {
+    // Requires an index: tasks.index("by_project", ["projectId"])
+    return await ctx.db
+      .query("tasks")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect();
+  },
+});
+
+export const listTrelloMappingsByProject = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, { projectId }) => {
+    // Requires an index: trelloMappings.index("by_project", ["projectId"])
+    return await ctx.db
+      .query("trelloMappings")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect();
+  },
+});
+
+// You likely have a real integrations table; this is just a stub.
+export const getTrelloAuthForUser = query({
+  args: {},
+  handler: async (ctx) => {
+    // ✅ Put your real logic here (per-user integration record).
+    // Never store Trello token in the client.
+    const apiKey = process.env.TRELLO_API_KEY;
+    const token = process.env.TRELLO_TOKEN;
+
+    if (!apiKey || !token) return null;
+    return { apiKey, token } satisfies TrelloAuth;
+  },
+});
+
+// =========================
+// Internal mutation: upsert trelloMappings
+// =========================
+
+export const upsertTrelloMappings = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    upserts: v.array(
+      v.object({
+        taskId: v.id("tasks"),
+        trelloCardId: v.string(),
+        trelloListId: v.string(),
+        contentHash: v.string(),
+        lastSyncedAt: v.number(),
+      })
+    ),
+  },
+  handler: async (ctx, { projectId, upserts }) => {
+    // RECOMMENDED index for efficient upsert:
+    // trelloMappings.index("by_project_task", ["projectId", "taskId"])
+    // If you don't have it yet, add it—otherwise this will be slower.
+
+    for (const u of upserts) {
+      const existing = await ctx.db
+        .query("trelloMappings")
+        .withIndex("by_project_task", (q) => q.eq("projectId", projectId).eq("taskId", u.taskId))
+        .unique();
+
+      if (!existing) {
+        await ctx.db.insert("trelloMappings", {
+          projectId,
+          taskId: u.taskId,
+          trelloCardId: u.trelloCardId,
+          trelloListId: u.trelloListId,
+          lastSyncedAt: u.lastSyncedAt,
+          contentHash: u.contentHash,
+        });
+      } else {
+        await ctx.db.patch(existing._id, {
+          trelloCardId: u.trelloCardId,
+          trelloListId: u.trelloListId,
+          lastSyncedAt: u.lastSyncedAt,
+          contentHash: u.contentHash,
+        });
+      }
+    }
+
+    return { updated: upserts.length };
+  },
+});
+
+// =========================
+// Action: orchestrates everything (LLM + Trello are external calls)
+// =========================
+
+export const syncTasksToTrello = action({
+  args: {
+    projectId: v.id("projects"),
+    // Optional: allow UI to specify an existing Trello board to target
+    targetBoardId: v.optional(v.string()),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { projectId, targetBoardId, dryRun }) => {
+    // 1) Load data
+    const [tasks, trelloMappings, auth] = await Promise.all([
+      ctx.runQuery(internal.trelloSync.listTasksByProject, { projectId }),
+      ctx.runQuery(internal.trelloSync.listTrelloMappingsByProject, { projectId }),
+      ctx.runQuery(internal.trelloSync.getTrelloAuthForUser, {}),
+    ]);
+
+    if (!auth) {
+      throw new Error("Missing Trello auth. Configure TRELLO_API_KEY and TRELLO_TOKEN or user integration record.");
+    }
+
+    // 2) Call your agent to generate a TrelloSyncPlan
+    //    IMPORTANT: do this in the action (external call).
+    const plan = await generateTrelloSyncPlan({
+      projectId,
+      tasks,
+      trelloMappings,
+      trelloContext: { targetBoardId },
+    });
+
+    // 3) Execute the plan against Trello (external calls)
+    const report = await executeTrelloSyncPlan(plan, auth, { dryRun: !!dryRun });
+
+    // 4) Build var map (from producedVars on each op)
+    const vars: Record<string, string> = {};
+    for (const r of report.opResults) {
+      if (r.producedVars) Object.assign(vars, r.producedVars);
+    }
+
+    // Helper: resolve "$var.name" → actual value
+    const resolveVar = (varOrValue: string) => {
+      if (varOrValue.startsWith("$")) {
+        const key = varOrValue.slice(1);
+        const val = vars[key];
+        if (!val) throw new Error(`Missing runtime var "${key}" from execution report`);
+        return val;
+      }
+      return varOrValue;
+    };
+
+    // 5) Persist trelloMappings (idempotent)
+    // Prefer plan.mappingUpserts if agent provided it; otherwise derive it your own way.
+    const now = Date.now();
+    const upserts =
+      plan.mappingUpserts?.map((m) => ({
+        taskId: m.taskId,
+        trelloCardId: resolveVar(m.trelloCardIdVarOrValue),
+        trelloListId: resolveVar(m.trelloListIdVarOrValue),
+        contentHash: m.contentHash,
+        lastSyncedAt: now,
+      })) ?? [];
+
+    if (!dryRun && upserts.length) {
+      await ctx.runMutation(internal.trelloSync.upsertTrelloMappings, {
+        projectId,
+        upserts,
+      });
+    }
+
+    return {
+      ok: true,
+      dryRun: !!dryRun,
+      boardId: report.boardId ?? plan.context.targetBoardId ?? targetBoardId ?? null,
+      upserts: upserts.length,
+      report,
+    };
+  },
+});
+
+// =========================
+// Placeholders you implement
+// =========================
+
+async function generateTrelloSyncPlan(input: {
+  projectId: Id<"projects">;
+  tasks: Array<Doc<"tasks">>;
+  trelloMappings: Array<Doc<"trelloMappings">>;
+  trelloContext: { targetBoardId?: string };
+}): Promise<TrelloSyncPlan> {
+  // ✅ Replace with your real “TrelloSyncTranslator” agent call.
+  // Must return strict JSON matching TrelloSyncPlan.
+  throw new Error("generateTrelloSyncPlan() not implemented");
+}
+
+async function executeTrelloSyncPlan(
+  plan: TrelloSyncPlan,
+  auth: TrelloAuth,
+  opts: { dryRun: boolean }
+): Promise<TrelloExecutionReport> {
+  // ✅ Replace with the executor module you already have (fetch Trello endpoints).
+  // Return producedVars so mapping can be persisted.
+  throw new Error("executeTrelloSyncPlan() not implemented");
+}
+```
+
+### Required schema indexes (add these if missing)
+
+In your `convex/schema.ts`, make sure you have:
+
+```ts
+// tasks
+tasks.index("by_project", ["projectId"]);
+
+// trelloMappings
+trelloMappings.index("by_project", ["projectId"]);
+trelloMappings.index("by_trelloCardId", ["trelloCardId"]);
+trelloMappings.index("by_project_task", ["projectId", "taskId"]); // strongly recommended for upsert
+```
+
+---
+

@@ -98,7 +98,7 @@ const TrelloOpSchema = z.discriminatedUnion("op", [
   }),
 ]);
 
-const TrelloSyncPlanSchema = z.object({
+const TrelloSyncPlanSchemaStrict = z.object({
   planVersion: z.literal("1.0"),
   context: z.object({
     projectId: z.string(),
@@ -115,17 +115,92 @@ const TrelloSyncPlanSchema = z.object({
   })).optional(),
 });
 
+const TrelloSyncPlanSchemaLenient = z.object({
+  planVersion: z.any().optional(),
+  context: z.any().optional(),
+  warnings: z.array(z.string()).optional(),
+  operations: z.array(z.any()).optional(),
+  mappingUpserts: z.array(z.any()).optional(),
+}).passthrough();
+
+export function buildTrelloSyncPlanSchema(projectId: string) {
+  return z.preprocess((input) => {
+    if (!input || typeof input !== "object") return input;
+    const raw = input as Record<string, any>;
+    const plan: Record<string, any> = { ...raw };
+
+    if (
+      plan.planVersion === undefined ||
+      plan.planVersion === null ||
+      plan.planVersion === 1 ||
+      plan.planVersion === 1.0 ||
+      plan.planVersion === "1" ||
+      plan.planVersion === "v1.0"
+    ) {
+      plan.planVersion = "1.0";
+    } else if (typeof plan.planVersion === "number") {
+      plan.planVersion = String(plan.planVersion);
+    }
+
+    if (!plan.context || typeof plan.context !== "object") {
+      plan.context = { projectId };
+    } else if (!plan.context.projectId) {
+      plan.context.projectId = projectId;
+    }
+
+    if (Array.isArray(plan.operations)) {
+      plan.operations = plan.operations.map((op) => {
+        if (op && typeof op === "object" && !op.op) {
+          const source = (op as any).type ?? (op as any).operation ?? (op as any).action;
+          if (source) {
+            return { ...op, op: source };
+          }
+        }
+        return op;
+      });
+    }
+
+    return plan;
+  }, TrelloSyncPlanSchemaStrict);
+}
+
 const SYSTEM_PROMPT = `You are "TrelloSyncTranslator", an expert integration agent.
 
 Goal:
 Translate Convex Task documents into a deterministic TrelloSyncPlan JSON that an executor will run against Trello’s REST API.
 
-Hard rules:
-- Output MUST be valid JSON matching the TrelloSyncPlan schema exactly. No prose.
-- Never invent Trello IDs. Use provided IDs (boardId, listIds, labelIds, customFieldIds) or create operations to obtain them.
-- Be idempotent: if a task has a trelloMapping and the computed contentHash is unchanged, emit a SKIP operation.
-- Do not delete Trello data unless explicitly asked via input flags. Prefer "archive/close" suggestions over deletion.
-- Generate a unique "opId" for every operation.
+CRITICAL: OUTPUT FORMAT RULES
+1. The root object MUST contain "planVersion": "1.0" and a "context" object.
+2. The "operations" array MUST contain objects with an "op" field (NOT "type").
+3. "ENSURE_LIST" requires a nested "list" object: { op: "ENSURE_LIST", list: { name: "..." }, ... }
+4. "UPSERT_CARD" requires a nested "card" object.
+5. "UPSERT_CARD" MUST include "contentHash".
+
+Example Output Structure:
+{
+  "planVersion": "1.0",
+  "context": { "projectId": "p123", "targetBoardId": "b456" },
+  "operations": [
+    {
+      "opId": "op1",
+      "op": "ENSURE_LIST",
+      "boardId": "b456",
+      "list": { "name": "To Do" },
+      "setVar": "list.todo"
+    },
+    {
+      "opId": "op2",
+      "op": "UPSERT_CARD",
+      "taskId": "t1",
+      "boardId": "b456",
+      "listId": "$list.todo",
+      "card": { "name": "Buy Milk" },
+      "mode": "create_or_update",
+      "contentHash": "abc123hash"
+    }
+  ],
+  "mappingUpserts": []
+}
 
 Mapping rules (default):
 - Project → board.
@@ -176,12 +251,14 @@ export const generateTrelloSyncPlan = internalAction({
       config: args.config,
     });
 
-    const result = await callChatWithSchema(TrelloSyncPlanSchema, {
+    const rawResult = await callChatWithSchema(TrelloSyncPlanSchemaLenient, {
       model: "gpt-4o", // Strong model for complex logic
       systemPrompt: SYSTEM_PROMPT,
       userPrompt: userPrompt,
+      language: "en",
     });
 
-    return result as TrelloSyncPlan;
+    const normalized = buildTrelloSyncPlanSchema(args.projectId).parse(rawResult);
+    return normalized as TrelloSyncPlan;
   },
 });

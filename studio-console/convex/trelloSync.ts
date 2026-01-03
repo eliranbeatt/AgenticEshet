@@ -6,7 +6,7 @@ const STATUS_KEYS = TASK_STATUSES;
 type StatusKey = (typeof STATUS_KEYS)[number];
 
 // Config now only stores board and mapping, auth is via env vars
-type TrelloConfig = {
+export type TrelloConfig = {
     boardId: string;
     listMap: Record<StatusKey, string>;
 };
@@ -48,6 +48,8 @@ export const updateMapping = internalMutation({
         trelloListId: v.string(),
         contentHash: v.string(),
         lastSyncedAt: v.optional(v.number()),
+        // Optional because sometimes we only update one or the other?
+        // Actually, let's keep it safe. If provided, update.
     },
     handler: async (ctx, args) => {
         const existing = await ctx.db
@@ -63,7 +65,7 @@ export const updateMapping = internalMutation({
                 lastSyncedAt: now,
                 contentHash: args.contentHash,
                 trelloListId: args.trelloListId,
-                trelloCardId: args.trelloCardId, // Ensure card ID is updated if it changed (e.g. manual delete + re-sync)
+                trelloCardId: args.trelloCardId,
             });
         } else {
             await ctx.db.insert("trelloMappings", {
@@ -132,5 +134,3 @@ export const getSyncState = query({
         };
     },
 });
-
-

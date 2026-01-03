@@ -35,7 +35,7 @@ const ItemsContext = createContext<ItemsContextValue | null>(null);
 const STORAGE_PREFIX = "studioConsole.items.selected";
 
 function resolveTabScope(pathname: string, stageParam?: string): ItemTabScope | undefined {
-    if (pathname.includes("/agent")) {
+    if (pathname.includes("/chat")) {
         if (stageParam === "ideation" || stageParam === "planning" || stageParam === "solutioning") {
             return stageParam;
         }

@@ -1,18 +1,11 @@
 "use node";
+
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { api, internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
-import { TRELLO_API_BASE, TASK_STATUSES } from "./constants";
+import type { Id } from "./_generated/dataModel";
+import { TRELLO_API_BASE } from "./constants";
 import { executeTrelloSyncPlan } from "./lib/trelloExecutor";
-
-const STATUS_KEYS = TASK_STATUSES;
-type StatusKey = (typeof STATUS_KEYS)[number];
-
-type TrelloConfig = {
-    boardId: string;
-    listMap: Record<StatusKey, string>;
-};
 
 type TrelloRequestOptions = {
     method: "GET" | "POST" | "PUT" | "DELETE";
@@ -66,6 +59,7 @@ async function trelloRequest<T>(options: TrelloRequestOptions): Promise<T | unde
     return undefined;
 }
 
+// New: Verify credentials
 export const verifyCredentials = action({
     args: {},
     handler: async () => {
@@ -86,6 +80,7 @@ export const verifyCredentials = action({
     },
 });
 
+// New: List boards
 export const listBoards = action({
     args: {},
     handler: async () => {
@@ -105,6 +100,7 @@ export const listBoards = action({
     },
 });
 
+// New: Create Board
 export const createBoard = action({
     args: { name: v.string() },
     handler: async (_ctx, args) => {
@@ -125,6 +121,7 @@ export const createBoard = action({
     }
 });
 
+// Updated: Fetch lists for a specific board
 export const fetchLists = action({
     args: { boardId: v.string() },
     handler: async (_ctx, args) => {
@@ -144,7 +141,7 @@ export const fetchLists = action({
 export const snapshotBoard = action({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
-        const config: TrelloConfig | null = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
+        const config = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
         if (!config) {
             throw new Error("Trello not configured for this project");
         }
@@ -179,7 +176,7 @@ export const snapshotBoard = action({
 export const sync = action({
     args: { projectId: v.id("projects"), dryRun: v.optional(v.boolean()) },
     handler: async (ctx, args) => {
-        const config: TrelloConfig | null = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
+        const config = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
         if (!config) {
             throw new Error("Trello not configured for this project");
         }
@@ -207,7 +204,7 @@ export const sync = action({
             listsByStatus: config.listMap
                 ? Object.fromEntries(
                     Object.entries(config.listMap).map(([k, v]) => [k, { id: v, name: k }])
-                )
+                  )
                 : {}, // Fallback if no map, though config should have it
             // Also provide raw lists found on board, in case config is stale
             knownLists: lists?.map((l: any) => ({ id: l.id, name: l.name })),
@@ -234,9 +231,9 @@ export const sync = action({
             token: auth.token,
             dryRun: args.dryRun
         }, {
-            knownLists: lists,
-            knownLabels: labels,
-            knownCustomFields: customFields
+             knownLists: lists,
+             knownLabels: labels,
+             knownCustomFields: customFields
         });
 
         // 4. Persist Updates
@@ -273,8 +270,7 @@ export const sync = action({
 
         return {
             syncedCount,
-            archivedCount: 0,
-            // Agent currently doesn't output explicit "Archive" ops in mappingUpserts, but could via 'ops'
+            archivedCount: 0, // Agent currently doesn't output explicit "Archive" ops in mappingUpserts, but could via 'ops'
             errors: report.opResults.filter(r => !r.ok).map(r => `Op ${r.opId} (${r.op}) failed: ${r.error?.message}`),
             retries: [], // Executor handles retries internally
             report, // Return full report for debugging

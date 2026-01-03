@@ -64,7 +64,7 @@ function MessageBubble({ message }: { message: Doc<"conversationMessages"> }) {
     );
 }
 
-export default function AgentPage() {
+export default function ChatPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
     const searchParams = useSearchParams();
@@ -148,7 +148,7 @@ export default function AgentPage() {
         next.set("conversationId", String(first._id));
         const nextQuery = next.toString();
         if (nextQuery === searchParams.toString()) return;
-        router.replace(`/projects/${projectId}/agent?${nextQuery}`);
+        router.replace(`/projects/${projectId}/chat?${nextQuery}`);
     }, [conversations, projectId, router, searchParams, selectedConversationId]);
 
     useEffect(() => {
@@ -158,7 +158,7 @@ export default function AgentPage() {
         next.set("stage", selectedConversation.stageTag);
         const nextQuery = next.toString();
         if (nextQuery === searchParams.toString()) return;
-        router.replace(`/projects/${projectId}/agent?${nextQuery}`);
+        router.replace(`/projects/${projectId}/chat?${nextQuery}`);
     }, [projectId, router, searchParams, selectedConversation]);
 
     const currentStage = (selectedConversation?.stageTag ?? draftStage) as Stage;
@@ -176,7 +176,7 @@ export default function AgentPage() {
     const updateParam = (id: Id<"projectConversations">) => {
         const next = new URLSearchParams(searchParams.toString());
         next.set("conversationId", String(id));
-        router.replace(`/projects/${projectId}/agent?${next.toString()}`);
+        router.replace(`/projects/${projectId}/chat?${next.toString()}`);
     };
 
     const structuredStage = currentStage === "ideation" ? "clarification" : currentStage;
@@ -196,7 +196,7 @@ export default function AgentPage() {
         if (selectedConversationId === conversationId) {
             const next = new URLSearchParams(searchParams.toString());
             next.delete("conversationId");
-            router.replace(`/projects/${projectId}/agent?${next.toString()}`);
+            router.replace(`/projects/${projectId}/chat?${next.toString()}`);
         }
     };
 
@@ -273,7 +273,7 @@ export default function AgentPage() {
                                     setDraftStage(next);
                                     const params = new URLSearchParams(searchParams.toString());
                                     params.set("stage", next);
-                                    router.replace(`/projects/${projectId}/agent?${params.toString()}`);
+                                    router.replace(`/projects/${projectId}/chat?${params.toString()}`);
                                 }
                             }}
                             className="border rounded px-2 py-1 text-sm"

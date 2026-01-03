@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
 import { TaskModal } from "./_components/TaskModal";
 import { ChangeSetReviewBanner } from "../_components/changesets/ChangeSetReviewBanner";
+import { useTaskSelection } from "../_components/tasks/TaskSelectionContext";
 
 type UpdateTaskInput = {
     taskId: Id<"tasks">;
@@ -96,9 +97,10 @@ export default function TasksPage() {
     const [sortField, setSortField] = useState<SortField>("updatedAt");
     const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
     const [activeTaskId, setActiveTaskId] = useState<Id<"tasks"> | null>(null);
-    const [selectedTaskId, setSelectedTaskId] = useState<Id<"tasks"> | null>(null);
+    const { selectedTaskId, setSelectedTaskId } = useTaskSelection();
     const [editMode, setEditMode] = useState(false);
     const [draftRevisionId, setDraftRevisionId] = useState<Id<"revisions"> | null>(null);
+    const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
 
     const refinerStatus = taskRefinerRuns?.[0]?.status;
     const isRefinerActive = refinerStatus === "queued" || refinerStatus === "running";
@@ -541,7 +543,11 @@ export default function TasksPage() {
                                 column={col}
                                 tasks={tasksByStatus[col.id]}
                                 activeTaskId={activeTaskId}
-                                onOpenTask={(taskId) => setSelectedTaskId(taskId)}
+                                selectedTaskId={selectedTaskId}
+                                onOpenTask={(taskId) => {
+                                    setSelectedTaskId(taskId);
+                                    setIsTaskModalOpen(true);
+                                }}
                                 onUpdate={async (input) => {
                                     if (!allowInlineEdits) {
                                         alert("Enable draft editing to change tasks.");
@@ -608,12 +614,12 @@ export default function TasksPage() {
                 sectionLabelById={sectionLabelById}
             />
 
-            {selectedTask && (
+            {isTaskModalOpen && selectedTask && (
                 <TaskModal
                     key={selectedTask._id}
                     projectId={projectId}
                     task={selectedTask}
-                    onClose={() => setSelectedTaskId(null)}
+                    onClose={() => setIsTaskModalOpen(false)}
                     elementsCanonical={elementsCanonical}
                     draftRevisionId={draftRevisionId}
                     elementsById={elementsById}
@@ -634,6 +640,7 @@ function KanbanColumn({
     sectionLabelById,
     accountingItemById,
     activeTaskId,
+    selectedTaskId,
     taskNumberById,
     allowInlineEdits,
     draftOnlyMode,
@@ -648,6 +655,7 @@ function KanbanColumn({
     sectionLabelById: Map<string, string>;
     accountingItemById: Map<string, { label: string; type: "material" | "work"; sectionId: Id<"sections"> }>;
     activeTaskId: Id<"tasks"> | null;
+    selectedTaskId: Id<"tasks"> | null;
     taskNumberById: Map<Id<"tasks">, number>;
     allowInlineEdits: boolean;
     draftOnlyMode: boolean;
@@ -675,6 +683,7 @@ function KanbanColumn({
                         onDelete={onDelete}
                         onOpen={() => onOpenTask(task._id)}
                         isDragging={activeTaskId === task._id}
+                        isSelected={selectedTaskId === task._id}
                         taskNumberById={taskNumberById}
                         allowInlineEdits={allowInlineEdits}
                         draftOnlyMode={draftOnlyMode}
@@ -695,6 +704,7 @@ function TaskCard({
     onDelete,
     onOpen,
     isDragging,
+    isSelected,
     taskNumberById,
     allowInlineEdits,
     draftOnlyMode,
@@ -708,6 +718,7 @@ function TaskCard({
     onDelete: (input: DeleteTaskInput) => Promise<void>;
     onOpen: () => void;
     isDragging: boolean;
+    isSelected: boolean;
     taskNumberById: Map<Id<"tasks">, number>;
     allowInlineEdits: boolean;
     draftOnlyMode: boolean;
@@ -721,6 +732,9 @@ function TaskCard({
         transform: CSS.Translate.toString(transform),
         opacity: isDragging ? 0.5 : 1,
     };
+    const cardClasses = `bg-white p-3 rounded shadow-sm border hover:shadow-md transition group relative ${
+        isSelected ? "ring-2 ring-blue-600 ring-offset-2 ring-offset-gray-50" : ""
+    }`;
 
     const sectionLabel = task.accountingSectionId ? sectionLabelById.get(task.accountingSectionId) : null;
     const accountingItem = task.accountingLineId ? accountingItemById.get(task.accountingLineId) : null;
@@ -768,7 +782,7 @@ function TaskCard({
             : null;
 
     return (
-        <div ref={setNodeRef} style={style} className="bg-white p-3 rounded shadow-sm border hover:shadow-md transition group relative">
+        <div ref={setNodeRef} style={style} className={cardClasses}>
             <div className="flex justify-between items-center mb-2">
                 <div className="flex items-center gap-2">
                     {task.taskNumber && <span className="text-xs font-mono text-gray-500">#{task.taskNumber}</span>}

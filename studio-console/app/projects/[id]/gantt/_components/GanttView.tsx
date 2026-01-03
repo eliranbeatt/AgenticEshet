@@ -7,6 +7,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import { useParams } from "next/navigation";
+import { useTaskSelection } from "../../_components/tasks/TaskSelectionContext";
 
 function startOfDay(date: Date): Date {
     const normalized = new Date(date);
@@ -26,8 +27,16 @@ export default function GanttView() {
     const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
     const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
     const updateTask = useMutation(api.tasks.updateTask);
+    const { selectedTaskId, setSelectedTaskId } = useTaskSelection();
 
     const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Day);
+
+    const taskDependencies = useMemo(() => {
+        if (!tasks) return new Map<string, Doc<"tasks">>();
+        const map = new Map<string, Doc<"tasks">>();
+        tasks.forEach((task) => map.set(String(task._id), task));
+        return map;
+    }, [tasks]);
 
     const ganttTasks: Task[] = useMemo(() => {
         if (!tasks) return [];
@@ -35,20 +44,53 @@ export default function GanttView() {
         for (const item of itemsData?.items ?? []) {
             itemMap.set(item._id, item.title);
         }
-        
-        return tasks.map((t) => {
-            // Default to today if no start date, or keep existing
-            const start = t.startDate ? new Date(t.startDate) : startOfDay(new Date());
-            
-            let end: Date;
-            if (t.endDate) {
-                end = new Date(t.endDate);
-            } else if (t.estimatedDuration) {
-                end = new Date(start.getTime() + t.estimatedDuration);
-            } else {
-                end = addDays(start, 1);
+
+        const getDurationMs = (task: Doc<"tasks">) => {
+            if (task.estimatedDuration && Number.isFinite(task.estimatedDuration)) return task.estimatedDuration;
+            if (typeof task.durationHours === "number" && Number.isFinite(task.durationHours)) return task.durationHours * 60 * 60 * 1000;
+            if (typeof task.estimatedMinutes === "number" && Number.isFinite(task.estimatedMinutes)) return task.estimatedMinutes * 60 * 1000;
+            return 24 * 60 * 60 * 1000;
+        };
+
+        const deriveStart = (task: Doc<"tasks">): Date => {
+            const direct = task.startDate ?? task.plannedStart;
+            if (direct) return startOfDay(new Date(direct));
+
+            const dependencyDates = (task.dependencies ?? [])
+                .map((id) => taskDependencies.get(String(id)))
+                .map((dep) => {
+                    if (!dep) return null;
+                    const dependencyStartSource = dep.startDate ?? dep.plannedStart;
+                    const dependencyStart = dependencyStartSource ? startOfDay(new Date(dependencyStartSource)) : startOfDay(new Date());
+                    if (dep.endDate ?? dep.plannedEnd) {
+                        return new Date((dep.endDate ?? dep.plannedEnd) as number | string);
+                    }
+                    return new Date(dependencyStart.getTime() + getDurationMs(dep));
+                })
+                .filter((value): value is Date => Boolean(value));
+
+            if (dependencyDates.length > 0) {
+                const latest = dependencyDates.reduce((max, date) => (date.getTime() > max.getTime() ? date : max), dependencyDates[0]);
+                return startOfDay(latest);
             }
-            
+
+            return startOfDay(new Date());
+        };
+
+        const deriveEnd = (task: Doc<"tasks">, start: Date): Date => {
+            const planned = task.endDate ?? task.plannedEnd;
+            if (planned) {
+                const plannedEnd = new Date(planned);
+                if (plannedEnd.getTime() >= start.getTime()) return plannedEnd;
+            }
+
+            return new Date(start.getTime() + getDurationMs(task));
+        };
+
+        return tasks.map((t) => {
+            const start = deriveStart(t);
+            const end = deriveEnd(t, start);
+
             return {
                 start,
                 end,
@@ -57,51 +99,52 @@ export default function GanttView() {
                 type: "task",
                 progress: t.status === "done" ? 100 : t.status === "in_progress" ? 50 : 0,
                 isDisabled: false,
-                styles: { progressColor: "#ffbb54", progressSelectedColor: "#ff9e0d" },
+                styles: {
+                    backgroundColor: selectedTaskId === t._id ? "#e0edff" : undefined,
+                    backgroundSelectedColor: "#d0e0ff",
+                    progressColor: selectedTaskId === t._id ? "#2563eb" : "#ffbb54",
+                    progressSelectedColor: "#1d4ed8",
+                },
                 dependencies: ((t.dependencies as Array<Id<"tasks">> | undefined) ?? []).map((d) => String(d)),
             };
         });
-    }, [itemsData?.items, tasks]);
+    }, [itemsData?.items, selectedTaskId, taskDependencies, tasks]);
 
     const handleTaskChange = useCallback(
         async (task: Task) => {
             const newStart = task.start.getTime();
             const newEnd = task.end.getTime();
-            
-            // 1. Update the moved task
+            const duration = Math.max(newEnd - newStart, 60 * 60 * 1000);
+
             await updateTask({
                 taskId: task.id as Id<"tasks">,
                 startDate: newStart,
                 endDate: newEnd,
+                estimatedDuration: duration,
             });
 
-            // 2. Simple cascade for direct dependencies
-            // Find tasks that depend on this one
-            const children = tasks?.filter(t => t.dependencies?.includes(task.id as Id<"tasks">));
-            
+            const children = tasks?.filter((t) => t.dependencies?.includes(task.id as Id<"tasks">));
             if (children) {
                 for (const child of children) {
                     const childStart = child.startDate ?? newStart;
-                    const childEnd = child.endDate ?? (childStart + 86400000);
-                    
-                    // If child starts before parent ends, push it
+                    const childEnd = child.endDate ?? childStart + (child.estimatedDuration ?? 24 * 60 * 60 * 1000);
+
                     if (childStart < newEnd) {
-                        const duration = childEnd - childStart;
+                        const cascadeDuration = Math.max(childEnd - childStart, 60 * 60 * 1000);
                         const newChildStart = newEnd;
-                        const newChildEnd = newChildStart + duration;
-                        
+                        const newChildEnd = newChildStart + cascadeDuration;
+
                         await updateTask({
                             taskId: child._id,
                             startDate: newChildStart,
                             endDate: newChildEnd,
+                            estimatedDuration: cascadeDuration,
                         });
-                        // Note: This only handles one level of depth. 
-                        // For deep chains, a recursive function or server-side logic is better.
                     }
                 }
             }
         },
-        [tasks, updateTask]
+        [tasks, updateTask],
     );
 
     if (!tasks) return <div className="p-8">Loading tasks...</div>;
@@ -140,8 +183,10 @@ export default function GanttView() {
                     tasks={ganttTasks}
                     viewMode={viewMode}
                     onDateChange={handleTaskChange}
+                    onSelect={(task) => setSelectedTaskId((task?.id as Id<"tasks">) ?? null)}
+                    selectedTask={ganttTasks.find((task) => task.id === selectedTaskId)}
                     listCellWidth="155px"
-                    columnWidth={viewMode === ViewMode.Month ? 300 : 65}
+                    columnWidth={viewMode === ViewMode.Month ? 300 : viewMode === ViewMode.Week ? 120 : 65}
                     barFill={60}
                 />
             </div>

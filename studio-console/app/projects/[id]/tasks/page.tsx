@@ -16,9 +16,12 @@ import {
     useDraggable,
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical } from "lucide-react";
+import { GripVertical, PanelsTopLeft } from "lucide-react";
 import { TaskModal } from "./_components/TaskModal";
 import { ChangeSetReviewBanner } from "../_components/changesets/ChangeSetReviewBanner";
+import { ElementsPalette, type PaletteElement } from "./_components/ElementsPalette";
+import { PaletteDropModal } from "./_components/PaletteDropModal";
+import { SaveElementModal } from "./_components/SaveElementModal";
 
 type UpdateTaskInput = {
     taskId: Id<"tasks">;
@@ -62,6 +65,37 @@ const columns: { id: Doc<"tasks">["status"]; title: string; color: string }[] = 
 const categoryOptions: Doc<"tasks">["category"][] = ["Logistics", "Creative", "Finance", "Admin", "Studio"];
 const priorityOptions: Doc<"tasks">["priority"][] = ["High", "Medium", "Low"];
 
+const DEFAULT_PALETTE: PaletteElement[] = [
+    {
+        id: "preset:checklist",
+        title: "Production checklist",
+        description: "Quick start set of admin + studio follow-ups",
+        source: "preset",
+        stageHint: "planning",
+        tasks: [
+            { title: "Lock studio requirements", category: "Studio", priority: "High" },
+            { title: "Confirm logistics vendor", category: "Logistics", priority: "Medium" },
+            { title: "Share shoot-day responsibilities", category: "Creative", priority: "Medium" },
+        ],
+    },
+    {
+        id: "preset:gantt",
+        title: "Gantt-ready task",
+        description: "Prefills timeline fields for quick scheduling drops",
+        source: "preset",
+        stageHint: "planning",
+        tasks: [{ title: "Timeline placeholder", category: "Admin", priority: "Medium", estimatedMinutes: 120 }],
+    },
+    {
+        id: "preset:kanban",
+        title: "Kanban-ready card",
+        description: "Drop into any column to capture status + owner",
+        source: "preset",
+        stageHint: "tasks",
+        tasks: [{ title: "Follow up with vendor", category: "Logistics", priority: "High", steps: ["Send brief", "Confirm rate"] }],
+    },
+];
+
 export default function TasksPage() {
     const params = useParams();
     const projectId = params.id as Id<"projects">;
@@ -86,6 +120,8 @@ export default function TasksPage() {
     const approveDraft = useMutation(api.revisions.approve);
     const discardDraft = useMutation(api.revisions.discardDraft);
     const patchElement = useMutation(api.revisions.patchElement);
+    const templateDefinitions = useQuery(api.items.listTemplates);
+    const saveTemplate = useMutation(api.admin.saveTemplate);
 
     const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
     const [isGenerating, setIsGenerating] = useState(false);
@@ -99,6 +135,13 @@ export default function TasksPage() {
     const [selectedTaskId, setSelectedTaskId] = useState<Id<"tasks"> | null>(null);
     const [editMode, setEditMode] = useState(false);
     const [draftRevisionId, setDraftRevisionId] = useState<Id<"revisions"> | null>(null);
+    const [pendingPresetDrop, setPendingPresetDrop] = useState<{
+        preset: PaletteElement;
+        targetStatus?: Doc<"tasks">["status"];
+    } | null>(null);
+    const [activePresetId, setActivePresetId] = useState<string | null>(null);
+    const [customElements, setCustomElements] = useState<PaletteElement[]>([]);
+    const [saveElementOpen, setSaveElementOpen] = useState(false);
 
     const refinerStatus = taskRefinerRuns?.[0]?.status;
     const isRefinerActive = refinerStatus === "queued" || refinerStatus === "running";
@@ -162,6 +205,24 @@ export default function TasksPage() {
         if (!tasks || !selectedTaskId) return null;
         return tasks.find((t) => t._id === selectedTaskId) ?? null;
     }, [selectedTaskId, tasks]);
+
+    const paletteElements = useMemo(() => {
+        const templatePresets: PaletteElement[] = (templateDefinitions ?? []).map((t) => ({
+            id: `template:${t._id}`,
+            title: t.name,
+            description: t.quotePattern ?? "",
+            source: "template",
+            stageHint: "planning",
+            tasks: (t.tasks as any[])?.map((task) => ({
+                title: task.title,
+                category: task.category,
+                priority: "Medium",
+                estimatedMinutes: task.effortDays ? task.effortDays * 8 * 60 : undefined,
+            })) ?? [{ title: t.name, category: "Studio", priority: "Medium" }],
+        }));
+
+        return [...DEFAULT_PALETTE, ...templatePresets, ...customElements];
+    }, [customElements, templateDefinitions]);
 
     const taskKeyById = useMemo(() => {
         const map = new Map<string, string>();
@@ -422,12 +483,73 @@ export default function TasksPage() {
         setNewTaskTitle("");
     };
 
+    const handleApplyPreset = async ({
+        preset,
+        targetStatus,
+        phase,
+        startDate,
+        endDate,
+    }: {
+        preset: PaletteElement;
+        targetStatus: Doc<"tasks">["status"];
+        phase: string;
+        startDate: number | null;
+        endDate: number | null;
+    }) => {
+        if (!allowInlineEdits || draftOnlyMode) {
+            alert("Enable draft editing to add tasks from the palette.");
+            return;
+        }
+
+        const tasksToCreate = preset.tasks.length
+            ? preset.tasks
+            : [{ title: preset.title, category: "Studio", priority: "Medium" }];
+
+        for (const blueprint of tasksToCreate) {
+            const newTaskId = (await createTask({
+                projectId,
+                title: blueprint.title,
+                description: preset.description,
+                status: targetStatus,
+                category: (blueprint.category as Doc<"tasks">["category"]) ?? "Studio",
+                priority: (blueprint.priority as Doc<"tasks">["priority"]) ?? "Medium",
+                workstream: phase,
+                estimatedMinutes: blueprint.estimatedMinutes,
+                steps: blueprint.steps,
+                subtasks: blueprint.steps?.map((step) => ({ title: step, done: false })),
+            })) as Id<"tasks">;
+
+            if (startDate || endDate) {
+                await updateTask({
+                    taskId: newTaskId,
+                    startDate: startDate ?? undefined,
+                    endDate: endDate ?? undefined,
+                    workstream: phase,
+                });
+            }
+        }
+
+        setPendingPresetDrop(null);
+    };
+
     const handleDragStart = (event: DragStartEvent) => {
+        const presetId = event.active.data.current?.presetId as string | undefined;
+        if (presetId) {
+            setActivePresetId(presetId);
+            return;
+        }
         const taskId = event.active.data.current?.taskId as Id<"tasks"> | undefined;
         setActiveTaskId(taskId ?? null);
     };
 
     const handleDragEnd = async (event: DragEndEvent) => {
+        const preset = event.active.data.current?.preset as PaletteElement | undefined;
+        if (preset) {
+            setActivePresetId(null);
+            const nextStatus = event.over?.id as Doc<"tasks">["status"] | undefined;
+            setPendingPresetDrop({ preset, targetStatus: nextStatus ?? "todo" });
+            return;
+        }
         const taskId = event.active.data.current?.taskId as Id<"tasks"> | undefined;
         const nextStatus = event.over?.id as Doc<"tasks">["status"] | undefined;
         setActiveTaskId(null);
@@ -436,6 +558,61 @@ export default function TasksPage() {
         const task = tasks?.find((t: Doc<"tasks">) => t._id === taskId);
         if (!task || task.status === nextStatus) return;
         await updateTask({ taskId, status: nextStatus });
+    };
+
+    const handleSaveElement = async ({ title, description, phase }: { title: string; description: string; phase: string }) => {
+        if (!selectedTask) return;
+        const slug = title
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "")
+            .slice(0, 32) || "task";
+        const templateId = `${slug}-${Date.now()}`;
+
+        await saveTemplate({
+            templateId,
+            version: 1,
+            name: title,
+            appliesToKind: "service",
+            fields: [
+                { key: "phase", label: "Phase", type: "text", required: false, default: phase },
+                { key: "kanban", label: "Kanban status", type: "text", required: false, default: selectedTask.status },
+            ],
+            tasks: [
+                {
+                    title: selectedTask.title,
+                    category: selectedTask.category,
+                    role: selectedTask.workstream ?? "Owner",
+                    effortDays: selectedTask.estimatedMinutes ? selectedTask.estimatedMinutes / (60 * 8) : 1,
+                },
+            ],
+            materials: [],
+            companionRules: [],
+            quotePattern: description,
+            status: "published",
+        });
+
+        setCustomElements((prev) => [
+            ...prev,
+            {
+                id: `custom:${templateId}`,
+                title,
+                description,
+                source: "custom",
+                stageHint: phase as PaletteElement["stageHint"],
+                tasks: [
+                    {
+                        title: selectedTask.title,
+                        category: selectedTask.category,
+                        priority: selectedTask.priority,
+                        estimatedMinutes: selectedTask.estimatedMinutes ?? undefined,
+                        steps: selectedTask.steps ?? [],
+                    },
+                ],
+            },
+        ]);
+
+        setSaveElementOpen(false);
     };
 
     return (
@@ -512,6 +689,14 @@ export default function TasksPage() {
                     >
                         {isGenerating ? "Thinking..." : "Regenerate (Clear & New)"}
                     </button>
+
+                    <button
+                        onClick={() => setSaveElementOpen(true)}
+                        disabled={!selectedTask}
+                        className="bg-emerald-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                        <PanelsTopLeft size={16} /> Save selected as element
+                    </button>
                 </div>
             </div>
 
@@ -533,71 +718,79 @@ export default function TasksPage() {
             />
 
             <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-                <div className="flex-1 overflow-x-auto">
-                    <div className="flex gap-4 h-full min-w-max">
-                        {columns.map((col) => (
-                            <KanbanColumn
-                                key={col.id}
-                                column={col}
-                                tasks={tasksByStatus[col.id]}
-                                activeTaskId={activeTaskId}
-                                onOpenTask={(taskId) => setSelectedTaskId(taskId)}
-                                onUpdate={async (input) => {
-                                    if (!allowInlineEdits) {
-                                        alert("Enable draft editing to change tasks.");
-                                        return;
-                                    }
-                                    const task = tasks?.find((t: Doc<"tasks">) => t._id === input.taskId);
-                                    if (!task) return;
-                                    const hasItemId = Object.prototype.hasOwnProperty.call(input, "itemId");
-                                    const nextElementId = hasItemId ? input.itemId : task.itemId;
-                                    let nextTaskKey = isElementTaskKey(task.itemSubtaskId) ? task.itemSubtaskId : undefined;
-                                    if (Object.prototype.hasOwnProperty.call(input, "itemSubtaskId")) {
-                                        nextTaskKey = isElementTaskKey(input.itemSubtaskId) ? input.itemSubtaskId : undefined;
-                                    }
-                                    const updates: UpdateTaskInput = { ...input };
-                                    if (editMode && draftRevisionId && nextElementId && !nextTaskKey) {
-                                        nextTaskKey = createTaskKey();
-                                        updates.itemSubtaskId = nextTaskKey;
-                                    }
-                                    if (draftOnlyMode) {
-                                        await applyTaskPatch(task, updates);
-                                        return;
-                                    }
-                                    await updateTask(updates);
-                                }}
-                                onDelete={async (input) => {
-                                    if (!allowInlineEdits) {
-                                        alert("Enable draft editing to delete tasks.");
-                                        return;
-                                    }
-                                    const task = tasks?.find((t: Doc<"tasks">) => t._id === input.taskId);
-                                    if (draftOnlyMode) {
-                                        if (draftRevisionId && task?.itemId && isElementTaskKey(task.itemSubtaskId)) {
-                                            const element = elementsById.get(String(task.itemId));
-                                            const baseVersionId = element?.publishedVersionId ?? undefined;
-                                            await patchElement({
-                                                revisionId: draftRevisionId,
-                                                elementId: task.itemId,
-                                                baseVersionId,
-                                                patchOps: [{ op: "remove_line", entity: "tasks", key: task.itemSubtaskId, reason: "User deleted task" }],
-                                            });
-                                        } else {
-                                            alert("Draft deletes require a linked element task.");
+                <div className="flex flex-col gap-4">
+                    <ElementsPalette
+                        elements={paletteElements}
+                        activePresetId={activePresetId}
+                        onSelect={(element) => setPendingPresetDrop({ preset: element, targetStatus: "todo" })}
+                    />
+
+                    <div className="flex-1 overflow-x-auto">
+                        <div className="flex gap-4 h-full min-w-max">
+                            {columns.map((col) => (
+                                <KanbanColumn
+                                    key={col.id}
+                                    column={col}
+                                    tasks={tasksByStatus[col.id]}
+                                    activeTaskId={activeTaskId}
+                                    onOpenTask={(taskId) => setSelectedTaskId(taskId)}
+                                    onUpdate={async (input) => {
+                                        if (!allowInlineEdits) {
+                                            alert("Enable draft editing to change tasks.");
+                                            return;
                                         }
-                                        return;
-                                    }
-                                    await deleteTask(input);
-                                }}
-                                sections={accountingSections}
-                                items={items}
-                                sectionLabelById={sectionLabelById}
-                                accountingItemById={accountingItemById}
-                                taskNumberById={taskNumberById}
-                                allowInlineEdits={allowInlineEdits}
-                                draftOnlyMode={draftOnlyMode}
-                            />
-                        ))}
+                                        const task = tasks?.find((t: Doc<"tasks">) => t._id === input.taskId);
+                                        if (!task) return;
+                                        const hasItemId = Object.prototype.hasOwnProperty.call(input, "itemId");
+                                        const nextElementId = hasItemId ? input.itemId : task.itemId;
+                                        let nextTaskKey = isElementTaskKey(task.itemSubtaskId) ? task.itemSubtaskId : undefined;
+                                        if (Object.prototype.hasOwnProperty.call(input, "itemSubtaskId")) {
+                                            nextTaskKey = isElementTaskKey(input.itemSubtaskId) ? input.itemSubtaskId : undefined;
+                                        }
+                                        const updates: UpdateTaskInput = { ...input };
+                                        if (editMode && draftRevisionId && nextElementId && !nextTaskKey) {
+                                            nextTaskKey = createTaskKey();
+                                            updates.itemSubtaskId = nextTaskKey;
+                                        }
+                                        if (draftOnlyMode) {
+                                            await applyTaskPatch(task, updates);
+                                            return;
+                                        }
+                                        await updateTask(updates);
+                                    }}
+                                    onDelete={async (input) => {
+                                        if (!allowInlineEdits) {
+                                            alert("Enable draft editing to delete tasks.");
+                                            return;
+                                        }
+                                        const task = tasks?.find((t: Doc<"tasks">) => t._id === input.taskId);
+                                        if (draftOnlyMode) {
+                                            if (draftRevisionId && task?.itemId && isElementTaskKey(task.itemSubtaskId)) {
+                                                const element = elementsById.get(String(task.itemId));
+                                                const baseVersionId = element?.publishedVersionId ?? undefined;
+                                                await patchElement({
+                                                    revisionId: draftRevisionId,
+                                                    elementId: task.itemId,
+                                                    baseVersionId,
+                                                    patchOps: [{ op: "remove_line", entity: "tasks", key: task.itemSubtaskId, reason: "User deleted task" }],
+                                                });
+                                            } else {
+                                                alert("Draft deletes require a linked element task.");
+                                            }
+                                            return;
+                                        }
+                                        await deleteTask(input);
+                                    }}
+                                    sections={accountingSections}
+                                    items={items}
+                                    sectionLabelById={sectionLabelById}
+                                    accountingItemById={accountingItemById}
+                                    taskNumberById={taskNumberById}
+                                    allowInlineEdits={allowInlineEdits}
+                                    draftOnlyMode={draftOnlyMode}
+                                />
+                            ))}
+                        </div>
                     </div>
                 </div>
             </DndContext>
@@ -617,6 +810,31 @@ export default function TasksPage() {
                     elementsCanonical={elementsCanonical}
                     draftRevisionId={draftRevisionId}
                     elementsById={elementsById}
+                />
+            )}
+
+            {pendingPresetDrop && (
+                <PaletteDropModal
+                    element={pendingPresetDrop.preset}
+                    defaultStatus={pendingPresetDrop.targetStatus ?? "todo"}
+                    onClose={() => setPendingPresetDrop(null)}
+                    onConfirm={(payload) =>
+                        void handleApplyPreset({
+                            preset: pendingPresetDrop.preset,
+                            targetStatus: payload.targetStatus as Doc<"tasks">["status"],
+                            phase: payload.phase,
+                            startDate: payload.startDate,
+                            endDate: payload.endDate,
+                        })
+                    }
+                />
+            )}
+
+            {saveElementOpen && selectedTask && (
+                <SaveElementModal
+                    defaultTitle={`${selectedTask.title} template`}
+                    onClose={() => setSaveElementOpen(false)}
+                    onSave={(data) => void handleSaveElement(data)}
                 />
             )}
         </div>

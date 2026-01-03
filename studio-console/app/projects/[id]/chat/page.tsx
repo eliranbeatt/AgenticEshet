@@ -89,6 +89,8 @@ export default function ChatPage() {
     const [summaryModalOpen, setSummaryModalOpen] = useState(false);
     const [summaryText, setSummaryText] = useState("");
     const [summaryStatus, setSummaryStatus] = useState<"idle" | "loading">("idle");
+    const [skillsOpen, setSkillsOpen] = useState(false);
+    const [skillsSearch, setSkillsSearch] = useState("");
 
     const conversations = useQuery(api.projectConversations.list, {
         projectId,
@@ -124,6 +126,8 @@ export default function ChatPage() {
         });
         return map;
     }, [approvedItems]);
+
+    const skillOptions = useQuery(api.agents.skills.listEnabled, {});
 
     const createConversation = useMutation(api.projectConversations.create);
     const archiveConversation = useMutation(api.projectConversations.archive);
@@ -332,8 +336,17 @@ export default function ChatPage() {
                         </button>
                     )}
                 </div>
-                <div className="text-xs text-gray-500">
-                    {selectedConversation ? `Active: ${selectedConversation.title}` : "Create a conversation to begin."}
+                <div className="flex items-center gap-3">
+                    <button
+                        type="button"
+                        className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700"
+                        onClick={() => setSkillsOpen(true)}
+                    >
+                        Skills
+                    </button>
+                    <div className="text-xs text-gray-500">
+                        {selectedConversation ? `Active: ${selectedConversation.title}` : "Create a conversation to begin."}
+                    </div>
                 </div>
             </div>
 
@@ -737,6 +750,72 @@ export default function ChatPage() {
                             >
                                 Copy to clipboard
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {skillsOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+                    <div className="bg-white rounded-lg shadow-lg w-full max-w-3xl overflow-hidden">
+                        <div className="flex items-center justify-between px-4 py-3 border-b">
+                            <div className="text-sm font-semibold text-gray-800">Skills</div>
+                            <button
+                                type="button"
+                                className="text-xs text-gray-500 hover:text-gray-700"
+                                onClick={() => setSkillsOpen(false)}
+                            >
+                                Close
+                            </button>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            <input
+                                className="w-full border rounded px-3 py-2 text-xs"
+                                placeholder="Search skills..."
+                                value={skillsSearch}
+                                onChange={(event) => setSkillsSearch(event.target.value)}
+                            />
+                            <div className="max-h-[420px] overflow-y-auto border rounded">
+                                {(skillOptions ?? [])
+                                    .filter((skill) => {
+                                        const term = skillsSearch.trim().toLowerCase();
+                                        if (!term) return true;
+                                        const label = `${skill.skillKey ?? skill.name} ${skill.name}`.toLowerCase();
+                                        return label.includes(term);
+                                    })
+                                    .map((skill) => (
+                                        <div key={skill._id} className="border-b p-3 text-xs">
+                                            <div className="flex items-center justify-between">
+                                                <div className="font-semibold text-gray-800">
+                                                    {skill.skillKey ?? skill.name}
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    className="text-[10px] px-2 py-1 rounded border border-gray-200 text-gray-600"
+                                                    onClick={async () => {
+                                                        const text = skill.skillKey ?? skill.name;
+                                                        await navigator.clipboard.writeText(text);
+                                                    }}
+                                                >
+                                                    Copy key
+                                                </button>
+                                            </div>
+                                            <div className="text-[10px] text-gray-500 mt-1">
+                                                Stage: {(skill.stageTags ?? []).join(", ") || "n/a"} • Channel:{" "}
+                                                {(skill.channelTags ?? []).join(", ") || "n/a"}
+                                            </div>
+                                            <div className="text-[11px] text-gray-600 mt-2 line-clamp-2">
+                                                {skill.content}
+                                            </div>
+                                        </div>
+                                    ))}
+                                {(skillOptions ?? []).length === 0 && (
+                                    <div className="p-4 text-xs text-gray-500">No skills available.</div>
+                                )}
+                            </div>
+                            <div className="text-[11px] text-gray-500">
+                                Run skills from the Agent tab for full agentic flow.
+                            </div>
                         </div>
                     </div>
                 </div>

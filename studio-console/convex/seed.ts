@@ -17,6 +17,7 @@ import {
     solutioningPrompt,
     tasksPrompt,
 } from "./prompts/itemsPromptPack";
+import { seedAgentSkills } from "./skills/seed";
 
 // Public mutation for UI button access
 export const seedSkillsPublic = mutation({
@@ -113,6 +114,8 @@ export const seedSkillsPublic = mutation({
                 });
             }
         }
+
+        await seedAgentSkills(ctx);
     },
 });
 

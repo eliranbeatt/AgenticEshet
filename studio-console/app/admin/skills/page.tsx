@@ -10,6 +10,8 @@ type SkillFormState = {
     type: string;
     content: string;
     metadataJson: string;
+    skillKey: string;
+    enabled: boolean;
 };
 
 const emptyForm: SkillFormState = {
@@ -17,6 +19,8 @@ const emptyForm: SkillFormState = {
     type: "agent_system",
     content: "",
     metadataJson: "{}",
+    skillKey: "",
+    enabled: true,
 };
 
 export default function SkillsAdminPage() {
@@ -44,6 +48,8 @@ export default function SkillsAdminPage() {
             type: selectedSkill.type,
             content: selectedSkill.content,
             metadataJson: selectedSkill.metadataJson,
+            skillKey: selectedSkill.skillKey ?? "",
+            enabled: selectedSkill.enabled ?? true,
         });
     }, [selectedSkill]);
 
@@ -57,6 +63,8 @@ export default function SkillsAdminPage() {
                 type: form.type,
                 content: form.content,
                 metadataJson: form.metadataJson,
+                skillKey: form.skillKey.trim() || undefined,
+                enabled: form.enabled,
             });
             setSelectedId(null);
         } catch (error) {
@@ -105,6 +113,10 @@ export default function SkillsAdminPage() {
                                 <span>{skill.name}</span>
                                 <span className="text-xs uppercase text-gray-500">{skill.type}</span>
                             </div>
+                            <div className="flex items-center gap-2 mt-1 text-[10px] uppercase text-gray-400">
+                                <span>{skill.enabled === false ? "disabled" : "enabled"}</span>
+                                {skill.skillKey && <span>key: {skill.skillKey}</span>}
+                            </div>
                             <p className="text-xs text-gray-500 line-clamp-2 mt-1">{skill.content}</p>
                         </button>
                     ))}
@@ -149,6 +161,22 @@ export default function SkillsAdminPage() {
                             className="w-full border rounded px-3 py-2 text-sm"
                             required
                         />
+                    </label>
+                    <label className="text-sm text-gray-700 space-y-1">
+                        <span>Skill Key</span>
+                        <input
+                            value={form.skillKey}
+                            onChange={(e) => setForm((prev) => ({ ...prev, skillKey: e.target.value }))}
+                            className="w-full border rounded px-3 py-2 text-sm"
+                        />
+                    </label>
+                    <label className="text-sm text-gray-700 space-y-1 flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            checked={form.enabled}
+                            onChange={(e) => setForm((prev) => ({ ...prev, enabled: e.target.checked }))}
+                        />
+                        <span>Enabled</span>
                     </label>
                 </div>
 

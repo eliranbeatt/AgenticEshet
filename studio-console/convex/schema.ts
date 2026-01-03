@@ -1348,6 +1348,52 @@ export default defineSchema({
         .index("by_project_tab", ["projectId", "tab"])
         .index("by_project_tab_scopeKey", ["projectId", "tab", "scopeKey"]),
 
+    agentQuestionSessions: defineTable({
+        projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
+        threadId: v.optional(v.id("chatThreads")),
+        stage: v.string(),
+        asked: v.array(v.any()),
+        answered: v.array(v.any()),
+        lastFocus: v.optional(v.string()),
+        missingCritical: v.optional(v.array(v.string())),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+        .index("by_project_stage", ["projectId", "stage"])
+        .index("by_project_conversation_stage", ["projectId", "conversationId", "stage"]),
+
+    agentSuggestionSets: defineTable({
+        projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
+        threadId: v.optional(v.id("chatThreads")),
+        stage: v.string(),
+        suggestionSetId: v.string(),
+        sections: v.any(),
+        createdAt: v.number(),
+        createdBy: v.string(),
+    })
+        .index("by_project_createdAt", ["projectId", "createdAt"])
+        .index("by_project_conversation", ["projectId", "conversationId"]),
+
+    printFileGroups: defineTable({
+        projectId: v.id("projects"),
+        elementId: v.optional(v.id("projectItems")),
+        title: v.optional(v.string()),
+        status: v.optional(v.string()),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+        .index("by_project_createdAt", ["projectId", "createdAt"])
+        .index("by_project_element", ["projectId", "elementId"]),
+
+    printProfiles: defineTable({
+        name: v.string(),
+        spec: v.any(),
+        createdAt: v.number(),
+    })
+        .index("by_name", ["name"]),
+
     // 10. INGESTION JOBS
     ingestionJobs: defineTable({
         projectId: v.optional(v.id("projects")),
@@ -1599,11 +1645,25 @@ export default defineSchema({
 
     // 14. SKILLS (agent prompts)
     skills: defineTable({
-        name: v.string(),         // "clarification", "planning", ...
-        type: v.string(),         // "agent_system", "enrichment"
-        content: v.string(),      // prompt template
-        metadataJson: v.string(), // e.g. {"phase":"planning"}
-    }).index("by_name", ["name"]),
+        key: v.optional(v.string()), // legacy key e.g. "controller.autonomousPlanner"
+        skillKey: v.optional(v.string()), // new key e.g. "ideation.questionsPack5"
+        name: v.string(), // Display name
+        type: v.string(), // "agent_system", "enrichment", "agent_skill"
+        content: v.string(), // prompt template
+        inputSchema: v.optional(v.string()), // legacy JSON schema for input
+        outputSchema: v.optional(v.string()), // legacy JSON schema for output
+        inputSchemaJson: v.optional(v.string()),
+        outputSchemaJson: v.optional(v.string()),
+        toolPolicyJson: v.optional(v.string()),
+        stageTags: v.optional(v.array(v.string())),
+        channelTags: v.optional(v.array(v.string())),
+        metadataJson: v.string(), // e.g. {"phase":"planning", "channel": "structured"}
+        enabled: v.optional(v.boolean()),
+        version: v.optional(v.number()),
+    })
+        .index("by_key", ["key"])
+        .index("by_skillKey", ["skillKey"])
+        .index("by_name", ["name"]),
 
     // 15. SETTINGS (API keys, per-user, per-workspace)
     settings: defineTable({
@@ -1611,6 +1671,133 @@ export default defineSchema({
         key: v.string(),          // "trello_api", etc.
         valueJson: v.string(),
     }).index("by_key", ["key"]),
+
+    // --- AGENTIC MIGRATION (AgnetGMI) TABLES ---
+
+    // 32. PROJECT WORKSPACES (Controller State)
+    projectWorkspaces: defineTable({
+        projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
+        threadId: v.optional(v.id("chatThreads")), // Active thread
+        
+        // Pins & Configuration
+        stagePinned: v.optional(v.union(v.string(), v.null())), // "ideation", "planning", etc.
+        skillPinned: v.optional(v.union(v.string(), v.null())), // skillKey
+        channelPinned: v.optional(v.union(v.string(), v.null())), // "free", "structured", "auto"
+        
+        // State
+        status: v.string(), // "idle", "running", "waiting_input", "waiting_approval"
+        lastRunAt: v.number(),
+        
+        // Memory / Context
+        facts: v.any(), // JSON object of collected brief/facts
+        openQuestions: v.optional(v.any()), // JSON: QuestionSession state
+        progressChecklist: v.optional(v.any()), // JSON: { brief: true, tasks: false ... }
+        
+        // Pointers
+        currentArtifactId: v.optional(v.string()), // ID of what we are working on
+        pendingChangeSetId: v.optional(v.id("itemChangeSets")),
+        
+        // Misc from old definition if needed (none really, old was simpler)
+        artifactsIndex: v.optional(v.any()),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+    .index("by_project", ["projectId"])
+    .index("by_project_conversation", ["projectId", "conversationId"]),
+
+    // 33. PRINTING MODULE
+    printFiles: defineTable({
+        projectId: v.id("projects"),
+        groupId: v.optional(v.id("printFileGroups")),
+        elementId: v.optional(v.id("projectItems")),
+        storageId: v.string(),
+        fileName: v.string(), // Normalized from filename/fileName
+        filename: v.optional(v.string()), // Keep for compat if needed, prefer fileName
+        fileType: v.optional(v.string()), // "pdf", "image/png"
+        mimeType: v.optional(v.string()),
+        sizeBytes: v.optional(v.number()),
+        
+        uploadedAt: v.number(),
+        uploadedBy: v.string(),
+        
+        // Metadata (Extracted)
+        metaWidthPx: v.optional(v.number()),
+        metaHeightPx: v.optional(v.number()),
+        metaDpi: v.optional(v.number()),
+        metaColorMode: v.optional(v.string()), // "cmyk", "rgb"
+        metaPageCount: v.optional(v.number()),
+        
+        extraction: v.optional(v.any()), // Legacy/Flexible
+        createdAt: v.number(), // Legacy
+        updatedAt: v.number(), // Legacy
+    })
+    .index("by_project", ["projectId"])
+    .index("by_element", ["elementId"])
+    .index("by_group", ["groupId"])
+    .index("by_project_createdAt", ["projectId", "createdAt"]),
+
+    printQaRuns: defineTable({
+        projectId: v.id("projects"),
+        elementId: v.optional(v.id("projectItems")),
+        fileId: v.optional(v.id("printFiles")), // New
+        groupId: v.optional(v.id("printFileGroups")), // Legacy
+        
+        status: v.union(v.literal("running"), v.literal("pass"), v.literal("warn"), v.literal("fail")),
+        score: v.optional(v.number()), // 0-100
+        summary: v.optional(v.string()),
+        ranAt: v.number(),
+        
+        expectedSpecSnapshot: v.optional(v.any()), // Legacy
+        componentVerdict: v.optional(v.string()), // Legacy
+        createdAt: v.number(),
+        createdBy: v.optional(v.string()),
+    })
+    .index("by_element", ["elementId"])
+    .index("by_project", ["projectId"])
+    .index("by_project_createdAt", ["projectId", "createdAt"])
+    .index("by_project_element", ["projectId", "elementId"]),
+
+    printQaFindings: defineTable({
+        runId: v.id("printQaRuns"),
+        ruleId: v.string(), // "DPI_LOW", "SIZE_MISMATCH"
+        severity: v.union(v.literal("info"), v.literal("warn"), v.literal("fail")),
+        message: v.string(),
+        suggestion: v.optional(v.string()),
+        data: v.optional(v.any()), // measurements
+        
+        projectId: v.optional(v.id("projects")), // Legacy
+        measurements: v.optional(v.any()), // Legacy dup
+        createdAt: v.number(),
+    })
+    .index("by_run", ["runId"])
+    .index("by_project_createdAt", ["projectId", "createdAt"]),
+
+    // 34. TRELLO SYNC MODULE
+    trelloSyncPlans: defineTable({
+        projectId: v.id("projects"),
+        status: v.union(
+            v.literal("draft"),
+            v.literal("validated"),
+            v.literal("planned"), 
+            v.literal("executed"), 
+            v.literal("discarded"),
+            v.literal("failed")
+        ),
+        operationsJson: v.optional(v.string()), // Array of ops (New)
+        planJson: v.optional(v.string()), // Legacy
+        planHash: v.optional(v.string()), // Legacy
+        warningsJson: v.optional(v.string()), // New
+        warnings: v.optional(v.array(v.string())), // Legacy
+        
+        conversationId: v.optional(v.id("projectConversations")),
+        createdAt: v.number(),
+        executedAt: v.optional(v.number()),
+        updatedAt: v.number(),
+    })
+    .index("by_project", ["projectId"])
+    .index("by_project_createdAt", ["projectId", "createdAt"])
+    .index("by_project_status", ["projectId", "status"]),
 
     // 27. PRICE OBSERVATIONS (Price Memory)
 

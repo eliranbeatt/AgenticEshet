@@ -207,6 +207,19 @@ export const touchConversation = internalMutation({
     },
 });
 
+export const setLastAgentRunId = internalMutation({
+    args: {
+        conversationId: v.id("projectConversations"),
+        lastAgentRunId: v.id("agentRuns"),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.conversationId, {
+            lastAgentRunId: args.lastAgentRunId,
+            updatedAt: Date.now(),
+        });
+    },
+});
+
 export const countMessages = internalQuery({
     args: { conversationId: v.id("projectConversations") },
     handler: async (ctx, args) => {

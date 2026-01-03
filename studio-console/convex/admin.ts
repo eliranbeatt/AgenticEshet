@@ -15,6 +15,15 @@ export const saveSkill = mutation({
         type: v.string(),
         content: v.string(),
         metadataJson: v.optional(v.string()),
+        skillKey: v.optional(v.string()),
+        description: v.optional(v.string()),
+        stageTags: v.optional(v.array(v.string())),
+        channelTags: v.optional(v.array(v.string())),
+        inputSchemaJson: v.optional(v.string()),
+        outputSchemaJson: v.optional(v.string()),
+        toolPolicyJson: v.optional(v.string()),
+        enabled: v.optional(v.boolean()),
+        version: v.optional(v.number()),
     },
     handler: async (ctx, args) => {
         const { skillId, metadataJson, ...rest } = args;

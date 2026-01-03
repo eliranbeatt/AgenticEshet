@@ -77,6 +77,15 @@ function buildJsonSchemaFormat(schema: z.ZodSchema<unknown>, name: string) {
     } satisfies ResponseTextFormat;
 }
 
+function buildJsonSchemaFormatFromObject(schema: Record<string, unknown>, name: string) {
+    return {
+        type: "json_schema" as const,
+        name,
+        schema,
+        strict: true,
+    } satisfies ResponseTextFormat;
+}
+
 function shouldFallbackFromJsonSchema(error: unknown): boolean {
     if (!(error instanceof Error)) return false;
     const message = error.message.toLowerCase();
@@ -188,6 +197,99 @@ export async function callChatWithSchema<T>(
                 throw new Error(`Failed to validate OpenAI JSON: ${parsed.error.message}. Received: ${JSON.stringify(extracted).slice(0, 200)}`);
             }
             return parsed.data;
+        } catch (error) {
+            lastError = error;
+            if (attempt === maxRetries - 1) break;
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
+        }
+    }
+
+    throw new Error(
+        `OpenAI chat completion failed after ${maxRetries} attempts: ${lastError instanceof Error ? lastError.message : "Unknown error"
+        }`
+    );
+}
+
+export async function callChatWithJsonSchema<T = unknown>(
+    schema: Record<string, unknown>,
+    params: ChatParams
+): Promise<T> {
+    if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+
+    const model = params.model || DEFAULT_CHAT_MODEL;
+    const maxRetries = params.maxRetries ?? 3;
+    const retryDelayMs = params.retryDelayMs ?? 500;
+
+    const additionalMessages = params.additionalMessages || [];
+
+    const languageOverride =
+        params.language === "en"
+            ? [
+                "Language override:",
+                "- All user-facing text must be in English.",
+                "- If returning JSON, keep keys exactly as required by the schema; do not translate keys.",
+            ].join("\n")
+            : null;
+
+    const systemInstructions = [
+        params.systemPrompt,
+        ...additionalMessages
+            .filter((message) => message.role === "system")
+            .map((message) => message.content),
+        GLOBAL_LANGUAGE_INSTRUCTIONS,
+        languageOverride,
+    ]
+        .filter(Boolean)
+        .join("\n\n");
+
+    const transcriptMessages: ChatMessage[] = [
+        ...additionalMessages.filter((message) => message.role !== "system"),
+        { role: "user", content: params.userPrompt },
+    ];
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            const createResponse = async (format: ResponseTextFormat) => {
+                const jsonHint =
+                    format.type === "json_object" || format.type === "json_schema"
+                        ? "\n\nReturn valid JSON only."
+                        : "";
+                const jsonHintInput =
+                    format.type === "json_object" || format.type === "json_schema"
+                        ? "\n\nReturn valid JSON only."
+                        : "";
+                return await openai.responses.create({
+                    model,
+                    instructions: `${systemInstructions}${jsonHint}`,
+                    input: `${formatConversation(transcriptMessages)}${jsonHintInput}`,
+                    ...(supportsTemperature(model) ? { temperature: params.temperature ?? 0 } : {}),
+                    ...(supportsReasoningEffort(model)
+                        ? { reasoning: { effort: params.thinkingMode ? "high" : "low" } }
+                        : {}),
+                    text: { format, verbosity: "medium" },
+                    parallel_tool_calls: true,
+                });
+            };
+
+            let response;
+            try {
+                response = await createResponse(buildJsonSchemaFormatFromObject(schema, "output"));
+            } catch (error) {
+                if (!shouldFallbackFromJsonSchema(error)) throw error;
+                response = await createResponse({ type: "json_object" });
+            }
+
+            if (response.error) {
+                throw new Error(`OpenAI response error: ${response.error.message ?? "Unknown error"}`);
+            }
+
+            const outputText = response.output_text ?? "";
+            if (!outputText.trim()) {
+                throw new Error("OpenAI returned an empty response");
+            }
+
+            return extractJson(outputText) as T;
         } catch (error) {
             lastError = error;
             if (attempt === maxRetries - 1) break;

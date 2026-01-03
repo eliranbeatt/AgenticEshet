@@ -19,6 +19,17 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
 import { TaskModal } from "./_components/TaskModal";
 import { ChangeSetReviewBanner } from "../_components/changesets/ChangeSetReviewBanner";
+import {
+    KANBAN_COLUMNS,
+    STATUS_COLOR_TOKENS,
+    KanbanColumn,
+    TaskFilterField,
+    TaskSortField,
+    TaskSortOrder,
+    buildFilterOptions,
+    useFilteredSortedTasks,
+} from "./taskViewShared";
+import { useSharedTaskUpdateAction } from "./useSharedTaskUpdate";
 
 type UpdateTaskInput = {
     taskId: Id<"tasks">;
@@ -38,10 +49,6 @@ type DeleteTaskInput = {
     taskId: Id<"tasks">;
 };
 
-type FilterField = "none" | "section" | "item" | "priority" | "category" | "status" | "source";
-type SortField = "updatedAt" | "createdAt" | "priority" | "title" | "category" | "section";
-type SortOrder = "asc" | "desc";
-
 type AccountingSectionRow = {
     section: Doc<"sections">;
     materials: Doc<"materialLines">[];
@@ -51,13 +58,6 @@ type AccountingSectionRow = {
 type AgentRun = {
     status: "queued" | "running" | "succeeded" | "failed";
 };
-
-const columns: { id: Doc<"tasks">["status"]; title: string; color: string }[] = [
-    { id: "todo", title: "To Do", color: "bg-gray-100" },
-    { id: "in_progress", title: "In Progress", color: "bg-blue-50" },
-    { id: "blocked", title: "Blocked", color: "bg-red-50" },
-    { id: "done", title: "Done", color: "bg-green-50" },
-];
 
 const categoryOptions: Doc<"tasks">["category"][] = ["Logistics", "Creative", "Finance", "Admin", "Studio"];
 const priorityOptions: Doc<"tasks">["priority"][] = ["High", "Medium", "Low"];
@@ -78,6 +78,7 @@ export default function TasksPage() {
     const runArchitect = useAction(api.agents.architect.run);
     const runTaskRefiner = useAction(api.agents.taskRefiner.run);
     const updateTask = useMutation(api.tasks.updateTask);
+    const applySharedUpdate = useSharedTaskUpdateAction();
     const createTask = useMutation(api.tasks.createTask);
     const deleteTask = useMutation(api.tasks.deleteTask);
     const clearTasks = useMutation(api.tasks.clearTasks);
@@ -91,10 +92,10 @@ export default function TasksPage() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isRefining, setIsRefining] = useState(false);
     const [newTaskTitle, setNewTaskTitle] = useState("");
-    const [filterField, setFilterField] = useState<FilterField>("none");
+    const [filterField, setFilterField] = useState<TaskFilterField>("none");
     const [filterValue, setFilterValue] = useState<string>("");
-    const [sortField, setSortField] = useState<SortField>("updatedAt");
-    const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+    const [sortField, setSortField] = useState<TaskSortField>("updatedAt");
+    const [sortOrder, setSortOrder] = useState<TaskSortOrder>("desc");
     const [activeTaskId, setActiveTaskId] = useState<Id<"tasks"> | null>(null);
     const [selectedTaskId, setSelectedTaskId] = useState<Id<"tasks"> | null>(null);
     const [editMode, setEditMode] = useState(false);
@@ -284,68 +285,14 @@ export default function TasksPage() {
         setEditMode(false);
     };
 
-    const filteredTasks = useMemo(() => {
-        if (!tasks) return null;
-        if (filterField === "none" || !filterValue) return tasks;
-
-        if (filterField === "section") {
-            if (filterValue === "unassigned") return tasks.filter((task: Doc<"tasks">) => !task.accountingSectionId);
-            return tasks.filter((task: Doc<"tasks">) => task.accountingSectionId === filterValue);
-        }
-
-        if (filterField === "item") {
-            if (filterValue === "unassigned") return tasks.filter((task: Doc<"tasks">) => !task.itemId);
-            return tasks.filter((task: Doc<"tasks">) => task.itemId === filterValue);
-        }
-
-        if (filterField === "priority") return tasks.filter((task: Doc<"tasks">) => task.priority === filterValue);
-        if (filterField === "category") return tasks.filter((task: Doc<"tasks">) => task.category === filterValue);
-        if (filterField === "status") return tasks.filter((task: Doc<"tasks">) => task.status === filterValue);
-        if (filterField === "source") return tasks.filter((task: Doc<"tasks">) => task.source === filterValue);
-
-        return tasks;
-    }, [tasks, filterField, filterValue]);
-
-    const sortedTasks = useMemo(() => {
-        if (!filteredTasks) return null;
-
-        const priorityRank: Record<Doc<"tasks">["priority"], number> = {
-            High: 3,
-            Medium: 2,
-            Low: 1,
-        };
-
-        const factor = sortOrder === "asc" ? 1 : -1;
-        const sorted = [...filteredTasks];
-        sorted.sort((a, b) => {
-            if (sortField === "priority") return (priorityRank[a.priority] - priorityRank[b.priority]) * factor;
-            if (sortField === "title") return a.title.localeCompare(b.title) * factor;
-            if (sortField === "category") return a.category.localeCompare(b.category) * factor;
-            if (sortField === "createdAt") return ((a.createdAt ?? 0) - (b.createdAt ?? 0)) * factor;
-            if (sortField === "updatedAt") return (a.updatedAt - b.updatedAt) * factor;
-            if (sortField === "section") {
-                const aLabel = a.accountingSectionId ? (sectionLabelById.get(a.accountingSectionId) ?? "") : "";
-                const bLabel = b.accountingSectionId ? (sectionLabelById.get(b.accountingSectionId) ?? "") : "";
-                return aLabel.localeCompare(bLabel) * factor;
-            }
-            return 0;
-        });
-
-        return sorted;
-    }, [filteredTasks, sortField, sortOrder, sectionLabelById]);
-
-    const tasksByStatus = useMemo(() => {
-        const grouped: Record<Doc<"tasks">["status"], Doc<"tasks">[]> = {
-            todo: [],
-            in_progress: [],
-            blocked: [],
-            done: [],
-        };
-        (sortedTasks ?? []).forEach((task: Doc<"tasks">) => {
-            grouped[task.status].push(task);
-        });
-        return grouped;
-    }, [sortedTasks]);
+    const { filteredTasks, sortedTasks, tasksByStatus } = useFilteredSortedTasks({
+        tasks,
+        filterField,
+        filterValue,
+        sortField,
+        sortOrder,
+        sectionLabelById,
+    });
 
     const handleAutoGenerate = async () => {
         if (draftOnlyMode) {
@@ -435,7 +382,7 @@ export default function TasksPage() {
         if (!allowInlineEdits || draftOnlyMode) return;
         const task = tasks?.find((t: Doc<"tasks">) => t._id === taskId);
         if (!task || task.status === nextStatus) return;
-        await updateTask({ taskId, status: nextStatus });
+        await applySharedUpdate({ taskId, status: nextStatus });
     };
 
     return (
@@ -518,6 +465,7 @@ export default function TasksPage() {
             <TaskControlsBar
                 sections={accountingSections.map((row) => row.section)}
                 items={items}
+                tasks={tasks ?? []}
                 filterField={filterField}
                 filterValue={filterValue}
                 onChangeFilterField={(next) => {
@@ -535,7 +483,7 @@ export default function TasksPage() {
             <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
                 <div className="flex-1 overflow-x-auto">
                     <div className="flex gap-4 h-full min-w-max">
-                        {columns.map((col) => (
+                        {KANBAN_COLUMNS.map((col) => (
                             <KanbanColumn
                                 key={col.id}
                                 column={col}
@@ -638,7 +586,7 @@ function KanbanColumn({
     allowInlineEdits,
     draftOnlyMode,
 }: {
-    column: (typeof columns)[number];
+    column: KanbanColumn;
     tasks: Doc<"tasks">[];
     onOpenTask: (taskId: Id<"tasks">) => void;
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
@@ -902,7 +850,7 @@ function TaskCard({
                 <InlineSelect
                     label="Status"
                     value={task.status}
-                    options={columns.map((col) => ({ label: col.title, value: col.id }))}
+                    options={KANBAN_COLUMNS.map((col) => ({ label: col.title, value: col.id }))}
                     disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) =>
                         onUpdate({
@@ -970,6 +918,7 @@ function InlineSelect({
 function TaskControlsBar({
     sections,
     items,
+    tasks,
     filterField,
     filterValue,
     onChangeFilterField,
@@ -982,38 +931,18 @@ function TaskControlsBar({
 }: {
     sections: Doc<"sections">[];
     items: Array<Doc<"projectItems">>;
-    filterField: FilterField;
+    tasks: Array<Doc<"tasks">>;
+    filterField: TaskFilterField;
     filterValue: string;
-    onChangeFilterField: (field: FilterField) => void;
+    onChangeFilterField: (field: TaskFilterField) => void;
     onChangeFilterValue: (value: string) => void;
-    sortField: SortField;
-    sortOrder: SortOrder;
-    onChangeSortField: (field: SortField) => void;
-    onChangeSortOrder: (order: SortOrder) => void;
+    sortField: TaskSortField;
+    sortOrder: TaskSortOrder;
+    onChangeSortField: (field: TaskSortField) => void;
+    onChangeSortOrder: (order: TaskSortOrder) => void;
     totalTasks: number;
 }) {
-    const filterOptions = (() => {
-        if (filterField === "none") return [{ label: "All", value: "" }];
-        if (filterField === "section") {
-            return [
-                { label: "All", value: "" },
-                { label: "Unassigned", value: "unassigned" },
-                ...sections.map((section) => ({ label: `[${section.group}] ${section.name}`, value: section._id })),
-            ];
-        }
-        if (filterField === "item") {
-            return [
-                { label: "All", value: "" },
-                { label: "Unassigned", value: "unassigned" },
-                ...items.map((item) => ({ label: item.title, value: item._id })),
-            ];
-        }
-        if (filterField === "priority") return [{ label: "All", value: "" }, ...priorityOptions.map((p) => ({ label: p, value: p }))];
-        if (filterField === "category") return [{ label: "All", value: "" }, ...categoryOptions.map((c) => ({ label: c, value: c }))];
-        if (filterField === "status") return [{ label: "All", value: "" }, ...columns.map((col) => ({ label: col.title, value: col.id }))];
-        if (filterField === "source") return [{ label: "All", value: "" }, { label: "AI generated", value: "agent" }, { label: "User task", value: "user" }];
-        return [];
-    })();
+    const filterOptions = buildFilterOptions({ filterField, sections, items, tasks });
 
     return (
         <div className="bg-white border rounded-lg p-4 flex flex-col gap-3">
@@ -1035,8 +964,10 @@ function TaskControlsBar({
                             { label: "Category", value: "category" },
                             { label: "Status", value: "status" },
                             { label: "Source", value: "source" },
+                            { label: "Assignee", value: "assignee" },
+                            { label: "Schedule", value: "date" },
                         ]}
-                        onChange={(value) => onChangeFilterField(value as FilterField)}
+                        onChange={(value) => onChangeFilterField(value as TaskFilterField)}
                     />
                     <InlineSelect
                         label="Filter value"
@@ -1057,8 +988,10 @@ function TaskControlsBar({
                             { label: "Title", value: "title" },
                             { label: "Category", value: "category" },
                             { label: "Section", value: "section" },
+                            { label: "Start date", value: "startDate" },
+                            { label: "End date", value: "endDate" },
                         ]}
-                        onChange={(value) => onChangeSortField(value as SortField)}
+                        onChange={(value) => onChangeSortField(value as TaskSortField)}
                     />
                     <InlineSelect
                         label="Order"
@@ -1067,7 +1000,7 @@ function TaskControlsBar({
                             { label: "Descending", value: "desc" },
                             { label: "Ascending", value: "asc" },
                         ]}
-                        onChange={(value) => onChangeSortOrder(value as SortOrder)}
+                        onChange={(value) => onChangeSortOrder(value as TaskSortOrder)}
                     />
                 </div>
             </div>
@@ -1149,12 +1082,7 @@ function SectionTaskPanel({
 }
 
 function SectionTaskRow({ task }: { task: Doc<"tasks"> }) {
-    const statusColors: Record<Doc<"tasks">["status"], string> = {
-        todo: "bg-gray-300",
-        in_progress: "bg-blue-400",
-        blocked: "bg-red-400",
-        done: "bg-green-500",
-    };
+    const statusColors = STATUS_COLOR_TOKENS;
 
     return (
         <div className="flex items-center gap-2 border rounded px-3 py-2 text-sm">

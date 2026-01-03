@@ -3,10 +3,11 @@
 import React, { useState, useMemo, useCallback } from "react";
 import { Gantt, Task, ViewMode } from "gantt-task-react";
 import "gantt-task-react/dist/index.css";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../../convex/_generated/dataModel";
 import { useParams } from "next/navigation";
+import { useSharedTaskUpdateAction } from "../../tasks/useSharedTaskUpdate";
 
 function startOfDay(date: Date): Date {
     const normalized = new Date(date);
@@ -25,7 +26,7 @@ export default function GanttView() {
     const projectId = params.id as Id<"projects">;
     const tasks = useQuery(api.tasks.listByProject, { projectId }) as Array<Doc<"tasks">> | undefined;
     const itemsData = useQuery(api.items.listSidebarTree, { projectId, includeDrafts: true });
-    const updateTask = useMutation(api.tasks.updateTask);
+    const applySharedUpdate = useSharedTaskUpdateAction();
 
     const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Day);
 
@@ -69,7 +70,7 @@ export default function GanttView() {
             const newEnd = task.end.getTime();
             
             // 1. Update the moved task
-            await updateTask({
+            await applySharedUpdate({
                 taskId: task.id as Id<"tasks">,
                 startDate: newStart,
                 endDate: newEnd,
@@ -90,7 +91,7 @@ export default function GanttView() {
                         const newChildStart = newEnd;
                         const newChildEnd = newChildStart + duration;
                         
-                        await updateTask({
+                        await applySharedUpdate({
                             taskId: child._id,
                             startDate: newChildStart,
                             endDate: newChildEnd,
@@ -101,7 +102,7 @@ export default function GanttView() {
                 }
             }
         },
-        [tasks, updateTask]
+        [applySharedUpdate, tasks]
     );
 
     if (!tasks) return <div className="p-8">Loading tasks...</div>;

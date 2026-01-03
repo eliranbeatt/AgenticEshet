@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TASK_CATEGORIES, TASK_PRIORITIES } from "../constants";
+import { STUDIO_PHASES, TASK_CATEGORIES, TASK_PRIORITIES } from "../constants";
 
 export const TaskBreakdownSchema = z.object({
     logic: z.string().optional().describe("Reasoning for why these tasks are needed"),
@@ -581,6 +581,7 @@ const TaskCreateSchema = z.object({
     category: z.enum(TASK_CATEGORIES).optional(),
     priority: z.enum(TASK_PRIORITIES).optional(),
     tags: z.array(z.string()),
+    studioPhase: z.enum(STUDIO_PHASES).optional(),
     plannedStart: z.string().datetime().nullable(),
     plannedEnd: z.string().datetime().nullable(),
 }).strict();
@@ -597,6 +598,7 @@ const TaskPatchSchema = z.object({
         category: z.enum(TASK_CATEGORIES).optional(),
         priority: z.enum(TASK_PRIORITIES).optional(),
         tags: z.array(z.string()).optional(),
+        studioPhase: z.enum(STUDIO_PHASES).optional(),
         plannedStart: z.string().datetime().nullable().optional(),
         plannedEnd: z.string().datetime().nullable().optional(),
     }).strict(),

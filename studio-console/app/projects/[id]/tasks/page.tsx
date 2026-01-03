@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
+import { STUDIO_PHASES, StudioPhase } from "../../../../convex/constants";
 import {
     DndContext,
     DragEndEvent,
@@ -19,6 +20,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
 import { TaskModal } from "./_components/TaskModal";
 import { ChangeSetReviewBanner } from "../_components/changesets/ChangeSetReviewBanner";
+import { useTaskUpdater } from "./useTaskUpdater";
 
 type UpdateTaskInput = {
     taskId: Id<"tasks">;
@@ -32,13 +34,15 @@ type UpdateTaskInput = {
     accountingLineId?: Id<"materialLines"> | Id<"workLines">;
     itemId?: Id<"projectItems">;
     itemSubtaskId?: string;
+    studioPhase?: StudioPhase;
+    startDate?: number;
 };
 
 type DeleteTaskInput = {
     taskId: Id<"tasks">;
 };
 
-type FilterField = "none" | "section" | "item" | "priority" | "category" | "status" | "source";
+type FilterField = "none" | "section" | "item" | "priority" | "category" | "status" | "source" | "phase";
 type SortField = "updatedAt" | "createdAt" | "priority" | "title" | "category" | "section";
 type SortOrder = "asc" | "desc";
 
@@ -52,15 +56,24 @@ type AgentRun = {
     status: "queued" | "running" | "succeeded" | "failed";
 };
 
-const columns: { id: Doc<"tasks">["status"]; title: string; color: string }[] = [
-    { id: "todo", title: "To Do", color: "bg-gray-100" },
-    { id: "in_progress", title: "In Progress", color: "bg-blue-50" },
-    { id: "blocked", title: "Blocked", color: "bg-red-50" },
-    { id: "done", title: "Done", color: "bg-green-50" },
+const phaseLanes: {
+    id: StudioPhase | "unassigned";
+    title: string;
+    color: string;
+    wipLimit: number;
+}[] = [
+    { id: "plan", title: "Plan", color: "bg-sky-50", wipLimit: 6 },
+    { id: "buy", title: "Buy", color: "bg-amber-50", wipLimit: 5 },
+    { id: "build", title: "Build", color: "bg-indigo-50", wipLimit: 7 },
+    { id: "install", title: "Install", color: "bg-emerald-50", wipLimit: 4 },
+    { id: "closeout", title: "Closeout", color: "bg-slate-50", wipLimit: 3 },
+    { id: "unassigned", title: "Unassigned", color: "bg-gray-50", wipLimit: 3 },
 ];
 
 const categoryOptions: Doc<"tasks">["category"][] = ["Logistics", "Creative", "Finance", "Admin", "Studio"];
 const priorityOptions: Doc<"tasks">["priority"][] = ["High", "Medium", "Low"];
+const phaseOptions: StudioPhase[] = [...STUDIO_PHASES];
+const statusOptions: Doc<"tasks">["status"][] = ["todo", "in_progress", "blocked", "done"];
 
 export default function TasksPage() {
     const params = useParams();
@@ -77,7 +90,7 @@ export default function TasksPage() {
     }) as AgentRun[] | undefined;
     const runArchitect = useAction(api.agents.architect.run);
     const runTaskRefiner = useAction(api.agents.taskRefiner.run);
-    const updateTask = useMutation(api.tasks.updateTask);
+    const { updateTaskShared } = useTaskUpdater();
     const createTask = useMutation(api.tasks.createTask);
     const deleteTask = useMutation(api.tasks.deleteTask);
     const clearTasks = useMutation(api.tasks.clearTasks);
@@ -302,6 +315,10 @@ export default function TasksPage() {
         if (filterField === "category") return tasks.filter((task: Doc<"tasks">) => task.category === filterValue);
         if (filterField === "status") return tasks.filter((task: Doc<"tasks">) => task.status === filterValue);
         if (filterField === "source") return tasks.filter((task: Doc<"tasks">) => task.source === filterValue);
+        if (filterField === "phase") {
+            if (filterValue === "unassigned") return tasks.filter((task: Doc<"tasks">) => !task.studioPhase);
+            return tasks.filter((task: Doc<"tasks">) => task.studioPhase === filterValue);
+        }
 
         return tasks;
     }, [tasks, filterField, filterValue]);
@@ -334,15 +351,15 @@ export default function TasksPage() {
         return sorted;
     }, [filteredTasks, sortField, sortOrder, sectionLabelById]);
 
-    const tasksByStatus = useMemo(() => {
-        const grouped: Record<Doc<"tasks">["status"], Doc<"tasks">[]> = {
-            todo: [],
-            in_progress: [],
-            blocked: [],
-            done: [],
-        };
+    const tasksByPhase = useMemo(() => {
+        const grouped: Record<string, Doc<"tasks">[]> = {};
+        phaseLanes.forEach((lane) => {
+            grouped[lane.id] = [];
+        });
         (sortedTasks ?? []).forEach((task: Doc<"tasks">) => {
-            grouped[task.status].push(task);
+            const phase = task.studioPhase ?? "unassigned";
+            if (!grouped[phase]) grouped[phase] = [];
+            grouped[phase].push(task);
         });
         return grouped;
     }, [sortedTasks]);
@@ -418,6 +435,7 @@ export default function TasksPage() {
             status: "todo",
             category: "Studio",
             priority: "Medium",
+            studioPhase: STUDIO_PHASES[0],
         });
         setNewTaskTitle("");
     };
@@ -429,13 +447,53 @@ export default function TasksPage() {
 
     const handleDragEnd = async (event: DragEndEvent) => {
         const taskId = event.active.data.current?.taskId as Id<"tasks"> | undefined;
-        const nextStatus = event.over?.id as Doc<"tasks">["status"] | undefined;
+        const nextPhase = event.over?.id as (StudioPhase | "unassigned") | undefined;
         setActiveTaskId(null);
-        if (!taskId || !nextStatus) return;
+        if (!taskId || !nextPhase) return;
         if (!allowInlineEdits || draftOnlyMode) return;
         const task = tasks?.find((t: Doc<"tasks">) => t._id === taskId);
-        if (!task || task.status === nextStatus) return;
-        await updateTask({ taskId, status: nextStatus });
+        if (!task || task.studioPhase === nextPhase) return;
+        const payload: UpdateTaskInput = { taskId, studioPhase: nextPhase === "unassigned" ? undefined : nextPhase };
+        if (!task.startDate && nextPhase !== "unassigned") {
+            payload.startDate = Date.now();
+        }
+        await updateTaskShared(payload);
+    };
+
+    const handleMarkPhaseComplete = async (phaseId: StudioPhase | "unassigned") => {
+        if (!allowInlineEdits || draftOnlyMode) {
+            alert("Enable draft editing to complete phases.");
+            return;
+        }
+        const phaseTasks = tasksByPhase[phaseId] ?? [];
+        await Promise.all(
+            phaseTasks.map((task) =>
+                updateTaskShared({
+                    taskId: task._id,
+                    status: "done",
+                    studioPhase: phaseId === "unassigned" ? undefined : phaseId,
+                })
+            )
+        );
+    };
+
+    const handleReassignPhase = async (phaseId: StudioPhase | "unassigned") => {
+        if (!allowInlineEdits || draftOnlyMode) {
+            alert("Enable draft editing to reassign tasks.");
+            return;
+        }
+        const assignee = window.prompt("Assign tasks in this phase to:");
+        if (!assignee) return;
+        const phaseTasks = tasksByPhase[phaseId] ?? [];
+        await Promise.all(
+            phaseTasks.map((task) =>
+                updateTaskShared({
+                    taskId: task._id,
+                    assignee,
+                    studioPhase: phaseId === "unassigned" ? undefined : phaseId,
+                })
+            )
+        );
     };
 
     return (
@@ -535,11 +593,11 @@ export default function TasksPage() {
             <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
                 <div className="flex-1 overflow-x-auto">
                     <div className="flex gap-4 h-full min-w-max">
-                        {columns.map((col) => (
-                            <KanbanColumn
-                                key={col.id}
-                                column={col}
-                                tasks={tasksByStatus[col.id]}
+                        {phaseLanes.map((lane) => (
+                            <PhaseLane
+                                key={lane.id}
+                                lane={lane}
+                                tasks={tasksByPhase[lane.id] ?? []}
                                 activeTaskId={activeTaskId}
                                 onOpenTask={(taskId) => setSelectedTaskId(taskId)}
                                 onUpdate={async (input) => {
@@ -564,7 +622,7 @@ export default function TasksPage() {
                                         await applyTaskPatch(task, updates);
                                         return;
                                     }
-                                    await updateTask(updates);
+                                    await updateTaskShared(updates);
                                 }}
                                 onDelete={async (input) => {
                                     if (!allowInlineEdits) {
@@ -589,6 +647,8 @@ export default function TasksPage() {
                                     }
                                     await deleteTask(input);
                                 }}
+                                onCompletePhase={() => handleMarkPhaseComplete(lane.id)}
+                                onReassign={() => handleReassignPhase(lane.id)}
                                 sections={accountingSections}
                                 items={items}
                                 sectionLabelById={sectionLabelById}
@@ -623,12 +683,14 @@ export default function TasksPage() {
     );
 }
 
-function KanbanColumn({
-    column,
+function PhaseLane({
+    lane,
     tasks,
     onOpenTask,
     onUpdate,
     onDelete,
+    onCompletePhase,
+    onReassign,
     sections,
     items,
     sectionLabelById,
@@ -638,11 +700,13 @@ function KanbanColumn({
     allowInlineEdits,
     draftOnlyMode,
 }: {
-    column: (typeof columns)[number];
+    lane: (typeof phaseLanes)[number];
     tasks: Doc<"tasks">[];
     onOpenTask: (taskId: Id<"tasks">) => void;
     onUpdate: (input: UpdateTaskInput) => Promise<void>;
     onDelete: (input: DeleteTaskInput) => Promise<void>;
+    onCompletePhase: () => void;
+    onReassign: () => void;
     sections: AccountingSectionRow[];
     items: Array<Doc<"projectItems">>;
     sectionLabelById: Map<string, string>;
@@ -652,16 +716,40 @@ function KanbanColumn({
     allowInlineEdits: boolean;
     draftOnlyMode: boolean;
 }) {
-    const { setNodeRef, isOver } = useDroppable({ id: column.id });
+    const { setNodeRef, isOver } = useDroppable({ id: lane.id });
+    const activeCount = tasks.filter((task) => task.status !== "done").length;
+    const wipLimit = lane.wipLimit;
+    const wipState = activeCount > wipLimit ? "text-red-600" : "text-gray-600";
     return (
         <div
             ref={setNodeRef}
-            className={`w-80 flex flex-col rounded-lg ${column.color} p-4 transition ${isOver ? "ring-2 ring-purple-400" : ""}`}
+            className={`w-80 flex flex-col rounded-lg ${lane.color} p-4 transition ${isOver ? "ring-2 ring-purple-400" : ""}`}
         >
-            <h3 className="font-bold text-gray-700 mb-4 uppercase text-xs flex justify-between">
-                {column.title}
-                <span className="bg-white px-2 rounded-full text-gray-500">{tasks.length}</span>
-            </h3>
+            <div className="flex justify-between items-start mb-4 gap-2">
+                <div>
+                    <h3 className="font-bold text-gray-700 uppercase text-xs flex items-center gap-2">
+                        {lane.title}
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full bg-white ${wipState}`}>
+                            WIP {activeCount}/{wipLimit}
+                        </span>
+                    </h3>
+                    <p className="text-[11px] text-gray-500">{tasks.length} task{tasks.length === 1 ? "" : "s"}</p>
+                </div>
+                <div className="flex gap-2">
+                    <button
+                        className="text-[11px] px-2 py-1 rounded bg-white border text-gray-700 hover:bg-gray-100"
+                        onClick={onCompletePhase}
+                    >
+                        Mark complete
+                    </button>
+                    <button
+                        className="text-[11px] px-2 py-1 rounded bg-white border text-gray-700 hover:bg-gray-100"
+                        onClick={onReassign}
+                    >
+                        Reassign
+                    </button>
+                </div>
+            </div>
             <div className="flex-1 overflow-y-auto space-y-3">
                 {tasks.map((task) => (
                     <TaskCard
@@ -816,6 +904,9 @@ function TaskCard({
                 <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.priority} priority</span>
                 {durationText && <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">{durationText}</span>}
                 <span className="px-2 py-0.5 rounded-full bg-gray-100">{task.source === "agent" ? "AI generated" : "User task"}</span>
+                <span className="px-2 py-0.5 rounded-full bg-white border text-gray-700">
+                    Phase: {task.studioPhase ? task.studioPhase : "Unassigned"}
+                </span>
                 <span className="px-2 py-0.5 rounded-full bg-gray-50">
                     {accountingChipLabel}
                 </span>
@@ -845,6 +936,16 @@ function TaskCard({
                     options={priorityOptions}
                     disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) => onUpdate({ taskId: task._id, priority: value as Doc<"tasks">["priority"] })}
+                />
+                <InlineSelect
+                    label="Phase"
+                    value={task.studioPhase ?? ""}
+                    options={phaseOptions}
+                    includeUnassigned
+                    disabled={!allowInlineEdits || draftOnlyMode}
+                    onChange={(value) =>
+                        onUpdate({ taskId: task._id, studioPhase: value ? (value as StudioPhase) : undefined })
+                    }
                 />
                 <InlineSelect
                     label="Element"
@@ -902,7 +1003,7 @@ function TaskCard({
                 <InlineSelect
                     label="Status"
                     value={task.status}
-                    options={columns.map((col) => ({ label: col.title, value: col.id }))}
+                    options={statusOptions.map((status) => ({ label: status, value: status }))}
                     disabled={!allowInlineEdits || draftOnlyMode}
                     onChange={(value) =>
                         onUpdate({
@@ -1010,7 +1111,13 @@ function TaskControlsBar({
         }
         if (filterField === "priority") return [{ label: "All", value: "" }, ...priorityOptions.map((p) => ({ label: p, value: p }))];
         if (filterField === "category") return [{ label: "All", value: "" }, ...categoryOptions.map((c) => ({ label: c, value: c }))];
-        if (filterField === "status") return [{ label: "All", value: "" }, ...columns.map((col) => ({ label: col.title, value: col.id }))];
+        if (filterField === "status") return [{ label: "All", value: "" }, { label: "To Do", value: "todo" }, { label: "In Progress", value: "in_progress" }, { label: "Blocked", value: "blocked" }, { label: "Done", value: "done" }];
+        if (filterField === "phase")
+            return [
+                { label: "All", value: "" },
+                ...STUDIO_PHASES.map((phase) => ({ label: phase.charAt(0).toUpperCase() + phase.slice(1), value: phase })),
+                { label: "Unassigned", value: "unassigned" },
+            ];
         if (filterField === "source") return [{ label: "All", value: "" }, { label: "AI generated", value: "agent" }, { label: "User task", value: "user" }];
         return [];
     })();
@@ -1034,6 +1141,7 @@ function TaskControlsBar({
                             { label: "Priority", value: "priority" },
                             { label: "Category", value: "category" },
                             { label: "Status", value: "status" },
+                            { label: "Phase", value: "phase" },
                             { label: "Source", value: "source" },
                         ]}
                         onChange={(value) => onChangeFilterField(value as FilterField)}

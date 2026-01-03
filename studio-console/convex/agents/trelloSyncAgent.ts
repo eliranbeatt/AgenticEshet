@@ -1,264 +1,338 @@
 import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
-import { callChatWithSchema } from "../lib/openai";
-import { z } from "zod";
 import type { Doc } from "../_generated/dataModel";
-import type { TrelloMappingDoc } from "../trelloSync"; // We will ensure this type is exported or redefine it
-import { TrelloSyncPlan } from "../lib/trelloTypes";
+import type { TrelloOp, TrelloSyncPlan } from "../lib/trelloTypes";
 
-// Zod Schema matching TrelloSyncPlan
-const TrelloOpSchema = z.discriminatedUnion("op", [
-  z.object({
-    opId: z.string(),
-    op: z.literal("ENSURE_BOARD"),
-    setVar: z.string().optional(),
-    board: z.object({
-      id: z.string().optional(),
-      name: z.string().optional(),
-      idOrganization: z.string().optional(),
-      defaultLists: z.boolean().optional(),
-    }).optional(),
-    ifMissing: z.enum(["create", "error"]),
-  }),
-  z.object({
-    opId: z.string(),
-    op: z.literal("ENSURE_LIST"),
-    boardId: z.string(),
-    list: z.object({ id: z.string().optional(), name: z.string(), pos: z.union([z.string(), z.number()]).optional() }),
-    setVar: z.string().optional(),
-  }),
-  z.object({
-    opId: z.string(),
-    op: z.literal("ENSURE_LABEL"),
-    boardId: z.string(),
-    label: z.object({ id: z.string().optional(), name: z.string(), color: z.string().nullable().optional() }),
-    setVar: z.string().optional(),
-  }),
-  z.object({
-    opId: z.string(),
-    op: z.literal("ENSURE_CUSTOM_FIELD"),
-    boardId: z.string(),
-    field: z.object({
-      id: z.string().optional(),
-      name: z.string(),
-      type: z.enum(["number", "text", "date", "checkbox", "list"]),
-      pos: z.union([z.string(), z.number()]).optional(),
-      displayOnCardFront: z.boolean().optional(),
-    }),
-    setVar: z.string().optional(),
-  }),
-  z.object({
-    opId: z.string(),
-    op: z.literal("UPSERT_CARD"),
-    taskId: z.string(),
-    boardId: z.string(),
-    listId: z.string(),
-    card: z.object({
-      id: z.string().optional(),
-      name: z.string(),
-      desc: z.string().optional(),
-      start: z.string().nullable().optional(),
-      due: z.string().nullable().optional(),
-      dueComplete: z.boolean().optional(),
-      pos: z.union([z.string(), z.number()]).optional(),
-      labelIds: z.array(z.string()).optional(),
-      memberIds: z.array(z.string()).optional(),
-    }),
-    mode: z.literal("create_or_update"),
-    setVar: z.string().optional(),
-    contentHash: z.string(),
-  }),
-  z.object({
-    opId: z.string(),
-    op: z.literal("ENSURE_CHECKLIST_ON_CARD"),
-    cardId: z.string(),
-    checklist: z.object({ id: z.string().optional(), name: z.string(), pos: z.union([z.string(), z.number()]).optional() }),
-    setVar: z.string().optional(),
-  }),
-  z.object({
-    opId: z.string(),
-    op: z.literal("UPSERT_CHECKITEMS"),
-    cardId: z.string(),
-    checklistId: z.string(),
-    items: z.array(z.object({ name: z.string(), checked: z.boolean().optional(), due: z.string().nullable().optional() })),
-    mode: z.literal("merge_by_name"),
-  }),
-  z.object({
-    opId: z.string(),
-    op: z.literal("SET_CUSTOM_FIELD_NUMBER"),
-    cardId: z.string(),
-    customFieldId: z.string(),
-    value: z.number().nullable(),
-  }),
-  z.object({
-    opId: z.string(),
-    op: z.literal("SKIP"),
-    taskId: z.string().optional(),
-    reason: z.string(),
-  }),
-]);
+const STATUS_LIST_NAMES: Record<string, string> = {
+    todo: "To Do",
+    in_progress: "In Progress",
+    blocked: "Blocked",
+    done: "Done",
+};
 
-const TrelloSyncPlanSchemaStrict = z.object({
-  planVersion: z.literal("1.0"),
-  context: z.object({
-    projectId: z.string(),
-    targetBoardId: z.string().optional(),
-    targetBoardName: z.string().optional(),
-  }),
-  warnings: z.array(z.string()).optional(),
-  operations: z.array(TrelloOpSchema),
-  mappingUpserts: z.array(z.object({
-    taskId: z.string(),
-    trelloCardIdVarOrValue: z.string(),
-    trelloListIdVarOrValue: z.string(),
-    contentHash: z.string(),
-  })).optional(),
-});
+const ESTIMATE_FIELD_NAME = "Estimate (hours)";
+const SYNC_VERSION = 2;
 
-const TrelloSyncPlanSchemaLenient = z.object({
-  planVersion: z.any().optional(),
-  context: z.any().optional(),
-  warnings: z.array(z.string()).optional(),
-  operations: z.array(z.any()).optional(),
-  mappingUpserts: z.array(z.any()).optional(),
-}).passthrough();
+type TaskDoc = Doc<"tasks"> & {
+    workstream?: string;
+    isManagement?: boolean;
+    steps?: string[];
+    subtasks?: Array<{ title: string; done: boolean }>;
+    estimatedMinutes?: number | null;
+    estimatedDuration?: number | null;
+    startDate?: number | null;
+    endDate?: number | null;
+    assignee?: string | null;
+};
 
-export function buildTrelloSyncPlanSchema(projectId: string) {
-  return z.preprocess((input) => {
-    if (!input || typeof input !== "object") return input;
-    const raw = input as Record<string, any>;
-    const plan: Record<string, any> = { ...raw };
+type TrelloMappingDoc = Doc<"trelloMappings"> & {
+    taskId: string;
+    trelloCardId: string;
+    trelloListId: string;
+    contentHash: string;
+};
 
-    if (
-      plan.planVersion === undefined ||
-      plan.planVersion === null ||
-      plan.planVersion === 1 ||
-      plan.planVersion === 1.0 ||
-      plan.planVersion === "1" ||
-      plan.planVersion === "v1.0"
-    ) {
-      plan.planVersion = "1.0";
-    } else if (typeof plan.planVersion === "number") {
-      plan.planVersion = String(plan.planVersion);
-    }
-
-    if (!plan.context || typeof plan.context !== "object") {
-      plan.context = { projectId };
-    } else if (!plan.context.projectId) {
-      plan.context.projectId = projectId;
-    }
-
-    if (Array.isArray(plan.operations)) {
-      plan.operations = plan.operations.map((op) => {
-        if (op && typeof op === "object" && !op.op) {
-          const source = (op as any).type ?? (op as any).operation ?? (op as any).action;
-          if (source) {
-            return { ...op, op: source };
-          }
-        }
-        return op;
-      });
-    }
-
-    return plan;
-  }, TrelloSyncPlanSchemaStrict);
+function isTrelloId(value: string) {
+    return /^[0-9a-f]{24}$/i.test(value);
 }
 
-const SYSTEM_PROMPT = `You are "TrelloSyncTranslator", an expert integration agent.
-
-Goal:
-Translate Convex Task documents into a deterministic TrelloSyncPlan JSON that an executor will run against Trello’s REST API.
-
-CRITICAL: OUTPUT FORMAT RULES
-1. The root object MUST contain "planVersion": "1.0" and a "context" object.
-2. The "operations" array MUST contain objects with an "op" field (NOT "type").
-3. "ENSURE_LIST" requires a nested "list" object: { op: "ENSURE_LIST", list: { name: "..." }, ... }
-4. "UPSERT_CARD" requires a nested "card" object.
-5. "UPSERT_CARD" MUST include "contentHash".
-
-Example Output Structure:
-{
-  "planVersion": "1.0",
-  "context": { "projectId": "p123", "targetBoardId": "b456" },
-  "operations": [
-    {
-      "opId": "op1",
-      "op": "ENSURE_LIST",
-      "boardId": "b456",
-      "list": { "name": "To Do" },
-      "setVar": "list.todo"
-    },
-    {
-      "opId": "op2",
-      "op": "UPSERT_CARD",
-      "taskId": "t1",
-      "boardId": "b456",
-      "listId": "$list.todo",
-      "card": { "name": "Buy Milk" },
-      "mode": "create_or_update",
-      "contentHash": "abc123hash"
-    }
-  ],
-  "mappingUpserts": []
+function toIso(millis?: number | null) {
+    if (!millis) return null;
+    const date = new Date(millis);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toISOString();
 }
 
-Mapping rules (default):
-- Project → board.
-- status → list (todo/in_progress/blocked/done).
-- category/priority/tags/workstream/isManagement → labels.
-- task.subtasks → checklist "Subtasks".
-- task.steps → checklist "Steps".
-- estimates → custom field "Estimate (hours)" when available.
-- dates → card.start + card.due in ISO.
+function safeVarFragment(raw: string) {
+    const cleaned = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    return cleaned || "x";
+}
 
-You receive:
-- tasks[]
-- existing trelloMappings[]
-- trelloContext: boardId, known lists/labels/customFields/member mapping
-- config overrides (optional)
+function fnv1aHash(input: string) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < input.length; i++) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return `fnv1a_${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
 
-You produce:
-- TrelloSyncPlan with ordered operations:
-  1) ensure lists exist (ENSURE_LIST)
-  2) ensure labels exist (ENSURE_LABEL)
-  3) ensure custom fields exist (ENSURE_CUSTOM_FIELD)
-  4) upsert cards (UPSERT_CARD)
-  5) upsert checklists + checkitems (ENSURE_CHECKLIST_ON_CARD, UPSERT_CHECKITEMS)
-  6) set custom field values (SET_CUSTOM_FIELD_NUMBER)
-  7) update trelloMappings patch suggestions (via mappingUpserts)
+function buildContentHash(task: TaskDoc) {
+    const payload = {
+        syncVersion: SYNC_VERSION,
+        title: task.title ?? "",
+        description: task.description ?? "",
+        status: task.status ?? "",
+        category: task.category ?? "",
+        priority: task.priority ?? "",
+        workstream: task.workstream ?? null,
+        isManagement: task.isManagement ?? false,
+        steps: task.steps ?? [],
+        subtasks: (task.subtasks ?? []).map((item) => ({
+            title: item.title ?? "",
+            done: !!item.done,
+        })),
+        estimatedMinutes: task.estimatedMinutes ?? null,
+        estimatedDuration: task.estimatedDuration ?? null,
+        startDate: task.startDate ?? null,
+        endDate: task.endDate ?? null,
+        assignee: task.assignee ?? null,
+    };
 
-If something is impossible (e.g., assignee email not mapped to Trello member id), emit a WARNING in plan.warnings and skip member assignment.`;
+    return fnv1aHash(JSON.stringify(payload));
+}
+
+function estimateHours(task: TaskDoc) {
+    if (typeof task.estimatedMinutes === "number" && Number.isFinite(task.estimatedMinutes)) {
+        return Math.round((task.estimatedMinutes / 60) * 100) / 100;
+    }
+    if (typeof task.estimatedDuration === "number" && Number.isFinite(task.estimatedDuration)) {
+        return Math.round((task.estimatedDuration / 3600000) * 100) / 100;
+    }
+    return null;
+}
+
+function buildLabelSpecs(task: TaskDoc) {
+    const labels: Array<{ name: string; color?: string | null }> = [];
+
+    if (task.category) labels.push({ name: `Category: ${task.category}`, color: "blue" });
+
+    if (task.priority) {
+        const priorityColor = task.priority === "High" ? "red" : task.priority === "Medium" ? "orange" : "green";
+        labels.push({ name: `Priority: ${task.priority}`, color: priorityColor });
+    }
+
+    if (task.workstream) labels.push({ name: `Workstream: ${task.workstream}`, color: "purple" });
+    if (task.isManagement) labels.push({ name: "Management", color: "black" });
+
+    return labels;
+}
 
 export const generateTrelloSyncPlan = internalAction({
-  args: {
-    projectId: v.id("projects"),
-    tasks: v.array(v.any()), // typing as any to avoid complex nested validation here, validated by runtime schema
-    trelloMappings: v.array(v.any()),
-    trelloContext: v.object({
-      boardId: v.string(),
-      listsByStatus: v.optional(v.any()),
-      labelsByName: v.optional(v.any()),
-      customFieldsByName: v.optional(v.any()),
-    }),
-    config: v.optional(v.any()),
-  },
-  handler: async (ctx, args) => {
-    const userPrompt = JSON.stringify({
-      projectId: args.projectId,
-      tasks: args.tasks,
-      trelloMappings: args.trelloMappings,
-      trelloContext: args.trelloContext,
-      config: args.config,
-    });
+    args: {
+        projectId: v.id("projects"),
+        tasks: v.array(v.any()),
+        trelloMappings: v.array(v.any()),
+        trelloContext: v.object({
+            boardId: v.string(),
+            listsByStatus: v.optional(v.any()),
+            labelsByName: v.optional(v.any()),
+            customFieldsByName: v.optional(v.any()),
+            memberIdByAssignee: v.optional(v.any()),
+        }),
+        config: v.optional(v.any()),
+    },
+    handler: async (_ctx, args) => {
+        const tasks = args.tasks as TaskDoc[];
+        const mappings = (args.trelloMappings as TrelloMappingDoc[]) ?? [];
+        const mappingByTask = new Map(mappings.map((mapping) => [mapping.taskId, mapping]));
 
-    const rawResult = await callChatWithSchema(TrelloSyncPlanSchemaLenient, {
-      model: "gpt-4o", // Strong model for complex logic
-      systemPrompt: SYSTEM_PROMPT,
-      userPrompt: userPrompt,
-      language: "en",
-    });
+        const ensureOps: TrelloOp[] = [];
+        const cardOps: TrelloOp[] = [];
+        const checklistOps: TrelloOp[] = [];
+        const customFieldOps: TrelloOp[] = [];
+        const mappingUpserts: TrelloSyncPlan["mappingUpserts"] = [];
+        const warnings: string[] = [];
 
-    const normalized = buildTrelloSyncPlanSchema(args.projectId).parse(rawResult);
-    return normalized as TrelloSyncPlan;
-  },
+        const listVars = new Map<string, string>();
+        const labelVars = new Map<string, string>();
+        const labelsToEnsure = new Map<string, { name: string; color?: string | null }>();
+        const listsByStatus = (args.trelloContext.listsByStatus ?? {}) as Record<
+            string,
+            { id?: string; name?: string }
+        >;
+        const labelsByName = (args.trelloContext.labelsByName ?? {}) as Record<string, { id: string }>;
+        const customFieldsByName = (args.trelloContext.customFieldsByName ?? {}) as Record<
+            string,
+            { id: string; type: string }
+        >;
+
+        const statusListOverrides = (args.config?.listNames ?? {}) as Record<string, string>;
+
+        const needsEstimateField = tasks.some((task) => estimateHours(task) !== null);
+        const estimateField = customFieldsByName[ESTIMATE_FIELD_NAME];
+        const estimateFieldIdOrVar = estimateField?.id ? estimateField.id : "$cf.estimate_hours";
+
+        if (needsEstimateField && !estimateField?.id) {
+            ensureOps.push({
+                opId: "cf_estimate_hours",
+                op: "ENSURE_CUSTOM_FIELD",
+                boardId: args.trelloContext.boardId,
+                field: {
+                    name: ESTIMATE_FIELD_NAME,
+                    type: "number",
+                    pos: "top",
+                    displayOnCardFront: true,
+                },
+                setVar: "cf.estimate_hours",
+            });
+        }
+
+        function resolveListRef(status: string) {
+            const fromContext = listsByStatus[status]?.id;
+            if (fromContext) return fromContext;
+
+            const fromConfig = statusListOverrides[status];
+            if (fromConfig && isTrelloId(fromConfig)) return fromConfig;
+
+            const desiredName = fromConfig || STATUS_LIST_NAMES[status] || status;
+            if (!listVars.has(status)) {
+                const varName = `list.${safeVarFragment(status)}`;
+                listVars.set(status, `$${varName}`);
+                ensureOps.push({
+                    opId: `list_${safeVarFragment(status)}`,
+                    op: "ENSURE_LIST",
+                    boardId: args.trelloContext.boardId,
+                    list: { name: desiredName },
+                    setVar: varName,
+                });
+            }
+
+            return listVars.get(status) as string;
+        }
+
+        for (const task of tasks) {
+            const labels = buildLabelSpecs(task);
+            for (const label of labels) {
+                if (!labelsByName[label.name]) {
+                    labelsToEnsure.set(label.name, label);
+                }
+            }
+        }
+
+        for (const label of labelsToEnsure.values()) {
+            const slug = safeVarFragment(label.name);
+            if (labelVars.has(label.name)) continue;
+            labelVars.set(label.name, `$label.${slug}`);
+            ensureOps.push({
+                opId: `label_${slug}`,
+                op: "ENSURE_LABEL",
+                boardId: args.trelloContext.boardId,
+                label: {
+                    name: label.name,
+                    color: label.color ?? null,
+                },
+                setVar: `label.${slug}`,
+            });
+        }
+
+        for (const task of tasks) {
+            const mapping = mappingByTask.get(task._id);
+            const contentHash = buildContentHash(task);
+
+            const listIdRef = resolveListRef(task.status);
+
+            const labelSpecs = buildLabelSpecs(task);
+            const labelIds = labelSpecs
+                .map((label) => labelsByName[label.name]?.id ?? labelVars.get(label.name))
+                .filter((value): value is string => !!value);
+
+            const start = toIso(task.startDate ?? null);
+            const due = toIso(task.endDate ?? null);
+
+            const cardVar = `card.${task._id}`;
+            const cardOpId = `card_${safeVarFragment(task._id)}`;
+
+            const cardOp: TrelloOp = {
+                opId: cardOpId,
+                op: "UPSERT_CARD",
+                taskId: task._id,
+                boardId: args.trelloContext.boardId,
+                listId: listIdRef,
+                card: {
+                    id: mapping?.trelloCardId,
+                    name: task.title,
+                    desc: task.description ?? "",
+                    start,
+                    due,
+                    labelIds: labelIds.length ? labelIds : undefined,
+                },
+                mode: "create_or_update",
+                setVar: cardVar,
+                contentHash,
+            };
+
+            cardOps.push(cardOp);
+
+            mappingUpserts.push({
+                taskId: task._id,
+                trelloCardIdVarOrValue: `$${cardVar}`,
+                trelloListIdVarOrValue: listIdRef,
+                contentHash,
+            });
+
+            if (task.assignee) {
+                const memberId = args.trelloContext.memberIdByAssignee?.[task.assignee];
+                if (!memberId) {
+                    warnings.push(
+                        `Missing Trello member mapping for assignee "${task.assignee}" (task ${task._id}); skipping assignment.`
+                    );
+                }
+            }
+
+            const steps = (task.steps ?? []).filter((step) => step && step.trim().length > 0);
+            if (steps.length) {
+                const checklistVar = `chk.steps.${task._id}`;
+                checklistOps.push({
+                    opId: `chk_steps_${safeVarFragment(task._id)}`,
+                    op: "ENSURE_CHECKLIST_ON_CARD",
+                    cardId: `$${cardVar}`,
+                    checklist: { name: "Steps" },
+                    setVar: checklistVar,
+                });
+                checklistOps.push({
+                    opId: `chk_steps_items_${safeVarFragment(task._id)}`,
+                    op: "UPSERT_CHECKITEMS",
+                    cardId: `$${cardVar}`,
+                    checklistId: `$${checklistVar}`,
+                    items: steps.map((name) => ({ name })),
+                    mode: "merge_by_name",
+                });
+            }
+
+            const subtasks = (task.subtasks ?? []).filter((item) => item && item.title);
+            if (subtasks.length) {
+                const checklistVar = `chk.subtasks.${task._id}`;
+                checklistOps.push({
+                    opId: `chk_subtasks_${safeVarFragment(task._id)}`,
+                    op: "ENSURE_CHECKLIST_ON_CARD",
+                    cardId: `$${cardVar}`,
+                    checklist: { name: "Subtasks" },
+                    setVar: checklistVar,
+                });
+                checklistOps.push({
+                    opId: `chk_subtasks_items_${safeVarFragment(task._id)}`,
+                    op: "UPSERT_CHECKITEMS",
+                    cardId: `$${cardVar}`,
+                    checklistId: `$${checklistVar}`,
+                    items: subtasks.map((item) => ({ name: item.title, checked: item.done })),
+                    mode: "merge_by_name",
+                });
+            }
+
+            const estimate = estimateHours(task);
+            if (estimate !== null) {
+                customFieldOps.push({
+                    opId: `cf_estimate_${safeVarFragment(task._id)}`,
+                    op: "SET_CUSTOM_FIELD_NUMBER",
+                    cardId: `$${cardVar}`,
+                    customFieldId: estimateFieldIdOrVar,
+                    value: estimate,
+                });
+            }
+        }
+
+        const operations = [...ensureOps, ...cardOps, ...checklistOps, ...customFieldOps];
+
+        return {
+            planVersion: "1.0",
+            context: {
+                projectId: args.projectId,
+                targetBoardId: args.trelloContext.boardId,
+            },
+            warnings: warnings.length ? warnings : undefined,
+            operations,
+            mappingUpserts,
+        };
+    },
 });

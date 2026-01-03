@@ -31,7 +31,7 @@ const GLOBAL_LANGUAGE_INSTRUCTIONS = [
 ].join("\n");
 
 const apiKey = process.env.OPENAI_API_KEY;
-export const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-5.2";
+export const DEFAULT_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-5-mini";
 // Default to a 1536-d model to match the vector index. Larger models are down-projected.
 export const DEFAULT_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || "text-embedding-3-small";
 

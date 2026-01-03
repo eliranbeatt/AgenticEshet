@@ -173,6 +173,145 @@ export const snapshotBoard = action({
     },
 });
 
+export const generatePlan = action({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const config = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
+        if (!config) throw new Error("Trello not configured");
+
+        getTrelloAuth(); // Verify auth
+
+        // 1. Gather Context
+        const [tasks, mappings] = await Promise.all([
+            ctx.runQuery(api.tasks.listByProject, { projectId: args.projectId }),
+            ctx.runQuery(internal.trelloSync.getMappings, { projectId: args.projectId }),
+        ]);
+
+        const [lists, labels, customFields] = await Promise.all([
+            trelloRequest<any[]>({ method: "GET", path: `/boards/${config.boardId}/lists`, label: "Get Lists", retryLog: [] }),
+            trelloRequest<any[]>({ method: "GET", path: `/boards/${config.boardId}/labels`, label: "Get Labels", retryLog: [] }),
+            trelloRequest<any[]>({ method: "GET", path: `/boards/${config.boardId}/customFields`, label: "Get Custom Fields", retryLog: [] }),
+        ]);
+
+        const trelloContext = {
+            boardId: config.boardId,
+            listsByStatus: config.listMap
+                ? Object.fromEntries(Object.entries(config.listMap).map(([k, v]) => [k, { id: v, name: k }]))
+                : {},
+            knownLists: lists?.map((l: any) => ({ id: l.id, name: l.name })),
+            knownLabels: labels?.map((l: any) => ({ id: l.id, name: l.name, color: l.color })),
+            knownCustomFields: customFields?.map((f: any) => ({ id: f.id, name: f.name, type: f.type })),
+            labelsByName: labels ? Object.fromEntries(labels.map((l: any) => [l.name, { id: l.id, color: l.color }])) : {},
+            customFieldsByName: customFields ? Object.fromEntries(customFields.map((f: any) => [f.name, { id: f.id, type: f.type }])) : {},
+        };
+
+        // 2. Call Agent
+        const plan = await ctx.runAction(internal.agents.trelloSyncAgent.generateTrelloSyncPlan, {
+            projectId: args.projectId,
+            tasks,
+            trelloMappings: mappings,
+            trelloContext,
+            config: { listNames: config.listMap },
+        });
+
+        // 3. Save Plan
+        const planId = await ctx.runMutation(internal.trelloSync.savePlan, {
+            projectId: args.projectId,
+            operationsJson: JSON.stringify(plan),
+            warningsJson: JSON.stringify(plan.warnings || []),
+            status: "draft",
+        });
+
+        return { planId, plan, warnings: plan.warnings };
+    },
+});
+
+export const executePlan = action({
+    args: { projectId: v.id("projects"), planId: v.id("trelloSyncPlans") },
+    handler: async (ctx, args) => {
+        const config = await ctx.runQuery(api.trelloSync.getConfig, { projectId: args.projectId });
+        if (!config) throw new Error("Trello not configured");
+
+        const auth = getTrelloAuth();
+
+        // 1. Load Plan
+        const storedPlan = await ctx.runQuery(internal.trelloSync.getPlan, { planId: args.planId });
+        if (!storedPlan) throw new Error("Plan not found");
+        if (storedPlan.status === "executed") throw new Error("Plan already executed");
+
+        const plan = JSON.parse(storedPlan.operationsJson || "{}");
+        if (!plan.operations) throw new Error("Invalid plan data");
+
+        // 2. Refresh basic context for Executor (lists/labels)
+        // Executor needs these to resolve names to IDs if they changed? 
+        // Or if the plan relies on runtime lookup.
+        // We reuse the same fetch logic.
+        const [lists, labels, customFields] = await Promise.all([
+            trelloRequest<any[]>({ method: "GET", path: `/boards/${config.boardId}/lists`, label: "Get Lists", retryLog: [] }),
+            trelloRequest<any[]>({ method: "GET", path: `/boards/${config.boardId}/labels`, label: "Get Labels", retryLog: [] }),
+            trelloRequest<any[]>({ method: "GET", path: `/boards/${config.boardId}/customFields`, label: "Get Custom Fields", retryLog: [] }),
+        ]);
+
+        // 3. Execute
+        try {
+            const report = await executeTrelloSyncPlan(plan, {
+                apiKey: auth.apiKey,
+                token: auth.token,
+                dryRun: false
+            }, {
+                 knownLists: lists,
+                 knownLabels: labels,
+                 knownCustomFields: customFields
+            });
+
+            // 4. Persist Updates
+            const vars: Record<string, string> = {};
+            for (const r of report.opResults) {
+                if (r.producedVars) Object.assign(vars, r.producedVars);
+            }
+
+            const resolveVar = (val: string) => {
+                if (val.startsWith("$")) {
+                    const key = val.slice(1);
+                    return vars[key] || val;
+                }
+                return val;
+            };
+
+            const mappingUpserts = plan.mappingUpserts ?? [];
+            let syncedCount = 0;
+
+            for (const upsert of mappingUpserts) {
+                await ctx.runMutation(internal.trelloSync.updateMapping, {
+                    projectId: args.projectId,
+                    taskId: upsert.taskId as Id<"tasks">,
+                    trelloCardId: resolveVar(upsert.trelloCardIdVarOrValue),
+                    trelloListId: resolveVar(upsert.trelloListIdVarOrValue),
+                    contentHash: upsert.contentHash,
+                    lastSyncedAt: report.finishedAt,
+                });
+                syncedCount++;
+            }
+
+            // 5. Update Plan Status
+            await ctx.runMutation(internal.trelloSync.updatePlanStatus, {
+                planId: args.planId,
+                status: "executed",
+                executedAt: Date.now()
+            });
+
+            return { success: true, syncedCount, errors: [] };
+
+        } catch (e: any) {
+            await ctx.runMutation(internal.trelloSync.updatePlanStatus, {
+                planId: args.planId,
+                status: "failed"
+            });
+            throw e;
+        }
+    }
+});
+
 export const sync = action({
     args: { projectId: v.id("projects"), dryRun: v.optional(v.boolean()) },
     handler: async (ctx, args) => {

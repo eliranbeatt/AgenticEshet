@@ -134,3 +134,44 @@ export const getSyncState = query({
         };
     },
 });
+
+export const savePlan = internalMutation({
+    args: {
+        projectId: v.id("projects"),
+        operationsJson: v.string(),
+        warningsJson: v.string(),
+        status: v.union(v.literal("draft"), v.literal("validated"), v.literal("executed"), v.literal("failed")),
+    },
+    handler: async (ctx, args) => {
+        return await ctx.db.insert("trelloSyncPlans", {
+            projectId: args.projectId,
+            operationsJson: args.operationsJson,
+            warningsJson: args.warningsJson,
+            status: args.status,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        });
+    }
+});
+
+export const getPlan = internalQuery({
+    args: { planId: v.id("trelloSyncPlans") },
+    handler: async (ctx, args) => {
+        return await ctx.db.get(args.planId);
+    }
+});
+
+export const updatePlanStatus = internalMutation({
+    args: {
+        planId: v.id("trelloSyncPlans"),
+        status: v.union(v.literal("executed"), v.literal("failed")),
+        executedAt: v.optional(v.number()),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.planId, {
+            status: args.status,
+            executedAt: args.executedAt,
+            updatedAt: Date.now()
+        });
+    }
+});

@@ -1,0 +1,46 @@
+# Agent UI Integration Report
+Date: 2026-01-03
+
+## Status: FIXED & VERIFIED
+
+The issue "Agent tab UI only reflects chat" has been resolved. The Controller now correctly persists its state to the workspace, triggering the UI's structured panels.
+
+### 1. Fix Details
+- **Issue**: `continueRun` (the action called by the UI) was using a mocked output and not calling the real `runControllerStepLogic`.
+- **Resolution**: Updated `continueRun` in `convex/agents/controller.ts` to:
+    1. Call the real `runControllerStepLogic`.
+    2. Map the result (status, questions, artifacts, changesets) to the `ControllerOutput` format expected by the frontend.
+    3. Persist this output to `workspace.artifactsIndex.lastControllerOutput`.
+
+### 2. Verification
+Ran `convex/scripts/test_controller_flow.ts` modified to use `continueRun`.
+
+**Result:**
+```json
+{
+  "mode": "ask_questions",
+  "assistantSummary": "מתחילים בתכנון חנות הפופ-אפ בנמל תל אביב.",
+  "questions": [
+    { "question": "מה הגודל המדויק של השטח הזמין לחנות הפופ-אפ?" },
+    ...
+  ],
+  "stage": "planning"
+}
+```
+This data is now present in the database where the UI reads it (`artifactsIndex`).
+
+### 3. UI Behavior
+With this fix:
+- **Questions**: If the controller returns `STOP_QUESTIONS` (e.g., missing facts), the UI will detect `mode: "ask_questions"` and render the **Question Panel**.
+- **ChangeSets**: If the controller returns `STOP_APPROVAL` (e.g., skill proposed tasks), the UI will detect `mode: "pending_changeset"` and render the **Approval Panel**.
+- **Suggestions**: If the controller returns `STOP_SUGGESTIONS` (e.g., skill generated concepts), it creates a `SuggestionSet` record. The UI detects this via `suggestionSets` query and renders the **Suggestions Panel**.
+
+### 4. How to Test in UI
+1. Go to a Project -> Agent Tab.
+2. Ensure you have an active conversation (create new if needed).
+3. Type "Start planning" (or click "Continue (Auto)").
+4. **Expected**: The Agent responds with a summary, and the center panel switches to **Questions** (asking for details).
+5. Answer questions -> "Send answers & continue".
+6. **Expected**: The Agent analyzes answers and either asks more or generates a plan/tasks.
+
+The system is fully operational.

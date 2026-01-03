@@ -35,6 +35,11 @@ Rules:
 - Do NOT modify approved element truth (not stored here).
 - Add exactly one add_recent_update op per event.
 - If you add a conflict, include bulletAId/bulletBId that match existing Brain bullet IDs when possible.
+- Schema Clarification:
+  - use op="add_bullet" for ALL new information strings (project or element).
+  - for project scope, use "section" (overview, preferences, etc). Do NOT use "path".
+  - for element scope, use target.scope="element" and target.elementId.
+  - Do NOT invent new ops like "add_element_note".
 `.trim();
 
             const userPrompt = `
@@ -56,7 +61,7 @@ ${itemRefs.map((item) => `- ${item.name} (ID: ${item.id})`).join("\n") || "(none
 
 TASK:
 - Extract new facts/preferences/constraints/timeline/stakeholders and add them to the correct section.
-- Add element-specific notes to element scope when a known element matches.
+- Add element-specific notes to element scope (using op="add_bullet", scope="element") when a known element matches.
 - Add conflicts if the new info contradicts existing bullets.
 - Add one recent update line summarizing what changed.
 `.trim();

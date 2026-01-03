@@ -139,8 +139,8 @@ export const patchElement = mutation({
 
     // Add to affectedElementIds if not present
     if (!revision.affectedElementIds?.includes(args.elementId)) {
-        const newAffected = [...(revision.affectedElementIds || []), args.elementId];
-        await ctx.db.patch(args.revisionId, { affectedElementIds: newAffected });
+      const newAffected = [...(revision.affectedElementIds || []), args.elementId];
+      await ctx.db.patch(args.revisionId, { affectedElementIds: newAffected });
     }
 
     // Check if we already have changes for this element in this revision
@@ -255,11 +255,11 @@ export const approve = mutation({
       // Apply Patches
       let newSnapshot;
       if (change.proposedSnapshot) {
-          newSnapshot = normalizeSnapshot(change.proposedSnapshot);
+        newSnapshot = normalizeSnapshot(change.proposedSnapshot);
       } else if (change.patchOps) {
-          newSnapshot = applyPatchOps(baseSnapshot, change.patchOps);
+        newSnapshot = applyPatchOps(baseSnapshot, change.patchOps);
       } else {
-          newSnapshot = baseSnapshot; // No op?
+        newSnapshot = baseSnapshot; // No op?
       }
 
       const changeStats = buildChangeStats(change.patchOps ?? undefined);
@@ -284,8 +284,8 @@ export const approve = mutation({
         createdAt: now,
         createdBy: approvedBy,
         createdFrom: {
-            tab: revision.originTab,
-            source: revision.actionType,
+          tab: revision.originTab,
+          source: revision.actionType,
         },
         tags: Array.from(changeTags),
         summary,
@@ -321,7 +321,7 @@ export const approve = mutation({
     });
 
     // Trigger Projections
-    await ctx.runMutation(api.projections.rebuild, { projectId: revision.projectId });
+    await ctx.scheduler.runAfter(0, api.projections.rebuild, { projectId: revision.projectId });
   },
 });
 
@@ -472,35 +472,35 @@ export const getDraft = query({
 });
 
 export const getRevisionChanges = query({
-    args: { revisionId: v.id("revisions") },
-    handler: async (ctx, args) => {
-        const changes = await ctx.db
-            .query("revisionChanges")
-            .withIndex("by_revision", (q) => q.eq("revisionId", args.revisionId))
-            .collect();
-        return changes;
-    },
+  args: { revisionId: v.id("revisions") },
+  handler: async (ctx, args) => {
+    const changes = await ctx.db
+      .query("revisionChanges")
+      .withIndex("by_revision", (q) => q.eq("revisionId", args.revisionId))
+      .collect();
+    return changes;
+  },
 });
 
 export const discardDraft = mutation({
-    args: { revisionId: v.id("revisions") },
-    handler: async (ctx, args) => {
-        const revision = await ctx.db.get(args.revisionId);
-        if (!revision) throw new Error("Revision not found");
-        if (revision.status !== "draft") throw new Error("Can only discard drafts");
+  args: { revisionId: v.id("revisions") },
+  handler: async (ctx, args) => {
+    const revision = await ctx.db.get(args.revisionId);
+    if (!revision) throw new Error("Revision not found");
+    if (revision.status !== "draft") throw new Error("Can only discard drafts");
 
-        // Delete changes first
-        const changes = await ctx.db
-            .query("revisionChanges")
-            .withIndex("by_revision", (q) => q.eq("revisionId", args.revisionId))
-            .collect();
-        
-        for (const change of changes) {
-            await ctx.db.delete(change._id);
-        }
+    // Delete changes first
+    const changes = await ctx.db
+      .query("revisionChanges")
+      .withIndex("by_revision", (q) => q.eq("revisionId", args.revisionId))
+      .collect();
 
-        await ctx.db.delete(args.revisionId);
-    },
+    for (const change of changes) {
+      await ctx.db.delete(change._id);
+    }
+
+    await ctx.db.delete(args.revisionId);
+  },
 });
 
 export const discard = mutation({

@@ -158,7 +158,7 @@ export const dynamicSearch = action({
         query: v.string(),
         scope: v.union(v.literal("project"), v.literal("global"), v.literal("both")),
         limit: v.number(),
-        minScore: v.number(),
+        minScore: v.optional(v.number()),
         sourceTypes: v.optional(v.array(v.string())),
         includeSummaries: v.optional(v.boolean()),
     },
@@ -187,7 +187,7 @@ export const dynamicSearch = action({
             filter: args.scope !== "both" ? filter : undefined,
         });
 
-        const relevantResults = results.filter((r) => r._score >= args.minScore);
+        const relevantResults = results.filter((r) => r._score >= (args.minScore ?? 0.6));
 
         // Fetch chunks to check metadata
         const chunks = await ctx.runQuery(internal.knowledge.getChunks, {

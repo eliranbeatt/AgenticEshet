@@ -1,0 +1,241 @@
+CODEX AGENT TAB REPORT
+Generated: 2026-01-03
+
+Scope
+- Specs read: `Specs/Agent/agent spec.txt`, `Specs/Agent/Agent ui.txt`, `Specs/Agent/agnetgmi.txt`,
+  `Specs/Agent/magnetic_studio_skills_prompts_v1.md`, `Specs/Agent/magnetic_studio_skills_prompts_v2_with_images.md`,
+  `Specs/Agent/test_plan_agnetgmi.md`, `Specs/Agent/test_report_agnetgmi.md`.
+- Code reviewed: `studio-console/app/projects/[id]/agent/page.tsx`, `studio-console/app/projects/[id]/studio/page.tsx`,
+  `studio-console/convex/agents/controller.ts`, `studio-console/convex/projectWorkspaces.ts`,
+  `studio-console/convex/agents/skills.ts`, `studio-console/convex/lib/skills.ts`,
+  `studio-console/convex/skills/seed.ts`, `studio-console/convex/skills/agentSkills.generated.json`,
+  `studio-console/convex/agentSuggestionSets.ts`, `studio-console/convex/printing.ts`,
+  `studio-console/convex/trelloSync.ts`, `studio-console/convex/agents/trelloSyncAgent.ts`,
+  `studio-console/convex/trelloActions.ts`, `studio-console/app/projects/[id]/studio/_components/PrintingPanel.tsx`,
+  `studio-console/app/projects/[id]/studio/_components/TrelloPanel.tsx`, `studio-console/app/projects/[id]/trello-view/page.tsx`,
+  tests in `studio-console/tests`.
+
+High-level summary
+- The Agent tab UI exists and covers pins, threads, chat, suggestions stop UI, approval UI, timeline, and a small inspector.
+- The controller, skills registry, and printing/trello modules are present but mostly stubbed or not wired together.
+- Several spec-critical pieces (controller loop, question/suggestion gates, structured payloads, schema enforcement, and /studio replacement) are missing or only partially implemented.
+
+Task-by-task accomplishment report
+
+1) Skills Registry (Epic 1 / AgnetGMI Phase 1)
+Status: PARTIAL
+Implemented
+- Skills table already exists with stage/channel tags and metadata in `studio-console/convex/schema.ts`.
+- Seed script exists in `studio-console/convex/skills/seed.ts` using `agentSkills.generated.json`.
+- Admin skills editor exists in `studio-console/app/admin/skills/page.tsx`.
+Missing / Gaps
+- `agentSkills.generated.json` has prompts only; inputSchema/outputSchema are empty for all 70 entries.
+- Admin UI does not expose input/output schema fields, tool policy, or versioning.
+- No import pipeline from Specs/Agent prompts/schemas into JSON.
+Fix
+- Generate `agentSkills.generated.json` from v1/v2 specs including JSON Schemas and allowed tools.
+- Extend admin UI to view/edit schema JSON and tool policy fields.
+
+2) Skill Runner (AgnetGMI Phase 2)
+Status: PARTIAL
+Implemented
+- `studio-console/convex/agents/skills.ts` runs a skill using LLM with minimal schema validation.
+- `studio-console/convex/lib/skills.ts` provides a stubbed validator/runner (used by tests).
+Missing / Gaps
+- Controller does not call `agents/skills.run`.
+- Schema validation is effectively disabled because schemas are empty.
+Fix
+- Connect controller to `agents/skills.run`.
+- Enforce full schemas by seeding real JSON Schema content.
+
+3) Controller Autonomy Loop (Epic 4 / AgnetGMI Phase 2)
+Status: MISSING (stub only)
+Implemented
+- `studio-console/convex/agents/controller.ts` includes a stub `runControllerStepLogic` and `continueRun`.
+Missing / Gaps
+- No stage routing, no multi-skill loop, no question gate logic beyond a single hardcoded case.
+- No pending ChangeSet proposal path.
+- No agent run events logged.
+- `continueRun` writes a mock output only and does not append conversation messages.
+Fix
+- Implement controller state machine: read workspace, route stage/skill, call skills, detect gates, persist artifacts.
+- Create agentRuns + events for skill selection/tool calls/gates.
+- Persist controller output to `projectWorkspaces.artifactsIndex` and update `pendingChangeSetId`.
+
+4) Workspace State + Question Sessions (Epic 3 / AgnetGMI Phase 1)
+Status: PARTIAL
+Implemented
+- `projectWorkspaces` table and queries/mutations in `studio-console/convex/projectWorkspaces.ts`.
+- `agentQuestionSessions` table exists in schema.
+Missing / Gaps
+- Controller does not create or advance question sessions.
+- Questions gate logic is not tied to session history or "exactly 5" requirement.
+Fix
+- Add a question session model with enforcement of 5 questions per turn.
+- Connect question responses to session state and workspace facts.
+
+5) Suggestions Stop Flow (Agent UI spec)
+Status: PARTIAL
+Implemented
+- Suggestions UI exists in `studio-console/app/projects/[id]/agent/page.tsx` with sections, cards, selection bar,
+  quick chips, instruction box, and buttons (Use selected/none/regenerate).
+- `agentSuggestionSets` table and create/list queries exist.
+Missing / Gaps
+- No generator for `agentSuggestionSets` (controller never creates them).
+- Missing filter chips, "Back to logs", and "Save for later".
+- Suggestion cards do not show impact badges (cost/time/risk).
+- UI sends a string payload instead of the structured selection object in the spec.
+Fix
+- Add suggestions skills (`suggestions.ideation`, `suggestions.planning`, `suggestions.solutioning`) to skills seed and controller.
+- Persist `SuggestionSet` to `agentSuggestionSets`.
+- Update UI to send structured payload and display impact badges, filter chips, and save/back actions.
+
+6) Question Stop UI Upgrade (Agent UI spec)
+Status: MISSING
+Implemented
+- Single "Send answers & continue" button in `studio-console/app/projects/[id]/agent/page.tsx`.
+Missing / Gaps
+- Missing two-button submit flow (ASK_MORE_QUESTIONS vs CONTINUE_RUN).
+Fix
+- Add dual submit actions and pass intent to controller to continue or ask another 5 questions.
+
+7) Agent Tab UI Layout (Epic 2 / Agent spec)
+Status: PARTIAL
+Implemented
+- Agent tab with pins, threads list, chat, suggestions/approval stop panels, timeline, and inspector.
+- Suggested actions bar renders up to 3 items if controller output supplies them.
+Missing / Gaps
+- No "Continue (Auto)" or "Run Skill" CTA; only chat send triggers controller.
+- No "Apply Pending Changes" button in top bar.
+- No "More" suggested actions drawer.
+- Artifact inspector tabs are incomplete (missing Schedule/Procurement/Research/Accounting/Quote/Risks/Pending Changes).
+Fix
+- Add CTA buttons and wire to controller/skill run.
+- Expand inspector tabs and connect to existing pages or views.
+
+8) Studio Single Page (Epic 2 / Agent spec)
+Status: MISSING (stub only)
+Implemented
+- `studio-console/app/projects/[id]/studio/page.tsx` exists but is a prototype shell.
+Missing / Gaps
+- Not used as the main UI (Project layout still uses Agent/Chat/Elements/etc tabs).
+- Lacks question/suggestion/approval stops and full inspector panel.
+Fix
+- Decide between migrating Agent tab to /studio or upgrading /studio to replace tabs.
+- Move the Agent tab functionality into /studio if the spec requires replacement.
+
+9) ChangeSet Approval Gate (Epic 5)
+Status: PARTIAL
+Implemented
+- Approval UI shows pending ChangeSets and can approve/reject in `agent/page.tsx`.
+Missing / Gaps
+- Controller never proposes ChangeSets or sets `pendingChangeSetId` in workspace.
+Fix
+- Have controller call ChangeSet proposals when a skill wants to modify data.
+- Update workspace and controller output to reflect pending change sets.
+
+10) Printing Module (Epic 8)
+Status: PARTIAL
+Implemented
+- Schema tables: `printFiles`, `printQaRuns`, `printQaFindings` in `studio-console/convex/schema.ts`.
+- Basic `validateSpec` function and `getSummary` query in `studio-console/convex/printing.ts`.
+- Printing summary shown in Agent inspector.
+Missing / Gaps
+- No upload API; `PrintingPanel` uses a non-existent `api.printing.listFiles` and a mock upload.
+- No metadata extraction job, no QA run action, no findings persistence.
+- No UI to attach printing specs to elements.
+Fix
+- Add file upload mutation/action (store in `printFiles`), extraction action, and QA action.
+- Wire `PrintingPanel` to real queries and render QA results.
+
+11) Trello Sync Module (Epic 9)
+Status: PARTIAL
+Implemented
+- Deterministic plan generator in `convex/agents/trelloSyncAgent.ts`.
+- Real sync executor in `convex/trelloActions.ts`.
+- Trello config + sync UI in `app/projects/[id]/trello-view/page.tsx` (but currently mismatched to API).
+Missing / Gaps
+- `trelloSyncPlans` table not used; no plan persistence/preview.
+- No validator stage; no "translator skill" integration.
+- `TrelloPanel` in /studio references non-existent `api.trello.getLatestPlan` and `api.trello.executeSync`.
+- Trello config UI expects apiKey/token storage, but backend expects env vars.
+Fix
+- Add plan storage in `trelloSyncPlans`, plus validator before execution.
+- Align UI config with backend (either accept API keys or remove fields).
+- Fix /studio Trello panel to call existing `trelloQuery`/`trelloActions` APIs or consolidate modules.
+
+12) Suggested Actions (ux.suggestedActionsTop3)
+Status: MISSING (not wired)
+Implemented
+- Suggested actions bar in Agent UI uses `controllerOutput.nextSuggestedActions`.
+Missing / Gaps
+- Controller never calls the `ux.suggestedActionsTop3` skill; output is always empty.
+Fix
+- Add skill call in controller and save output to workspace.
+
+13) Tests (AgnetGMI test plan)
+Status: PARTIAL
+Implemented
+- Unit tests for controller, skills stub, and printing in `studio-console/tests/convex/`.
+- E2E stub for /studio in `studio-console/tests/e2e/studio.spec.ts`.
+Missing / Gaps
+- Tests validate stubs, not the real controller/skills flow.
+- Trello test references missing `buildTrelloSyncPlanSchema` (likely failing).
+- No integration tests for controller loop or skill runs with real schemas.
+Fix
+- Update tests to match real controller logic and trello plan shape.
+- Add integration tests for controller gating and skill execution.
+
+14) Quality Guardrails (Epic 11)
+Status: MISSING
+Implemented
+- Skills exist in seed for quality checks.
+Missing / Gaps
+- No usage in controller or skill pipeline.
+Fix
+- Add pre-run schema validation and post-run sanity checks in controller flow.
+
+15) Image Skills (v2 spec)
+Status: PARTIAL
+Implemented
+- Image skill prompts seeded in `agentSkills.generated.json`.
+Missing / Gaps
+- No image tool integration (`image.generate`, `svg.renderToAsset`, etc.) wired in backend.
+Fix
+- Implement tool executors and asset linking if these are in scope.
+
+Final missing items and how to fix (priority order)
+
+A) Implement the controller loop end-to-end
+- Add stage/channel routing, question gate, suggestions gate, approval gate.
+- Call skill runner and persist artifacts + controller outputs to `projectWorkspaces`.
+- Log agentRuns events for timeline.
+
+B) Wire structured question flow
+- Use `agentQuestionSessions` or a new `questionSessions` table to enforce exactly 5 questions per pack.
+- Add dual submit intent buttons in UI and handle intent in controller.
+
+C) Make suggestions functional
+- Add `suggestions.*` skills and generate `agentSuggestionSets`.
+- Update controller to stop at SUGGESTIONS and resume based on selection payload.
+
+D) Fix skills registry inputs/outputs
+- Regenerate `agentSkills.generated.json` with JSON Schemas from Specs/Agent.
+- Update admin UI to edit schemas and tool policy.
+
+E) Finish /studio or migrate Agent tab into it
+- Decide canonical UI route (Agent tab vs /studio) and remove duplication.
+- Implement the full inspector tab set and top-bar CTA controls.
+
+F) Printing and Trello modules
+- Printing: add upload/extraction/QA actions and UI wiring.
+- Trello: persist plans, validate before execute, align config UI with backend.
+
+G) Update tests to reflect real flow
+- Replace stub-based tests with real controller/skill tests.
+- Fix trello unit tests to match actual plan generator.
+- Expand E2E tests to cover question/suggestion/approval gates.
+
+Notes on test_report_agnetgmi.md
+- The report claims a full controller, printing, and trello implementation, but the current code is still stubbed in those areas.
+- Treat it as aspirational rather than factual.

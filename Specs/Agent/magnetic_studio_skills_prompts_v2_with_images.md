@@ -69,8 +69,30 @@ This file contains **full** prompt + schema + guidelines for each skillKey.
         "ask_questions",
         "artifacts",
         "pending_changeset",
+        "run_skill",
+        "suggestions",
         "done"
       ]
+    },
+    "suggestionSet": {
+       "type": "object",
+       "properties": {
+          "title": { "type": "string" },
+          "items": { 
+             "type": "array",
+             "items": { "type": "object" }
+          }
+       },
+       "required": ["items"]
+    },
+    "skillCall": {
+       "type": "object",
+       "properties": {
+          "skillKey": { "type": "string" },
+          "input": { "type": "object" },
+          "reason": { "type": "string" }
+       },
+       "required": ["skillKey", "input"]
     },
     "stage": {
       "type": "string"

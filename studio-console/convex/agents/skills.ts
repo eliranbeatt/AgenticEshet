@@ -75,7 +75,7 @@ export const run = action({
                 args.model ||
                 settings.modelConfig?.[args.skillKey] ||
                 settings.modelConfig?.skills ||
-                "gpt-5.2";
+                "gpt-5-mini";
 
             const output = await callChatWithJsonSchema(outputSchema ?? { type: "object" }, {
                 model,

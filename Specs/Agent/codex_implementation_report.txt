@@ -1,0 +1,48 @@
+# Codex Agent Implementation Report
+Generated: 2026-01-03
+
+## 1. Accomplishments
+
+### Phase 1: Skills Registry & Schema
+- [x] **Full Schema Extraction**: Created `Specs/Agent/parse_skills.js` to robustly extract Prompt, Input Schema, and Output Schema from the MD specs.
+- [x] **Registry Population**: Successfully parsed 70 skills and seeded them into the database with valid JSON schemas.
+- [x] **Schema Fixes**: Fixed empty prompts and schemas in `agentSkills.generated.json`.
+
+### Phase 2: Skill Runner
+- [x] **Real LLM Integration**: Implemented `runSkillLogic` in `convex/lib/skills.ts` connecting to `openai.ts`.
+- [x] **Robust Fallback**: Enhanced prompt generation to include JSON Schema instructions, fixing issues where OpenAI "Strict Mode" fallback caused schema hallucinations.
+- [x] **Validation**: Enforced output validation against the registry schema.
+
+### Phase 3: Controller Autonomy Loop
+- [x] **The Brain**: Implemented `runControllerStepLogic` in `convex/agents/controller.ts` using the real `controller.autonomousPlanner` skill.
+- [x] **State Machine**: Implemented logic for `ask_questions`, `run_skill`, `suggestions` (new), `pending_changeset` (stubbed response), and `done`.
+- [x] **Persistence**: Implemented `agentRuns` creation and event logging.
+- [x] **Artifacts**: Implemented workspace artifact updates from controller output.
+
+### Phase 4: Workspace & Questions
+- [x] **Fact Seeding**: Added `seedFacts` mutation to test workspace context awareness.
+- [x] **Question Persistence**: Implemented `createQuestionSession` to store questions returned by the controller.
+- [x] **Verification**: Verified that adding facts causes the controller to ask smarter, more specific questions.
+
+### Phase 5: Suggestions
+- [x] **Schema Update**: Added `suggestions` mode to `controller.autonomousPlanner` schema in MD and DB.
+- [x] **Logic**: Implemented `STOP_SUGGESTIONS` handler in controller and `createSuggestionSet` integration.
+
+### Phase 10 & 11: Modules
+- [x] **Printing**: Added `listFiles`, `generateUploadUrl`, `saveFile` mutations for backend support.
+- [x] **Trello**: Implemented `generatePlan` (save to DB) and `executePlan` (load & run) actions for robust 2-step sync.
+
+## 2. Verification
+- `convex/scripts/test_controller_flow.ts` successfully runs the entire loop:
+    1.  Creates Project/Thread/Workspace.
+    2.  Seeds Facts.
+    3.  Runs Controller (LLM).
+    4.  Controller analyzes facts and returns specific questions.
+    5.  System persists questions and logs events.
+- Trello and Printing modules have backend logic ready for UI wiring.
+
+## 3. Next Steps (UI Wiring)
+- Implement `QuestionModal` in `page.tsx` to display questions from `agentQuestionSessions` and submit answers back to workspace facts.
+- Implement `SuggestionPanel` to display `agentSuggestionSets`.
+- Wire "Continue (Auto)" button to loop until `STOP_*` state.
+- Wire Trello/Printing UI to new mutations.

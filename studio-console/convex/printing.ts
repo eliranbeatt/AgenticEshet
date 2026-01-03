@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
 
 // 3. Printing Module Implementation
 
@@ -147,5 +147,42 @@ export const getSummary = query({
             fileCount: files.length,
             lastQaRun: latestQa,
         };
+    },
+});
+
+export const listFiles = query({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        return await ctx.db
+            .query("printFiles")
+            .withIndex("by_project_createdAt", (q) => q.eq("projectId", args.projectId))
+            .collect();
+    },
+});
+
+export const generateUploadUrl = mutation(async (ctx) => {
+    return await ctx.storage.generateUploadUrl();
+});
+
+export const saveFile = mutation({
+    args: {
+        projectId: v.id("projects"),
+        storageId: v.string(),
+        fileName: v.string(),
+        fileType: v.string(),
+        sizeBytes: v.number(),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.insert("printFiles", {
+            projectId: args.projectId,
+            storageId: args.storageId,
+            fileName: args.fileName,
+            fileType: args.fileType,
+            sizeBytes: args.sizeBytes,
+            uploadedAt: Date.now(),
+            uploadedBy: "user",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        });
     },
 });

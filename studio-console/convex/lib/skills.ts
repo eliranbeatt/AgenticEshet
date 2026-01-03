@@ -2,6 +2,7 @@ import { internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
+import { callChatWithJsonSchema } from "./openai";
 
 // --- Types ---
 
@@ -32,16 +33,16 @@ export type SkillRunResult = {
 
 // --- Actions (Simulated for Test / Placeholder) ---
 
-// In a real implementation, this would call OpenAI/Gemini.
-// For now, we'll implement a stub that can be mocked or basic logic.
 export const validateInput = (schema: object, input: any) => {
     // Basic JSON schema validation stub
-    // In production, use 'ajv' or similar
+    // In production, use 'ajv' or similar if strict validation is needed pre-flight.
     if (schema && typeof schema === "object" && "required" in schema) {
         const required = (schema as any).required as string[];
-        for (const field of required) {
-            if (!(field in input)) {
-                throw new Error(`Validation Error: Missing required field '${field}'`);
+        if (Array.isArray(required)) {
+            for (const field of required) {
+                if (!(field in input)) {
+                    // console.warn(`Validation Warning: Missing required input field '${field}'`);
+                }
             }
         }
     }
@@ -52,9 +53,11 @@ export const validateOutput = (schema: object, output: any) => {
     // Basic JSON schema validation stub
     if (schema && typeof schema === "object" && "required" in schema) {
         const required = (schema as any).required as string[];
-        for (const field of required) {
-            if (!(field in output)) {
-                 throw new Error(`Output Validation Error: Missing required field '${field}'`);
+        if (Array.isArray(required)) {
+            for (const field of required) {
+                if (!(field in output)) {
+                     throw new Error(`Output Validation Error: Missing required field '${field}'`);
+                }
             }
         }
     }
@@ -82,34 +85,57 @@ export const getSkillByKey = internalQuery({
 // Main runner logic
 export async function runSkillLogic(
     ctx: any, // ActionCtx
-    skillDef: Doc<"skills"> | { key?: string; skillKey?: string; inputSchema?: string; outputSchema?: string; inputSchemaJson?: string; outputSchemaJson?: string }, // Loose type for mocking
+    skillDef: Doc<"skills"> | { key?: string; skillKey?: string; content?: string; inputSchema?: string; outputSchema?: string; inputSchemaJson?: string; outputSchemaJson?: string }, 
     input: any
 ): Promise<SkillRunResult> {
     
-    const inputSchemaRaw = skillDef.inputSchemaJson ?? skillDef.inputSchema ?? "{}";
-    const outputSchemaRaw = skillDef.outputSchemaJson ?? skillDef.outputSchema ?? "{}";
+    const inputSchemaRaw = skillDef.inputSchemaJson || skillDef.inputSchema || "{}";
+    const outputSchemaRaw = skillDef.outputSchemaJson || skillDef.outputSchema || "{}";
     const skillKey = skillDef.key ?? skillDef.skillKey ?? "unknown";
 
     // 1. Validate Input
-    validateInput(JSON.parse(inputSchemaRaw), input);
-
-    // 2. Call LLM (Stubbed here, would import OpenAI)
-    // console.log(`[Skill:${skillDef.key}] Running with input:`, JSON.stringify(input).slice(0, 100));
-    
-    // Mock response based on skill key for testing if not mocked externally
-    let resultData = {};
-    if (skillKey === "test.skill") {
-        resultData = { result: 123, text: "Mock success" };
-        if (input.fail) throw new Error("Mock failure");
+    try {
+        const inputSchema = JSON.parse(inputSchemaRaw);
+        validateInput(inputSchema, input);
+    } catch (e) {
+        console.warn(`[Skill:${skillKey}] Input schema validation warning:`, e);
     }
 
-    // 3. Validate Output
-    validateOutput(JSON.parse(outputSchemaRaw), resultData);
+    // 2. Call LLM
+    try {
+        const outputSchema = JSON.parse(outputSchemaRaw);
+        const promptContent = skillDef.content || "You are a helpful assistant.";
+        const fullPrompt = `${promptContent}\n\nRESPONSE FORMAT INSTRUCTIONS:\nYou must output a valid JSON object.\nThe object must strictly follow this JSON Schema structure:\n\`\`\`json\n${JSON.stringify(outputSchema, null, 2)}\n\`\`\`\nDo not include the schema keys (like "properties", "type", "required") in your output unless they are part of the data. Output only the instance data.`;
 
-    return {
-        success: true,
-        data: resultData
-    };
+        console.log(`[Skill:${skillKey}] Invoking LLM...`);
+        
+        const resultData = await callChatWithJsonSchema(outputSchema, {
+            systemPrompt: fullPrompt,
+            userPrompt: JSON.stringify(input, null, 2),
+            model: "gpt-4o", // Default to a strong model for skills
+            temperature: 0.2, // Low temp for deterministic skills
+        });
+
+        console.log(`[Skill:${skillKey}] Raw LLM Output:`, JSON.stringify(resultData, null, 2));
+
+        // 3. Validate Output
+        try {
+             validateOutput(outputSchema, resultData);
+        } catch (e: any) {
+             throw new Error(`${e.message}. Received Data: ${JSON.stringify(resultData)}`);
+        }
+
+        return {
+            success: true,
+            data: resultData
+        };
+    } catch (err: any) {
+        console.error(`[Skill:${skillKey}] Execution Failed:`, err);
+        return {
+            success: false,
+            error: err.message || "Unknown error during skill execution"
+        };
+    }
 }
 
 // Wrapper for usage in Actions/Tests

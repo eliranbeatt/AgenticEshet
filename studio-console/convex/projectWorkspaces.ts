@@ -93,3 +93,35 @@ export const updateFromController = mutation({
         });
     },
 });
+
+export const seedFacts = mutation({
+    args: {
+        workspaceId: v.id("projectWorkspaces"),
+        facts: v.any()
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.workspaceId, {
+            facts: args.facts,
+            updatedAt: Date.now()
+        });
+    }
+});
+
+export const createQuestionSession = mutation({
+    args: {
+        projectId: v.id("projects"),
+        stage: v.string(),
+        questions: v.any(), // JSON array
+    },
+    handler: async (ctx, args) => {
+        const sessionId = await ctx.db.insert("agentQuestionSessions", {
+            projectId: args.projectId,
+            stage: args.stage,
+            asked: args.questions,
+            answered: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        });
+        return sessionId;
+    }
+});

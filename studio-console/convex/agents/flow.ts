@@ -127,32 +127,9 @@ export const send = action({
             ? await ctx.runQuery(api.items.listByIds, { itemIds: args.scopeItemIds })
             : []) as Doc<"projectItems">[];
 
-        const factsContext = project.features?.factsEnabled === false
-            ? { bullets: "(facts disabled)" }
-            : await ctx.runAction(internal.factsV2.getFactsContext, {
-                projectId: project._id,
-                scopeType:
-                    args.scopeType === "allProject"
-                        ? "project"
-                        : args.scopeType === "singleItem"
-                            ? "item"
-                            : "multiItem",
-                itemIds: args.scopeItemIds,
-                queryText: args.userContent,
-            });
-
-        const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
+        // --- NEW MEMORY SYSTEM ---
+        const runningMemory = await ctx.runQuery(api.memory.getRunningMemoryMarkdown, {
             projectId: project._id,
-        });
-
-        const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
-            projectId: project._id,
-        });
-
-        const knowledgeDocs = await ctx.runQuery(api.knowledge.listRecentDocs, {
-            projectId: project._id,
-            limit: 6,
-            sourceTypes: ["doc_upload", "plan", "conversation"],
         });
 
         const items = contextItems ?? (await ctx.runQuery(api.items.listSidebarTree, {
@@ -226,20 +203,11 @@ export const send = action({
             `TAB: ${resolvedStage}`,
             `SCOPE: ${scopeSummary}`,
             "",
-            "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
+            "ELEMENT SNAPSHOTS (CANONICAL):",
             elementSnapshotsSummary,
             "",
-            "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
-            brain ? buildBrainContext(brain) : "(none)",
-            "",
-            "KNOWN FACTS (accepted + high-confidence proposed):",
-            factsContext.bullets,
-            "",
-            "KNOWLEDGE BLOCKS:",
-            summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
-            "",
-            "RECENT KNOWLEDGE DOCS:",
-            summarizeKnowledgeDocs(knowledgeDocs ?? []),
+            "RUNNING MEMORY (AUTHORITATIVE):",
+            runningMemory || "(empty)",
             "",
             "CURRENT ITEMS SUMMARY:",
             summarizeItems(items ?? []),
@@ -290,22 +258,7 @@ export const send = action({
                 status: "final",
             });
 
-            const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${finalAssistantMarkdown}`;
-            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
-                projectId: project._id,
-                eventType: "agent_send",
-                payload: {
-                    threadId: args.threadId,
-                    userMessageId,
-                    assistantMessageId,
-                    transcript: fullTranscript,
-                },
-            });
-            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
-                projectId: project._id,
-                brainEventId,
-            });
-
+            // Replaced Brain Events with simple turn bundle creation (which now triggers memory)
             try {
                 const itemRefs = await ctx.runQuery(internal.items.getItemRefs, { projectId: project._id });
                 const scope =
@@ -334,7 +287,7 @@ export const send = action({
                     runId,
                     level: "warn",
                     stage: "agent_a",
-                    message: `Facts turn bundle failed: ${message}`,
+                    message: `Turn bundle failed: ${message}`,
                 });
             }
 

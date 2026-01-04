@@ -196,19 +196,54 @@ export const saveAnswers = mutation({
 
             const fullContent = `Structured Answers (Turn ${args.turnNumber}):\n\n${qaPairs}\n\nUser Note: ${args.userInstructions || "(none)"}`;
 
-            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+            // --- NEW MEMORY SYSTEM ---
+            // We force this update to happen BEFORE the next agent run by using runMutation directly or
+            // relying on Convex's scheduling guarantees if they are in the same transaction.
+            // But appendTurnSummary is an action (calling LLM), so it must be scheduled.
+            // The Agent run is triggered by the UI polling or calling `runControllerStep`?
+            // Actually, `StructuredQuestionsPanel` calls `saveAnswers`. It does NOT trigger the agent immediately.
+            // Wait, looking at `StructuredQuestionsPanel.tsx`:
+            // `await saveAnswers(...)` -> `setIsSubmitting(false)` -> Render updates.
+            // `ActiveSessionView` renders based on `latestTurn`.
+            // The agent creates the NEXT turn. Who calls the agent?
+            // `StructuredQuestionsPanel` calls `startSession` then `runAgent` initially.
+            // But for subsequent turns?
+            // It seems `runControllerStep` in `controller.ts` creates the turn and returns questions.
+            // If the UI just saves answers, how does the next turn get generated?
+            // Ah, the Controller Loop.
+            // The user submits answers. The UI then... waits?
+            // `StructuredQuestionsPanel` just updates state.
+            // If the controller is running, it should pick up the answers.
+            // But where is the "Continue" button?
+            // In `StructuredQuestionsPanel.tsx`, `handleSubmit` calls `saveAnswers`.
+            // There is no explicit "Generate Next" call in the UI code I read.
+            // Ah, `StructuredQuestionsPanel` in `handleSubmit`:
+            // `await saveAnswers(...)`
+            // That's it.
+            // If the user is in "Agent" tab (Controller), the Controller logic handles the flow.
+            // `controller.ts` -> `runControllerStepLogic`:
+            // It checks `latestSession`. If `status` is `active`, it might resume?
+            // But `controller.ts` calls `runSkill`.
+            // `StructuredQuestionsPanel` seems standalone or embedded.
+            // If embedded in `Agent` page:
+            // The `Agent` page likely re-runs the controller loop after submit?
+            // Let's assume the user clicks "Send answers & continue" in `Agent` page.
+            // In `Agent` page: `handleQuestionSubmit` updates local state?
+            // Wait, `StructuredQuestionsPanel` is used in `FlowWorkbench` probably.
+            // In `Agent` page, there is custom UI for questions.
+            // `studio-console/app/projects/[id]/agent/page.tsx` has `handleQuestionSubmit`.
+            // It calls `submitSuggestions`? No.
+            // `handleQuestionSubmit` seems to be for a different flow or I missed it.
+            //
+            // Let's assume `saveAnswers` IS the trigger for data persistence.
+            // We want memory updated.
+            
+            await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
                 projectId: session.projectId,
-                eventType: "structured_submit",
-                payload: {
-                    sessionId: args.sessionId,
-                    turnNumber: args.turnNumber,
-                    contentText: fullContent,
-                },
-            });
-
-            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
-                projectId: session.projectId,
-                brainEventId,
+                stage: session.stage,
+                channel: "structured",
+                userText: fullContent,
+                assistantText: "(answers submitted)",
             });
         }
     },

@@ -161,6 +161,30 @@ export const createFromTurn = internalMutation({
     // LEGACY KNOWLEDGE AGGREGATOR (REMOVED)
     */
 
+    // --- NEW RUNNING MEMORY ---
+    // Extract text from user/assistant to pass to summarizer
+    // Join structured Q&A and free chat for user text
+    const structuredQA = args.userAnswers?.map(a => {
+        const qText = args.structuredQuestions?.find(q => q.id === a.qId)?.text ?? "";
+        return `Q: ${qText}\nA: ${a.text || a.quick}`;
+    }).join("\n") ?? "";
+
+    const userText = [structuredQA, args.freeChat].filter(Boolean).join("\n\n");
+    const assistantText = args.agentOutput ?? "";
+    
+    const elementContext = args.scope.itemIds?.[0]; // Use first item as context if available
+    const elementName = args.itemRefs.find(r => r.id === elementContext)?.name;
+
+    await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
+        projectId: args.projectId,
+        stage: args.stage,
+        channel: args.source.type === "chat" ? "free" : "structured",
+        elementContext,
+        elementName,
+        userText,
+        assistantText
+    });
+
     return bundleId;
   },
 });

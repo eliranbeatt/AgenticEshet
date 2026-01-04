@@ -120,20 +120,8 @@ export const send = action({
             projectId: project._id,
         });
 
-        const factsContext = project.features?.factsEnabled === false
-            ? { bullets: "(facts disabled)" }
-            : await ctx.runAction(internal.factsV2.getFactsContext, {
-                projectId: project._id,
-                scopeType: args.itemId ? "item" : "project",
-                itemIds: args.itemId ? [args.itemId] : undefined,
-                queryText: args.userContent,
-            });
-
-        const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
-            projectId: project._id,
-        });
-
-        const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
+        // --- NEW MEMORY SYSTEM ---
+        const runningMemory = await ctx.runQuery(api.memory.getRunningMemoryMarkdown, {
             projectId: project._id,
         });
 
@@ -162,14 +150,8 @@ export const send = action({
             "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
             elementSnapshotsSummary,
             "",
-            "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
-            brain ? buildBrainContext(brain) : "(none)",
-            "",
-            "KNOWN FACTS (accepted + high-confidence proposed):",
-            factsContext.bullets,
-            "",
-            "KNOWLEDGE BLOCKS:",
-            summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
+            "RUNNING MEMORY (AUTHORITATIVE):",
+            runningMemory || "(empty)",
             "",
             "RECENT KNOWLEDGE DOCS:",
             summarizeKnowledgeDocs(recentDocs ?? []),
@@ -277,20 +259,14 @@ export const send = action({
                 });
 
                 const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${finalContent}`;
-                const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+                await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
                     projectId: project._id,
-                    eventType: "agent_send",
-                    payload: {
-                        threadId: args.threadId,
-                        userMessageId,
-                        assistantMessageId,
-                        transcript: fullTranscript,
-                        source: "clarification_v2",
-                    },
-                });
-                await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
-                    projectId: project._id,
-                    brainEventId,
+                    stage: "clarification",
+                    channel: "free",
+                    elementContext: String(args.itemId),
+                    elementName: spec.identity.title,
+                    userText: args.userContent,
+                    assistantText: finalContent,
                 });
 
                 let itemUpdate: ItemUpdateOutput | null = null;
@@ -468,20 +444,12 @@ export const send = action({
             });
 
             const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${finalContent}`;
-            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+            await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
                 projectId: project._id,
-                eventType: "agent_send",
-                payload: {
-                    threadId: args.threadId,
-                    userMessageId,
-                    assistantMessageId,
-                    transcript: fullTranscript,
-                    source: "clarification_v2",
-                },
-            });
-            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
-                projectId: project._id,
-                brainEventId,
+                stage: "clarification",
+                channel: "free",
+                userText: args.userContent,
+                assistantText: finalContent,
             });
 
             const analysisLine = finalContent

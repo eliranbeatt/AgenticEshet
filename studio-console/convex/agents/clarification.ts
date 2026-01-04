@@ -194,19 +194,8 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 includeSummaries: true,
             });
 
-            const factsContext = project.features?.factsEnabled === false
-                ? { bullets: "(facts disabled)" }
-                : await ctx.runAction(internal.factsV2.getFactsContext, {
-                    projectId: args.projectId,
-                    scopeType: "project",
-                    queryText: args.chatHistory.map((m) => m.content).join("\n").slice(0, 500),
-                });
-
-            const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
-                projectId: args.projectId,
-            });
-
-            const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
+            // --- NEW MEMORY SYSTEM ---
+            const runningMemory = await ctx.runQuery(api.memory.getRunningMemoryMarkdown, {
                 projectId: args.projectId,
             });
 
@@ -278,14 +267,8 @@ export const runInBackground: ReturnType<typeof internalAction> = internalAction
                 "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
                 elementSnapshotsSummary,
                 "",
-                "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
-                brain ? buildBrainContext(brain) : "(none)",
-                "",
-                "KNOWN FACTS (accepted + high-confidence proposed):",
-                factsContext.bullets,
-                "",
-                "KNOWLEDGE BLOCKS:",
-                summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
+                "RUNNING MEMORY (AUTHORITATIVE):",
+                runningMemory || "(empty)",
                 "",
                 "RECENT KNOWLEDGE DOCS:",
                 summarizeKnowledgeDocs(recentDocs ?? []),
@@ -414,17 +397,13 @@ export const run: ReturnType<typeof action> = action({
         const transcript = args.chatHistory
             .map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`)
             .join("\n");
-        const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+        
+        await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
             projectId: args.projectId,
-            eventType: "agent_send",
-            payload: {
-                source: "clarification_chat",
-                transcript,
-            },
-        });
-        await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
-            projectId: args.projectId,
-            brainEventId,
+            stage: "clarification",
+            channel: "free",
+            userText: transcript,
+            assistantText: "(clarification run started)",
         });
 
         return { queued: true, conversationId, runId: agentRunId };

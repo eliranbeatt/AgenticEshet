@@ -60,18 +60,25 @@ export async function runControllerStepLogic(
         message: "Invoking autonomous planner..."
     });
 
+    const runningMemory = await ctx.runQuery(api.memory.getRunningMemoryMarkdown, { projectId: args.projectId });
+    
+    const input = {
+        ...(workspace || {}),
+        projectId: args.projectId,
+        stagePinned: workspace?.stagePinned || "planning",
+        channelPinned: workspace?.channelPinned || "free",
+        skillPinned: workspace?.skillPinned || null,
+        userMessage: finalUserMessage,
+        recentTranscript: (state as any)?.transcript || "",
+        mode: "continue",
+        runningMemory, // NEW MEMORY
+    };
+    // @ts-ignore
+    delete input.facts; // Remove old facts
+
     const brainResult = await runSkill(ctx, {
         skillKey: "controller.autonomousPlanner",
-        input: {
-            ...(workspace || {}),
-            projectId: args.projectId,
-            stagePinned: workspace?.stagePinned || "planning",
-            channelPinned: workspace?.channelPinned || "free",
-            skillPinned: workspace?.skillPinned || null,
-            userMessage: finalUserMessage,
-            recentTranscript: (state as any)?.transcript || "",
-            mode: "continue"
-        }
+        input
     });
 
     if (!brainResult.success) {

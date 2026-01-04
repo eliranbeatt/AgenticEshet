@@ -58,6 +58,15 @@ export const run = action({
 
 
 
+        // 0. Wait for Brain to catch up (User request: "wait for it's to be done")
+        let pending = await ctx.runQuery(internal.brainEvents.hasPending, { projectId: args.projectId });
+        let attempts = 0;
+        while (pending && attempts < 15) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            pending = await ctx.runQuery(internal.brainEvents.hasPending, { projectId: args.projectId });
+            attempts++;
+        }
+
         // 1. Load context (previous turns)
 
         const turns = await ctx.runQuery(api.structuredQuestions.listTurns, {
@@ -128,7 +137,7 @@ export const run = action({
                 systemPrompt,
                 userPrompt,
                 model: "gpt-5-mini" // Use a strong model for structured output
-                
+
             });
 
             // 4. Save Turn
@@ -140,7 +149,7 @@ export const run = action({
                 sessionId: args.sessionId,
                 turnNumber: nextTurnNumber,
             });
-            
+
             await ctx.runMutation(internal.structuredQuestions.internal_createTurn, {
                 projectId: args.projectId,
                 stage: args.stage,

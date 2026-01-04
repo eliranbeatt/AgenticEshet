@@ -1,0 +1,186 @@
+Here’s a **super-simple backend-only “running memory”** plan that uses **`gpt-5-nano`** to summarize each turn and **appends** the result into a **single markdown doc per project**, **grouped by elements** (plus an “Unassigned” bucket). It’s designed so your *main* agent can ingest a tiny, compact memory slice and reason faster. ([OpenAI Platform][1]) 
+
+---
+
+## 1) What you’ll build
+
+### A. One new backend capability
+
+* After every interaction (user message + agent response), run a **nano summarizer** that produces **only “new deltas”** (facts/decisions/inputs/todos/open questions).
+* Append those deltas into a **markdown “Running Memory” doc** under the relevant **Element section**.
+
+### B. Storage (simplest)
+
+Create a tiny Convex table:
+
+**`runningMemoryDocs`**
+
+* `projectId: Id<"projects">`
+* `docKey: string` (use `"project"` for the single file; later you can support `"element:<id>"` if you want)
+* `markdown: string`
+* `updatedAt: number`
+
+And optionally (recommended) a lightweight append log:
+
+**`runningMemoryEntries`** (optional)
+
+* `projectId`
+* `elementKey: string | null` (elementId or elementName; null → Unassigned)
+* `createdAt`
+* `stage: "clarification" | "planning" | "solutioning" | ...`
+* `channel: "structured" | "free"`
+* `bullets: string[]`
+* `sourceRefs: { conversationId?: string; agentRunId?: string }`
+
+If you want **maximum simplicity**, skip `runningMemoryEntries` and **append directly** to the single markdown string (Convex mutations are safe/serializable for this pattern).
+
+---
+
+## 2) Where it plugs into your existing stack
+
+You already have:
+
+* **`conversations`** + agent runs + per-phase agent actions (clarification/planning/solutioning, etc.). 
+
+**Add one call** at the end of your orchestrator / agent action (where you already persist the assistant response):
+
+* `memory.appendTurnSummary(projectId, stage, channel, elementContext, userText, assistantText, refs)`
+
+If you’re moving toward a single orchestrator like `runStudioTurn`, this becomes a single consistent hook:
+
+1. save conversation
+2. run the real agent
+3. save agent output
+4. **append running memory (nano)**
+
+---
+
+## 3) “Divided to elements” (markdown format)
+
+Keep it dead simple and consistent:
+
+```md
+# Running Memory (Auto)
+_Last updated: 2026-01-04 10:22_
+
+## Element: <Element Name> (<elementId>)
+- [2026-01-04 10:22 | planning | structured]
+  - Facts: ...
+  - Decisions: ...
+  - Inputs: ...
+  - TODOs: ...
+  - Open: ...
+
+## Element: Unassigned
+- [..]
+```
+
+### Element routing (no UI required)
+
+Use whichever is easiest **today**:
+
+* If your UI already has a “selected element”, pass `elementId` into the backend call.
+* If not, pass `elementName` (string) when the user is clearly talking about one element.
+* If nothing is provided → append under **Unassigned**.
+
+No contradiction detection, no dedup—just append.
+
+---
+
+## 4) The nano summarizer contract
+
+### Input you send to `gpt-5-nano`
+
+Only the **new turn**, plus minimal metadata:
+
+* `projectName` (optional)
+* `stage`, `channel`
+* `elementContext` (elementId/name if known)
+* `userText`
+* `assistantText`
+* optional: `changesetSummary` (if your agent produces a ChangeSet / structured output)
+
+`gpt-5-nano` is explicitly a good fit for summarization/classification. ([OpenAI Platform][1])
+
+### Output you want back (structured)
+
+Force a tiny JSON so it’s stable:
+
+```json
+{
+  "elementKey": "element:<id>|<name>|null",
+  "facts": ["..."],
+  "decisions": ["..."],
+  "inputs": ["..."],
+  "todos": ["..."],
+  "open_questions": ["..."]
+}
+```
+
+Then your backend formats that into the markdown block and appends.
+
+(You can run nano via Responses API or Chat Completions; OpenAI recommends Responses for best behavior with reasoning-capable models, but either works for this summarizer. ([OpenAI Platform][2]))
+
+---
+
+## 5) How the main agent uses it (to think faster)
+
+Instead of feeding long conversation history, every agent’s `getContext()` adds:
+
+* `running_memory_excerpt` = **just the section(s)** relevant to:
+
+  * selected element (preferred), or
+  * the Unassigned section, plus
+  * optionally “last 10 entries overall”
+
+This keeps prompts compact and makes the real model spend tokens on reasoning, not rereading.
+
+---
+
+## 6) Minimal backend endpoints (Convex)
+
+**Queries**
+
+* `memory.getRunningMemoryMarkdown(projectId)` → returns the markdown string
+* `memory.getRunningMemoryExcerpt(projectId, elementKey, maxChars)` → returns a trimmed excerpt
+
+**Mutations / Actions**
+
+* `memory.ensureDoc(projectId)` → creates doc if missing
+* `memory.appendTurnSummary(args…)` → calls nano → appends markdown → updates `updatedAt`
+
+That’s it.
+
+---
+
+## 7) Implementation checklist (tiny)
+
+1. **Schema**
+
+* add `runningMemoryDocs` table (and optional `runningMemoryEntries`)
+
+2. **Nano summarizer**
+
+* one function `summarizeTurnWithNano(turnPayload) -> structured JSON`
+
+3. **Append formatter**
+
+* ensure element heading exists; append new block at end of that element section
+
+4. **Hook it**
+
+* call `appendTurnSummary` from your agent/orchestrator right after you persist the response
+
+5. **Agent context**
+
+* add `getRunningMemoryExcerpt()` into each agent’s `getContext()`
+
+---
+
+## 8) About “view/edit on Knowledge tab”
+
+No new UI required right now:
+
+* Just expose `memory.getRunningMemoryMarkdown()` in the same place you already show “Current Knowledge” later.
+* Editing can simply **overwrite** `runningMemoryDocs.markdown` (manual edits are allowed; next appends just continue).
+

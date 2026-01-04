@@ -68,8 +68,8 @@ export async function runControllerStepLogic(
             stagePinned: workspace?.stagePinned || "planning",
             channelPinned: workspace?.channelPinned || "free",
             skillPinned: workspace?.skillPinned || null,
-            skillPinned: workspace?.skillPinned || null,
             userMessage: finalUserMessage,
+            recentTranscript: (state as any)?.transcript || "",
             mode: "continue"
         }
     });
@@ -268,18 +268,36 @@ export const getWorkspaceState = internalQuery({
             .withIndex("by_project", q => q.eq("projectId", args.projectId))
             .first();
 
-        // Fetch most recent structured session to check for skips
-        // We scan all sessions for project and take the newest
-        // ideal: by_project_createdAt desc
+        // Fetch most recent structured session to check for skips or transcript
         const sessions = await ctx.db
             .query("structuredQuestionSessions")
             .withIndex("by_project_stage", q => q.eq("projectId", args.projectId))
             .order("desc")
             .take(1);
 
+        const latestSession = sessions.length > 0 ? sessions[0] : null;
+        let transcript = "";
+        if (latestSession) {
+            const turns = await ctx.db
+                .query("structuredQuestionTurns")
+                .withIndex("by_session_turn", (q) => q.eq("sessionId", latestSession._id))
+                .collect();
+
+            turns.sort((a, b) => a.turnNumber - b.turnNumber);
+
+            transcript = turns.map(t => {
+                const qText = (t.questions as any[]).map((q: any) => `- Q: ${q.title}`).join("\n");
+                const aText = (t.answers as any[]) && (t.answers as any[]).length > 0
+                    ? (t.answers as any[]).map((a: any) => `- A: [${a.quick}] ${a.text || ""}`).join("\n")
+                    : "(No answers yet)";
+                return `Turn ${t.turnNumber}:\n${qText}\n${aText}`;
+            }).join("\n\n");
+        }
+
         return {
             workspace,
-            latestSession: sessions.length > 0 ? sessions[0] : null
+            latestSession,
+            transcript
         };
     }
 });

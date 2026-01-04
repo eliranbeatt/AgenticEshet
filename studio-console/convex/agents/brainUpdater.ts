@@ -69,6 +69,7 @@ TASK:
             const result = await callChatWithSchema(BrainUpdaterOutputSchema, {
                 systemPrompt,
                 userPrompt,
+                model: "gpt-5-nano"
             });
 
             await ctx.runMutation(internal.brainRuns.create, {

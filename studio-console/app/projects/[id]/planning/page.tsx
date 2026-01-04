@@ -1,12 +1,11 @@
-"use client";
-
 import { FlowItemsPanel } from "../_components/planning/FlowItemsPanel";
 import { PlanningChat } from "../_components/planning/PlanningChat";
 import { StructuredEditorPanel } from "../_components/planning/StructuredEditorPanel";
+import { StructuredQuestionsPanel } from "../_components/flow/StructuredQuestionsPanel";
 import { useItemsContext } from "../_components/items/ItemsContext";
 
 export default function PlanningPage() {
-    // const { projectId, selectedAllProject, selectedItemIds } = useItemsContext();
+    const { projectId } = useItemsContext();
 
     return (
         <div className="h-[calc(100vh-64px)] flex flex-col gap-4 p-4 overflow-hidden bg-gray-50">
@@ -24,12 +23,11 @@ export default function PlanningPage() {
                     <PlanningChat />
                 </div>
 
-                {/* Right Column: Context / Details */}
-                <div className="bg-white border rounded-lg shadow-sm p-4 min-h-0 overflow-hidden flex flex-col">
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Context</div>
-                    <div className="flex-1 text-sm text-gray-500 overflow-y-auto">
-                        <p>Project context and knowledge will appear here.</p>
-                        {/* Future: Add AgentActivityPanel or KnowledgeView here */}
+                {/* Right Column: Context / QUESTIONS */}
+                <div className="bg-white border rounded-lg shadow-sm min-h-0 overflow-hidden flex flex-col">
+                    {/* We removed the static header to let the panel own the header or full space */}
+                    <div className="flex-1 min-h-0 overflow-hidden">
+                        <StructuredQuestionsPanel projectId={projectId} stage="planning" />
                     </div>
                 </div>
             </div>

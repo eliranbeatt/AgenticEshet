@@ -26,9 +26,19 @@ export async function runControllerStepLogic(
 ): Promise<ControllerStepResult> {
 
     // 1. Read Workspace State
-    const workspace = await ctx.runQuery(internal.agents.controller.getWorkspaceState, {
+    // 1. Read Workspace State
+    const state = await ctx.runQuery(internal.agents.controller.getWorkspaceState, {
         projectId: args.projectId
     });
+    const workspace = state?.workspace;
+    const latestSession = state?.latestSession;
+
+    let finalUserMessage = args.userMessage || "Continue planning";
+    if (latestSession && latestSession.status === "skipped") {
+        console.log("Controller detected SKIPPED session. Injecting note.");
+        const note = "\n\n[System Note: The user explicitly SKIPPED the previous structured questions session. Do NOT ask more questions immediately. Assume the user wants to proceed with current info or wants you to propose a plan based on what you have.]";
+        finalUserMessage += note;
+    }
 
     if (!workspace) {
         console.warn("Workspace not found, creating empty context.");
@@ -58,7 +68,8 @@ export async function runControllerStepLogic(
             stagePinned: workspace?.stagePinned || "planning",
             channelPinned: workspace?.channelPinned || "free",
             skillPinned: workspace?.skillPinned || null,
-            userMessage: args.userMessage || "Continue planning",
+            skillPinned: workspace?.skillPinned || null,
+            userMessage: finalUserMessage,
             mode: "continue"
         }
     });
@@ -94,11 +105,44 @@ export async function runControllerStepLogic(
 
     // 3. Handle Decision
     if (mode === "ask_questions") {
-        const sessionId = await ctx.runMutation(api.projectWorkspaces.createQuestionSession, {
+        const stage = workspace?.stagePinned || "planning";
+
+        // 1. Start a Structured Session (Archives old ones, creates new 'active' one)
+        const sessionId = await ctx.runMutation(api.structuredQuestions.startSession, {
             projectId: args.projectId,
-            stage: workspace?.stagePinned || "planning",
-            questions: questions || []
+            stage: stage as any,
+            conversationId: undefined // Controller uses chatThreads, so we don't bind to a specific projectConversation
         });
+
+        // 2. Map Brain Questions to StructuredQuestions Schema
+        // Brain: { id, text, type, options }
+        // SQ: { id, title, prompt, questionType: 'text'|'boolean', expectsFreeText, ... }
+        const mappedQuestions = (questions || []).map((q: any) => ({
+            id: q.id,
+            title: q.text,
+            prompt: q.options?.join(", "), // unexpected in SQ but storing options in prompt for now
+            questionType: (q.type === "select" && q.options?.includes("yes")) ? "boolean" : "text",
+            expectsFreeText: true,
+            blocking: true,
+            stage: stage
+        }));
+
+        // 3. Create Turn 1
+        await ctx.runMutation(internal.structuredQuestions.internal_createTurn, {
+            projectId: args.projectId,
+            stage: stage as any,
+            sessionId,
+            turnNumber: 1,
+            questions: mappedQuestions,
+            agentRunId: runId
+        });
+
+        // 4. Update Session Pointer
+        await ctx.runMutation(internal.structuredQuestions.internal_updateSessionTurn, {
+            sessionId,
+            turnNumber: 1
+        });
+
         await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
         return { status: "STOP_QUESTIONS", questions: questions || [], thought, runId, sessionId };
     }
@@ -219,10 +263,24 @@ export const runControllerStep = action({
 export const getWorkspaceState = internalQuery({
     args: { projectId: v.id("projects") },
     handler: async (ctx, args) => {
-        return await ctx.db
+        const workspace = await ctx.db
             .query("projectWorkspaces")
             .withIndex("by_project", q => q.eq("projectId", args.projectId))
             .first();
+
+        // Fetch most recent structured session to check for skips
+        // We scan all sessions for project and take the newest
+        // ideal: by_project_createdAt desc
+        const sessions = await ctx.db
+            .query("structuredQuestionSessions")
+            .withIndex("by_project_stage", q => q.eq("projectId", args.projectId))
+            .order("desc")
+            .take(1);
+
+        return {
+            workspace,
+            latestSession: sessions.length > 0 ? sessions[0] : null
+        };
     }
 });
 

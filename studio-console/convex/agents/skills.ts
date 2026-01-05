@@ -29,10 +29,9 @@ export const run = action({
         thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
-        const skill = await ctx.db
-            .query("skills")
-            .withIndex("by_skillKey", (q) => q.eq("skillKey", args.skillKey))
-            .first();
+        const skill = await ctx.runQuery(internal.lib.skills.getSkillByKey, {
+            skillKey: args.skillKey,
+        });
 
         if (!skill) {
             throw new Error(`Skill not found: ${args.skillKey}`);

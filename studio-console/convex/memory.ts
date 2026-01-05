@@ -54,7 +54,7 @@ export const getRunningMemoryExcerpt = query({
       .query("runningMemoryDocs")
       .withIndex("by_project_key", (q) => q.eq("projectId", args.projectId).eq("docKey", "project"))
       .first();
-    
+
     if (!doc) return "";
 
     // Simple truncation for now, can be smarter later (e.g. find element section)
@@ -91,31 +91,31 @@ ${args.assistantText}
 """`;
 
     try {
-        const nanoSummary = await callChatWithJsonSchema(NanoSummarySchema, {
-            systemPrompt: NANO_SYSTEM_PROMPT,
-            userPrompt: userPrompt,
-            model: "gpt-4o-mini", // Fallback to mini if nano not mapped, assuming gpt-5-nano maps to small model
-            temperature: 0,
-        });
+      const nanoSummary = await callChatWithJsonSchema(NanoSummarySchema, {
+        systemPrompt: NANO_SYSTEM_PROMPT,
+        userPrompt: userPrompt,
+        model: "gpt-4o-mini", // Fallback to mini if nano not mapped, assuming gpt-5-nano maps to small model
+        temperature: 0,
+      });
 
-        if (!nanoSummary) {
-            console.warn("Nano summarizer returned null");
-            return;
-        }
+      if (!nanoSummary) {
+        console.warn("Nano summarizer returned null");
+        return;
+      }
 
-        // 2. Append to Markdown (via mutation)
-        await ctx.runMutation(internal.memory.internalAppendToDoc, {
-            projectId: args.projectId,
-            stage: args.stage,
-            channel: args.channel,
-            nanoSummary: nanoSummary,
-            elementName: args.elementName,
-            // Pass raw text for structured Q&A
-            transcript: args.channel === "structured" ? args.userText : undefined,
-        });
+      // 2. Append to Markdown (via mutation)
+      await ctx.runMutation(internal.memory.internalAppendToDoc, {
+        projectId: args.projectId,
+        stage: args.stage,
+        channel: args.channel,
+        nanoSummary: nanoSummary,
+        elementName: args.elementName,
+        // Pass raw text for structured Q&A
+        transcript: args.channel === "structured" ? args.userText : undefined,
+      });
 
     } catch (e) {
-        console.error("Failed to summarize turn:", e);
+      console.error("Failed to summarize turn:", e);
     }
   },
 });
@@ -157,36 +157,50 @@ export const internalAppendToDoc = internalMutation({
     transcript: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const nano = args.nanoSummary as NanoSummary;
-    const tsLocal = new Date().toISOString().slice(0, 16).replace("T", " ");
-
-    // 1. Fetch existing doc
-    const existingDoc = await ctx.db
-      .query("runningMemoryDocs")
-      .withIndex("by_project_key", (q) => q.eq("projectId", args.projectId).eq("docKey", "project"))
-      .first();
-    
-    let md = existingDoc?.markdown ?? "";
-
-    // 2. Format Entry
-    md = appendRunningMemory(md, tsLocal, args.stage, args.channel, nano, args.elementName, args.transcript);
-
-    // 3. Save
-    if (existingDoc) {
-        await ctx.db.patch(existingDoc._id, {
-            markdown: md,
-            updatedAt: Date.now(),
-        });
-    } else {
-        await ctx.db.insert("runningMemoryDocs", {
-            projectId: args.projectId,
-            docKey: "project",
-            markdown: md,
-            updatedAt: Date.now(),
-        });
-    }
+    return await appendToDocLogic(ctx, args);
   },
 });
+
+export async function appendToDocLogic(
+  ctx: { db: any }, // MutationCtx-like
+  args: {
+    projectId: Id<"projects">;
+    stage: string;
+    channel: string;
+    nanoSummary: any;
+    elementName?: string;
+    transcript?: string;
+  }
+) {
+  const nano = args.nanoSummary as NanoSummary;
+  const tsLocal = new Date().toISOString().slice(0, 16).replace("T", " ");
+
+  // 1. Fetch existing doc
+  const existingDoc = await ctx.db
+    .query("runningMemoryDocs")
+    .withIndex("by_project_key", (q: any) => q.eq("projectId", args.projectId).eq("docKey", "project"))
+    .first();
+
+  let md = existingDoc?.markdown ?? "";
+
+  // 2. Format Entry
+  md = appendRunningMemory(md, tsLocal, args.stage, args.channel, nano, args.elementName, args.transcript);
+
+  // 3. Save
+  if (existingDoc) {
+    await ctx.db.patch(existingDoc._id, {
+      markdown: md,
+      updatedAt: Date.now(),
+    });
+  } else {
+    await ctx.db.insert("runningMemoryDocs", {
+      projectId: args.projectId,
+      docKey: "project",
+      markdown: md,
+      updatedAt: Date.now(),
+    });
+  }
+}
 
 
 // --- Markdown Append Algorithm (from Spec) ---
@@ -203,14 +217,14 @@ function formatEntryBlock(
 
   const join = (arr: string[]) => arr.join("; ");
 
-  if (s.facts?.length)        lines.push(`  - Facts: ${join(s.facts)}`);
-  if (s.decisions?.length)    lines.push(`  - Decisions: ${join(s.decisions)}`);
-  if (s.inputs?.length)       lines.push(`  - Inputs: ${join(s.inputs)}`);
-  if (s.todos?.length)        lines.push(`  - TODOs: ${join(s.todos)}`);
+  if (s.facts?.length) lines.push(`  - Facts: ${join(s.facts)}`);
+  if (s.decisions?.length) lines.push(`  - Decisions: ${join(s.decisions)}`);
+  if (s.inputs?.length) lines.push(`  - Inputs: ${join(s.inputs)}`);
+  if (s.todos?.length) lines.push(`  - TODOs: ${join(s.todos)}`);
   if (s.open_questions?.length) lines.push(`  - Open: ${join(s.open_questions)}`);
 
   if (transcript) {
-      lines.push(`  - Transcript:\n    ${transcript.replace(/\n/g, "\n    ")}`);
+    lines.push(`  - Transcript:\n    ${transcript.replace(/\n/g, "\n    ")}`);
   }
 
   // If ALL arrays empty and no transcript, still keep a minimal marker

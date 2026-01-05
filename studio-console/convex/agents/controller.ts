@@ -506,64 +506,91 @@ export const continueRun = action({
         }
 
         // 2. Run Logic
-        const result = await runControllerStepLogic(ctx, {
-            projectId: args.projectId,
-            threadId: undefined as any,
-            conversationId: args.conversationId,
-            userMessage: args.userMessage
-        });
-
-        // 2.5 Persist ChangeSet outputs (so UI can show approvals and Elements/Tasks can update after approval)
-        let pendingChangeSetId: Id<"itemChangeSets"> | null | undefined = undefined;
-        if (result.status === "STOP_APPROVAL" && result.changeSet) {
-            const created = await ctx.runMutation(api.changeSets.create, {
-                changeSet: result.changeSet,
+        try {
+            const result = await runControllerStepLogic(ctx, {
+                projectId: args.projectId,
+                threadId: undefined as any,
+                conversationId: args.conversationId,
+                userMessage: args.userMessage
             });
-            pendingChangeSetId = created?.changeSetId as Id<"itemChangeSets">;
-        }
 
-        // 3. Map Result
-        let mode = "done";
-        if (result.status === "STOP_QUESTIONS") mode = "ask_questions";
-        if (result.status === "STOP_APPROVAL") mode = "pending_changeset";
-        if (result.status === "CONTINUE" || result.status === "STOP_SUGGESTIONS") mode = "artifacts";
+            if (result.error) {
+                await ctx.runMutation(internal.projectConversations.appendMessage, {
+                    conversationId: args.conversationId,
+                    projectId: args.projectId,
+                    role: "assistant",
+                    content: `System Error: ${result.error}`,
+                    stage: resolvedStage as any,
+                    channel: resolvedChannel as any,
+                });
+                return { success: false, error: result.error };
+            }
 
-        const controllerOutput = {
-            mode,
-            stage: resolvedStage ?? "planning",
-            assistantSummary: result.thought || "",
-            questions: result.questions || [],
-            artifacts: result.artifacts || {},
-            pendingChangeSet: result.changeSet || null,
-            nextSuggestedActions: suggestedSkillKeys.map((skillKey) => ({
-                skillKey,
-                label: (enabledSkills ?? []).find((s: any) => s.skillKey === skillKey)?.name ?? skillKey,
-            }))
-        };
+            // 2.5 Persist ChangeSet outputs (so UI can show approvals and Elements/Tasks can update after approval)
+            let pendingChangeSetId: Id<"itemChangeSets"> | null | undefined = undefined;
+            if (result.status === "STOP_APPROVAL" && result.changeSet) {
+                const created = await ctx.runMutation(api.changeSets.create, {
+                    changeSet: result.changeSet,
+                });
+                pendingChangeSetId = created?.changeSetId as Id<"itemChangeSets">;
+            }
 
-        // 4. Persist
-        await ctx.runMutation(internal.projectWorkspaces.updateFromController, {
-            workspaceId,
-            artifactsIndex: { ...(workspace.artifactsIndex || {}), lastControllerOutput: controllerOutput },
-            pendingChangeSetId
-        });
+            // 3. Map Result
+            let mode = "done";
+            if (result.status === "STOP_QUESTIONS") mode = "ask_questions";
+            if (result.status === "STOP_APPROVAL") mode = "pending_changeset";
+            if (result.status === "CONTINUE" || result.status === "STOP_SUGGESTIONS") mode = "artifacts";
 
-        if (result.thought && result.thought.trim().length > 0) {
+            const controllerOutput = {
+                mode,
+                stage: resolvedStage ?? "planning",
+                assistantSummary: result.thought || "",
+                questions: result.questions || [],
+                artifacts: result.artifacts || {},
+                pendingChangeSet: result.changeSet || null,
+                nextSuggestedActions: suggestedSkillKeys.map((skillKey) => ({
+                    skillKey,
+                    label: (enabledSkills ?? []).find((s: any) => s.skillKey === skillKey)?.name ?? skillKey,
+                }))
+            };
+
+            // 4. Persist
+            await ctx.runMutation(internal.projectWorkspaces.updateFromController, {
+                workspaceId,
+                artifactsIndex: { ...(workspace.artifactsIndex || {}), lastControllerOutput: controllerOutput },
+                pendingChangeSetId
+            });
+
+            if (result.thought && result.thought.trim().length > 0) {
+                await ctx.runMutation(internal.projectConversations.appendMessage, {
+                    conversationId: args.conversationId,
+                    projectId: args.projectId,
+                    role: "assistant",
+                    content: result.thought,
+                    stage: resolvedStage as any,
+                    channel: resolvedChannel as any,
+                });
+                await ctx.runMutation(internal.projectConversations.touchConversation, {
+                    conversationId: args.conversationId,
+                    updatedAt: Date.now(),
+                    lastMessageAt: Date.now(),
+                });
+            }
+
+            return { success: true };
+
+        } catch (error: any) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error("Controller continueRun failed:", message);
             await ctx.runMutation(internal.projectConversations.appendMessage, {
                 conversationId: args.conversationId,
                 projectId: args.projectId,
                 role: "assistant",
-                content: result.thought,
+                content: `System Critical Error: ${message}`,
                 stage: resolvedStage as any,
                 channel: resolvedChannel as any,
             });
-            await ctx.runMutation(internal.projectConversations.touchConversation, {
-                conversationId: args.conversationId,
-                updatedAt: Date.now(),
-                lastMessageAt: Date.now(),
-            });
+            return { success: false, error: message };
         }
-
-        return { success: true };
     }
 });

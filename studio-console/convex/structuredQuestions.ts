@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { StructuredAnswerSchema } from "./lib/zodSchemas";
 import { api, internal } from "./_generated/api";
+import { createTurnBundleLogic } from "./turnBundles";
 
 export const getActiveSession = query({
     args: {
@@ -136,29 +137,41 @@ export const saveAnswers = mutation({
         userInstructions: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
+        console.log("saveAnswers raw inputs:", JSON.stringify({ sessionId: args.sessionId, turnNumber: args.turnNumber, answersCount: Array.isArray(args.answers) ? args.answers.length : 0 }));
+
         const normalizeAnswers = (answers: any[]) => {
             if (!Array.isArray(answers)) return [];
+            console.log("saveAnswers raw:", JSON.stringify(answers));
             const normalized: Array<{ questionId: string; quick: string; text?: string }> = [];
             for (const answer of answers) {
                 if (!answer || typeof answer !== "object") continue;
                 const questionId = typeof answer.questionId === "string" ? answer.questionId : "";
-                if (!questionId) continue;
+                if (!questionId) {
+                    console.warn("Skipping answer without questionId:", answer);
+                    continue;
+                }
                 const text = typeof answer.text === "string" ? answer.text.trim() : undefined;
                 let quick = typeof answer.quick === "string" ? answer.quick : "";
+
+                // Relaxed normalization: If quick is invalid but text exists, default to 'yes' or 'idk' (context dependent, but 'yes' implies confirmation of the text detail)
+                // Actually, if text is present, we shouldn't drop it.
                 if (!["yes", "no", "idk", "irrelevant"].includes(quick)) {
                     if (text && text.length > 0) {
-                        quick = "idk";
+                        quick = "yes"; // Assume yes if they provided text details, or 'idk'
+                        // Let's use 'idk' as safe default or just stringify it?
+                        // Schema requires enum.
                     } else {
+                        console.warn("Skipping invalid answer:", answer);
                         continue;
                     }
                 }
                 normalized.push({ questionId, quick, text: text && text.length > 0 ? text : undefined });
             }
+            console.log("saveAnswers normalized:", JSON.stringify(normalized));
             return normalized;
         };
 
         const normalizedAnswers = normalizeAnswers(args.answers);
-        console.log("saveAnswers called for session", args.sessionId, "turn", args.turnNumber);
         const turn = await ctx.db
             .query("structuredQuestionTurns")
             .withIndex("by_session_turn", (q) =>
@@ -208,7 +221,8 @@ export const saveAnswers = mutation({
                 text: a.text,
             }));
 
-            await ctx.runMutation(internal.turnBundles.createFromTurn, {
+            // Use synchronous helper!
+            await createTurnBundleLogic(ctx, {
                 projectId: session.projectId,
                 stage: mappedStage,
                 scope: { type: "project" as const },

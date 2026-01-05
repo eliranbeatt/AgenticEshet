@@ -84,6 +84,8 @@ async function sha256(text: string): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+import { appendToDocLogic } from "./memory";
+
 export const createFromTurn = internalMutation({
   args: {
     projectId: v.id("projects"),
@@ -105,125 +107,125 @@ export const createFromTurn = internalMutation({
     agentOutput: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    console.log("createFromTurn called for project", args.projectId);
-    // 1. Generate ID (we need it for the text)
-    // Since we can't know the ID before insertion, we might use a placeholder or insert first?
-    // But the text needs to be immutable and contain the ID?
-    // Actually, the design says `bundleId=<id>`.
-    // We can insert with empty text, get ID, then update text?
-    // Or use a UUID? Convex IDs are special.
-    // Let's insert with a placeholder text first, then update.
-
-    const timestamp = Date.now();
-
-    const bundleId = await ctx.db.insert("turnBundles", {
-      projectId: args.projectId,
-      stage: args.stage,
-      scope: args.scope,
-      source: args.source,
-      bundleText: "", // Placeholder
-      bundleHash: "", // Placeholder
-      createdAt: timestamp,
-    });
-
-    // 2. Format text
-    const bundleText = formatBundleText({
-      bundleId: bundleId,
-      stage: args.stage,
-      scope: args.scope,
-      itemRefs: args.itemRefs,
-      timestamp: timestamp,
-      structuredQuestions: args.structuredQuestions,
-      userAnswers: args.userAnswers,
-      freeChat: args.freeChat,
-      agentOutput: args.agentOutput,
-    });
-
-    // 3. Hash
-    const bundleHash = await sha256(bundleText);
-
-    // 4. Update
-    await ctx.db.patch(bundleId, {
-      bundleText,
-      bundleHash,
-    });
-
-    // 5. (Legacy knowledge updater removed)
-
-    /* 
-    // LEGACY FACTS PIPELINE (DISABLED)
-    if (project?.features?.factsV2 !== false) {
-      await ctx.scheduler.runAfter(0, internal.factsV2.extractTurnBundle, { turnBundleId: bundleId });
-    } else {
-      await ctx.scheduler.runAfter(0, internal.facts.parseTurnBundle, { turnBundleId: bundleId });
-    }
-    
-    // LEGACY KNOWLEDGE AGGREGATOR (REMOVED)
-    */
-
-    // --- NEW RUNNING MEMORY ---
-    // Extract text from user/assistant to pass to summarizer
-    // Join structured Q&A and free chat for user text
-    const structuredQA = args.userAnswers?.map(a => {
-        const qText = args.structuredQuestions?.find(q => q.id === a.qId)?.text ?? "";
-        return `Q: ${qText}\nA: ${a.text || a.quick}`;
-    }).join("\n") ?? "";
-
-    const userText = [structuredQA, args.freeChat].filter(Boolean).join("\n\n");
-    const assistantText = args.agentOutput ?? "";
-    
-    const elementContext = args.scope.itemIds?.[0]; // Use first item as context if available
-    const elementName = args.itemRefs.find(r => r.id === elementContext)?.name;
-
-    // Structured Questions: do NOT summarize with LLM.
-    // Append the raw Q&A transcript immediately so the next questions can depend on it.
-    if (args.source.type === "structuredQuestions") {
-      const transcriptParts: string[] = [];
-      transcriptParts.push(`Structured Q&A (${args.stage})`);
-      if (args.structuredQuestions && args.structuredQuestions.length > 0) {
-        for (const q of args.structuredQuestions) {
-          const a = args.userAnswers?.find((x) => x.qId === q.id);
-          const quick = a?.quick ?? "(SKIPPED)";
-          const text = a?.text ? ` (${a.text})` : "";
-          transcriptParts.push(`Q(${q.id}): ${q.text}`);
-          transcriptParts.push(`A: ${quick}${text}`);
-          transcriptParts.push("");
-        }
-      } else {
-        transcriptParts.push("(no questions)");
-      }
-
-      const transcript = transcriptParts.join("\n").trim();
-      await ctx.runMutation(internal.memory.internalAppendToDoc, {
-        projectId: args.projectId,
-        stage: args.stage,
-        channel: "structured",
-        nanoSummary: {
-          element_key: null,
-          facts: [],
-          decisions: [],
-          inputs: [],
-          todos: [],
-          open_questions: [],
-        },
-        elementName,
-        transcript,
-      });
-    } else {
-      await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
-        projectId: args.projectId,
-        stage: args.stage,
-        channel: args.source.type === "chat" ? "free" : "structured",
-        elementContext,
-        elementName,
-        userText,
-        assistantText
-      });
-    }
-
-    return bundleId;
+    return await createTurnBundleLogic(ctx, args);
   },
 });
+
+export async function createTurnBundleLogic(
+  ctx: { db: any; scheduler: any; runMutation?: any }, // MutationCtx
+  args: {
+    projectId: Id<"projects">;
+    stage: "ideation" | "planning" | "solutioning";
+    scope: { type: string; itemIds?: Id<"projectItems">[] };
+    source: { type: string; sourceIds: string[] };
+    itemRefs: { id: string; name: string }[];
+    structuredQuestions?: { id: string; text: string }[];
+    userAnswers?: { qId: string; quick: string; text?: string }[];
+    freeChat?: string;
+    agentOutput?: string;
+  }
+) {
+  console.log("createFromTurn called for project", args.projectId);
+
+  // 1. Generate ID (we need it for the text)
+  const timestamp = Date.now();
+
+  const bundleId = await ctx.db.insert("turnBundles", {
+    projectId: args.projectId,
+    stage: args.stage,
+    scope: args.scope,
+    source: args.source,
+    bundleText: "", // Placeholder
+    bundleHash: "", // Placeholder
+    createdAt: timestamp,
+  });
+
+  // 2. Format text
+  const bundleText = formatBundleText({
+    bundleId: bundleId,
+    stage: args.stage,
+    scope: args.scope as any,
+    itemRefs: args.itemRefs,
+    timestamp: timestamp,
+    structuredQuestions: args.structuredQuestions,
+    userAnswers: args.userAnswers,
+    freeChat: args.freeChat,
+    agentOutput: args.agentOutput,
+  });
+
+  // 3. Hash
+  const bundleHash = await sha256(bundleText);
+
+  // 4. Update
+  await ctx.db.patch(bundleId, {
+    bundleText,
+    bundleHash,
+  });
+
+  // --- NEW RUNNING MEMORY ---
+  // Extract text from user/assistant to pass to summarizer
+  // Join structured Q&A and free chat for user text
+  const structuredQA = args.userAnswers?.map(a => {
+    const qText = args.structuredQuestions?.find(q => q.id === a.qId)?.text ?? "";
+    return `Q: ${qText}\nA: ${a.text || a.quick}`;
+  }).join("\n") ?? "";
+
+  const userText = [structuredQA, args.freeChat].filter(Boolean).join("\n\n");
+  const assistantText = args.agentOutput ?? "";
+
+  const elementContext = args.scope.itemIds?.[0]; // Use first item as context if available
+  const elementName = args.itemRefs.find(r => r.id === elementContext)?.name;
+
+  // Structured Questions: do NOT summarize with LLM.
+  // Append the raw Q&A transcript immediately so the next questions can depend on it.
+  if (args.source.type === "structuredQuestions") {
+    const transcriptParts: string[] = [];
+    transcriptParts.push(`Structured Q&A (${args.stage})`);
+    if (args.structuredQuestions && args.structuredQuestions.length > 0) {
+      for (const q of args.structuredQuestions) {
+        const a = args.userAnswers?.find((x) => x.qId === q.id);
+        const quick = a?.quick ?? "(SKIPPED)";
+        const text = a?.text ? ` (${a.text})` : "";
+        transcriptParts.push(`Q(${q.id}): ${q.text}`);
+        transcriptParts.push(`A: ${quick}${text}`);
+        transcriptParts.push("");
+      }
+    } else {
+      transcriptParts.push("(no questions)");
+    }
+
+    const transcript = transcriptParts.join("\n").trim();
+
+    // Use helper logic directly!
+    await appendToDocLogic(ctx, {
+      projectId: args.projectId,
+      stage: args.stage,
+      channel: "structured",
+      nanoSummary: {
+        element_key: null,
+        facts: [],
+        decisions: [],
+        inputs: [],
+        todos: [],
+        open_questions: [],
+      },
+      elementName,
+      transcript,
+    });
+  } else {
+    await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
+      projectId: args.projectId,
+      stage: args.stage,
+      channel: args.source.type === "chat" ? "free" : "structured",
+      elementContext,
+      elementName,
+      userText,
+      assistantText
+    });
+  }
+
+  return bundleId;
+}
 
 export const listByProject = query({
   args: {

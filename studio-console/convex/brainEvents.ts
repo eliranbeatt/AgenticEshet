@@ -105,3 +105,14 @@ export const resetForRetry = internalMutation({
         return { ok: true };
     },
 });
+
+export const hasPending = internalQuery({
+    args: { projectId: v.id("projects") },
+    handler: async (ctx, args) => {
+        const pending = await ctx.db
+            .query("brainEvents")
+            .withIndex("by_project_status", (q) => q.eq("projectId", args.projectId).eq("status", "queued"))
+            .collect();
+        return pending.length > 0;
+    },
+});

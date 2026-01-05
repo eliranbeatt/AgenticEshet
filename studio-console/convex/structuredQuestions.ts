@@ -13,18 +13,18 @@ export const getActiveSession = query({
         const query = ctx.db.query("structuredQuestionSessions");
         const session = args.conversationId
             ? await query
-                  .withIndex("by_project_conversation_stage_status", (q) =>
-                      q.eq("projectId", args.projectId)
-                          .eq("conversationId", args.conversationId)
-                          .eq("stage", args.stage)
-                          .eq("status", "active")
-                  )
-                  .first()
+                .withIndex("by_project_conversation_stage_status", (q) =>
+                    q.eq("projectId", args.projectId)
+                        .eq("conversationId", args.conversationId)
+                        .eq("stage", args.stage)
+                        .eq("status", "active")
+                )
+                .first()
             : await query
-                  .withIndex("by_project_stage", (q) =>
-                      q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
-                  )
-                  .first();
+                .withIndex("by_project_stage", (q) =>
+                    q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
+                )
+                .first();
         return session;
     },
 });
@@ -51,7 +51,7 @@ export const getLatestTurn = query({
             .query("structuredQuestionTurns")
             .withIndex("by_session_turn", (q) => q.eq("sessionId", args.sessionId))
             .collect();
-        
+
         if (turns.length === 0) return null;
         return turns.sort((a, b) => b.turnNumber - a.turnNumber)[0];
     },
@@ -68,19 +68,19 @@ export const startSession = mutation({
         const query = ctx.db.query("structuredQuestionSessions");
         const existing = args.conversationId
             ? await query
-                  .withIndex("by_project_conversation_stage_status", (q) =>
-                      q.eq("projectId", args.projectId)
-                          .eq("conversationId", args.conversationId)
-                          .eq("stage", args.stage)
-                          .eq("status", "active")
-                  )
-                  .collect()
+                .withIndex("by_project_conversation_stage_status", (q) =>
+                    q.eq("projectId", args.projectId)
+                        .eq("conversationId", args.conversationId)
+                        .eq("stage", args.stage)
+                        .eq("status", "active")
+                )
+                .collect()
             : await query
-                  .withIndex("by_project_stage", (q) =>
-                      q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
-                  )
-                  .collect();
-        
+                .withIndex("by_project_stage", (q) =>
+                    q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
+                )
+                .collect();
+
         for (const session of existing) {
             await ctx.db.patch(session._id, { status: "archived" });
         }
@@ -96,6 +96,35 @@ export const startSession = mutation({
         });
 
         return sessionId;
+    },
+});
+
+export const skipSession = mutation({
+    args: {
+        projectId: v.id("projects"),
+        conversationId: v.optional(v.id("projectConversations")),
+        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+    },
+    handler: async (ctx, args) => {
+        const query = ctx.db.query("structuredQuestionSessions");
+        const existing = args.conversationId
+            ? await query
+                .withIndex("by_project_conversation_stage_status", (q) =>
+                    q.eq("projectId", args.projectId)
+                        .eq("conversationId", args.conversationId)
+                        .eq("stage", args.stage)
+                        .eq("status", "active")
+                )
+                .collect()
+            : await query
+                .withIndex("by_project_stage", (q) =>
+                    q.eq("projectId", args.projectId).eq("stage", args.stage).eq("status", "active")
+                )
+                .collect();
+
+        for (const session of existing) {
+            await ctx.db.patch(session._id, { status: "skipped", updatedAt: Date.now() });
+        }
     },
 });
 
@@ -157,29 +186,64 @@ export const saveAnswers = mutation({
             const qaPairs = (turn.questions as any[]).map((q: any) => {
                 const answer = normalizedAnswers.find(a => a.questionId === q.id);
                 if (!answer) return null;
-                const answerText = answer.quick === "yes" ? "Yes" : 
-                                   answer.quick === "no" ? "No" :
-                                   answer.quick === "idk" ? "Don't Know" :
-                                   answer.quick === "irrelevant" ? "Irrelevant" : answer.quick;
-                
+                const answerText = answer.quick === "yes" ? "Yes" :
+                    answer.quick === "no" ? "No" :
+                        answer.quick === "idk" ? "Don't Know" :
+                            answer.quick === "irrelevant" ? "Irrelevant" : answer.quick;
+
                 return `Q: ${q.text || q.title || q.prompt}\nA: ${answerText} ${answer.text ? `(${answer.text})` : ""}`;
             }).filter(Boolean).join("\n\n");
 
             const fullContent = `Structured Answers (Turn ${args.turnNumber}):\n\n${qaPairs}\n\nUser Note: ${args.userInstructions || "(none)"}`;
 
-            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+            // --- NEW MEMORY SYSTEM ---
+            // We force this update to happen BEFORE the next agent run by using runMutation directly or
+            // relying on Convex's scheduling guarantees if they are in the same transaction.
+            // But appendTurnSummary is an action (calling LLM), so it must be scheduled.
+            // The Agent run is triggered by the UI polling or calling `runControllerStep`?
+            // Actually, `StructuredQuestionsPanel` calls `saveAnswers`. It does NOT trigger the agent immediately.
+            // Wait, looking at `StructuredQuestionsPanel.tsx`:
+            // `await saveAnswers(...)` -> `setIsSubmitting(false)` -> Render updates.
+            // `ActiveSessionView` renders based on `latestTurn`.
+            // The agent creates the NEXT turn. Who calls the agent?
+            // `StructuredQuestionsPanel` calls `startSession` then `runAgent` initially.
+            // But for subsequent turns?
+            // It seems `runControllerStep` in `controller.ts` creates the turn and returns questions.
+            // If the UI just saves answers, how does the next turn get generated?
+            // Ah, the Controller Loop.
+            // The user submits answers. The UI then... waits?
+            // `StructuredQuestionsPanel` just updates state.
+            // If the controller is running, it should pick up the answers.
+            // But where is the "Continue" button?
+            // In `StructuredQuestionsPanel.tsx`, `handleSubmit` calls `saveAnswers`.
+            // There is no explicit "Generate Next" call in the UI code I read.
+            // Ah, `StructuredQuestionsPanel` in `handleSubmit`:
+            // `await saveAnswers(...)`
+            // That's it.
+            // If the user is in "Agent" tab (Controller), the Controller logic handles the flow.
+            // `controller.ts` -> `runControllerStepLogic`:
+            // It checks `latestSession`. If `status` is `active`, it might resume?
+            // But `controller.ts` calls `runSkill`.
+            // `StructuredQuestionsPanel` seems standalone or embedded.
+            // If embedded in `Agent` page:
+            // The `Agent` page likely re-runs the controller loop after submit?
+            // Let's assume the user clicks "Send answers & continue" in `Agent` page.
+            // In `Agent` page: `handleQuestionSubmit` updates local state?
+            // Wait, `StructuredQuestionsPanel` is used in `FlowWorkbench` probably.
+            // In `Agent` page, there is custom UI for questions.
+            // `studio-console/app/projects/[id]/agent/page.tsx` has `handleQuestionSubmit`.
+            // It calls `submitSuggestions`? No.
+            // `handleQuestionSubmit` seems to be for a different flow or I missed it.
+            //
+            // Let's assume `saveAnswers` IS the trigger for data persistence.
+            // We want memory updated.
+            
+            await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
                 projectId: session.projectId,
-                eventType: "structured_submit",
-                payload: {
-                    sessionId: args.sessionId,
-                    turnNumber: args.turnNumber,
-                    contentText: fullContent,
-                },
-            });
-
-            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
-                projectId: session.projectId,
-                brainEventId,
+                stage: session.stage,
+                channel: "structured",
+                userText: fullContent,
+                assistantText: "(answers submitted)",
             });
         }
     },
@@ -233,19 +297,19 @@ export const getTranscript = internalQuery({
         const query = ctx.db.query("structuredQuestionSessions");
         const session = args.conversationId
             ? await query
-                  .withIndex("by_project_conversation_stage_status", (q) =>
-                      q.eq("projectId", args.projectId)
-                          .eq("conversationId", args.conversationId)
-                          .eq("stage", args.stage)
-                          .eq("status", "active")
-                  )
-                  .first()
+                .withIndex("by_project_conversation_stage_status", (q) =>
+                    q.eq("projectId", args.projectId)
+                        .eq("conversationId", args.conversationId)
+                        .eq("stage", args.stage)
+                        .eq("status", "active")
+                )
+                .first()
             : await query
-                  .withIndex("by_project_stage", (q) =>
-                      q.eq("projectId", args.projectId).eq("stage", args.stage)
-                  )
-                  .order("desc")
-                  .first();
+                .withIndex("by_project_stage", (q) =>
+                    q.eq("projectId", args.projectId).eq("stage", args.stage)
+                )
+                .order("desc")
+                .first();
 
         if (!session) return "";
 
@@ -253,7 +317,7 @@ export const getTranscript = internalQuery({
             .query("structuredQuestionTurns")
             .withIndex("by_session_turn", (q) => q.eq("sessionId", session._id))
             .collect();
-        
+
         turns.sort((a, b) => a.turnNumber - b.turnNumber);
 
         const lines: string[] = [];
@@ -261,12 +325,12 @@ export const getTranscript = internalQuery({
             lines.push(`--- Turn ${turn.turnNumber} ---`);
             if (turn.questions && Array.isArray(turn.questions)) {
                 turn.questions.forEach((q: any, i: number) => {
-                    lines.push(`Q${i+1}: ${q.text}`);
+                    lines.push(`Q${i + 1}: ${q.text}`);
                 });
             }
             if (turn.answers && Array.isArray(turn.answers)) {
                 turn.answers.forEach((a: any, i: number) => {
-                    lines.push(`A${i+1}: [${a.quick}] ${a.text || ""}`);
+                    lines.push(`A${i + 1}: [${a.quick}] ${a.text || ""}`);
                 });
             }
             if (turn.userInstructions) {

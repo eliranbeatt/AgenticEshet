@@ -1977,9 +1977,12 @@ export default defineSchema({
         needsReview: v.boolean(),
         confidence: v.number(), // 0..1
         sourceKind: factSourceKindSchema,
+        source: v.optional(v.string()), // Backwards compat
+        sourceRef: v.optional(v.string()), // Backwards compat
         evidence: v.optional(evidenceSchema),
         parseRunId: v.optional(v.id("factParseRuns")),
         createdAt: v.number(),
+        updatedAt: v.optional(v.number()),
         supersedesFactId: v.optional(v.id("facts")),
         scope: v.optional(v.union(v.literal("project"), v.literal("element"))),
         elementId: v.optional(v.id("projectItems")),
@@ -1998,56 +2001,17 @@ export default defineSchema({
         bucketKey: v.optional(v.string()),
         valueTyped: v.optional(v.any()),
         valueTextHe: v.optional(v.string()),
-        source: v.optional(v.union(
-            v.literal("user_chat"),
-            v.literal("user_form"),
-            v.literal("file_upload"),
-            v.literal("agent_inference"),
-            v.literal("manual_edit"),
-            v.literal("migration")
-        )),
-        sourceRef: v.optional(v.string()),
-        updatedAt: v.optional(v.number()),
-    })
-        .index("by_scope_key", ["projectId", "scopeType", "itemId", "key"])
-        .index("by_project_status", ["projectId", "status"])
-        .index("by_item", ["projectId", "itemId"])
-        .index("by_project_element_status", ["projectId", "elementId", "status"])
-        .index("by_project_category_status", ["projectId", "categoryHe", "status"])
-        .index("by_project_field_status", ["projectId", "fieldPath", "status"])
-        .index("by_project_sourceRef", ["projectId", "sourceRef"]),
+    }).index("by_project_scope_key", ["projectId", "scopeType", "key"])
+      .index("by_project_status", ["projectId", "status"])
+      .index("by_project_element_status", ["projectId", "elementId", "status"]),
 
-    factExtractionRuns: defineTable({
+    // --- RUNNING MEMORY (New) ---
+    runningMemoryDocs: defineTable({
         projectId: v.id("projects"),
-        turnBundleId: v.id("turnBundles"),
-        status: v.union(
-            v.literal("queued"),
-            v.literal("running"),
-            v.literal("succeeded"),
-            v.literal("failed")
-        ),
-        model: v.string(),
-        startedAt: v.number(),
-        finishedAt: v.optional(v.number()),
-        chunking: v.optional(v.object({
-            chunks: v.number(),
-            strategy: v.string(),
-            chunkSize: v.number(),
-            overlap: v.number(),
-        })),
-        stats: v.optional(v.object({
-            factsProduced: v.number(),
-            userFacts: v.number(),
-            hypotheses: v.number(),
-            exactDuplicates: v.number(),
-            semanticCandidates: v.number(),
-            contradictions: v.number(),
-        })),
-        error: v.optional(v.object({ message: v.string(), raw: v.optional(v.string()) })),
-        createdAt: v.number(),
-    })
-        .index("by_bundle", ["turnBundleId"])
-        .index("by_project_createdAt", ["projectId", "createdAt"]),
+        docKey: v.string(), // "project" for single file, or "element:<id>"
+        markdown: v.string(),
+        updatedAt: v.number(),
+    }).index("by_project_key", ["projectId", "docKey"]),
 
     factAtoms: defineTable({
         projectId: v.id("projects"),

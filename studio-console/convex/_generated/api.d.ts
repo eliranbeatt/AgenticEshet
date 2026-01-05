@@ -112,6 +112,7 @@ import type * as lib_trelloExecutor from "../lib/trelloExecutor.js";
 import type * as lib_trelloTypes from "../lib/trelloTypes.js";
 import type * as lib_zodSchemas from "../lib/zodSchemas.js";
 import type * as management from "../management.js";
+import type * as memory from "../memory.js";
 import type * as migrations from "../migrations.js";
 import type * as migrators from "../migrators.js";
 import type * as prices from "../prices.js";
@@ -265,6 +266,7 @@ declare const fullApi: ApiFromModules<{
   "lib/trelloTypes": typeof lib_trelloTypes;
   "lib/zodSchemas": typeof lib_zodSchemas;
   management: typeof management;
+  memory: typeof memory;
   migrations: typeof migrations;
   migrators: typeof migrators;
   prices: typeof prices;

@@ -27,7 +27,7 @@ type KnowledgeSearchResult = {
     };
 };
 
-import { BrainEditor } from "../_components/knowledge/BrainEditor";
+import { RunningMemoryEditor } from "../_components/knowledge/RunningMemoryEditor";
 
 const jobStatusStyles: Record<Doc<"ingestionJobs">["status"], string> = {
     created: "bg-gray-100 text-gray-700",
@@ -216,7 +216,7 @@ export default function KnowledgePage() {
 
             <div className="flex-1 overflow-auto p-6 space-y-8">
                 {activeTab === "current" && (
-                    <BrainEditor projectId={projectId} />
+                    <RunningMemoryEditor projectId={projectId} />
                 )}
                 {activeTab === "docs" && (
                     <>

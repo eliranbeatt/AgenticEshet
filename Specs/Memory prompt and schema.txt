@@ -1,0 +1,236 @@
+Below are **(A)** an exact **`gpt-5-nano` summarizer prompt** (strict, short, bullet-limited, delta-only) and **(B)** a **markdown append algorithm** that inserts under the right `## Element:` heading using only simple string/regex ops (no heavy parsing).
+
+---
+
+## A) Exact nano prompt (delta-only, strict JSON, bullet-limited)
+
+Use this as the **system** message for your nano call:
+
+```text
+You are RunningMemorySummarizer.
+
+Goal: Extract ONLY the NEW information introduced in THIS single interaction (delta-only). Do NOT restate context. Do NOT invent. Be extremely concise.
+
+Return output as VALID JSON ONLY (no markdown, no prose, no code fences). If a category has no items, return an empty array. Keep items short.
+
+Rules:
+- Use only information explicitly present in user_text or assistant_text.
+- Each item must be <= 12 words.
+- Max items per array: facts<=3, decisions<=2, inputs<=3, todos<=3, open_questions<=2.
+- Prefer concrete nouns, numbers, names, decisions, constraints, next actions.
+- If something is uncertain, phrase as an open_question (not a fact).
+- element_key: Use selected_element_key if provided and not empty. Otherwise null.
+- Do not include anything about these rules in the output.
+
+JSON schema:
+{
+  "element_key": string|null,
+  "facts": string[],
+  "decisions": string[],
+  "inputs": string[],
+  "todos": string[],
+  "open_questions": string[]
+}
+```
+
+Then your **user** message (payload) can be:
+
+```text
+selected_element_key: "<string or empty>"
+stage: "<ideation|planning|solutioning|other>"
+channel: "<structured|free>"
+user_text:
+"""
+...user message...
+"""
+assistant_text:
+"""
+...assistant reply...
+"""
+```
+
+That’s it. No examples. Keeps nano cheap and consistent.
+
+---
+
+## B) Markdown append algorithm (simple insertion under `## Element:`)
+
+### Target markdown shape (what you append)
+
+You’ll format the nano JSON into a compact entry block like:
+
+```md
+- [2026-01-04 10:22 | planning | structured]
+  - Facts: a; b; c
+  - Decisions: x; y
+  - Inputs: i; j
+  - TODOs: t1; t2
+  - Open: q1; q2
+```
+
+Only include lines where that array is non-empty (optional), or keep all lines but allow blanks—your call. Below assumes you **omit empty lines** to stay compact.
+
+### Insert rules
+
+* Memory is one markdown string per project.
+* Insert the entry at the **end of the matching element section**, **before** the next `## Element:` heading (or EOF).
+* If the element heading doesn’t exist, append a new `## Element: ...` section at the end, then add the entry.
+* Update the `_Last updated: ..._` line if present; otherwise create it.
+
+### Pseudocode (TypeScript-ish, minimal regex)
+
+```ts
+type NanoSummary = {
+  element_key: string | null;
+  facts: string[];
+  decisions: string[];
+  inputs: string[];
+  todos: string[];
+  open_questions: string[];
+};
+
+function formatEntryBlock(
+  tsLocal: string, // "YYYY-MM-DD HH:mm"
+  stage: string,
+  channel: string,
+  s: NanoSummary
+): string {
+  const lines: string[] = [];
+  lines.push(`- [${tsLocal} | ${stage} | ${channel}]`);
+
+  const join = (arr: string[]) => arr.join("; ");
+
+  if (s.facts?.length)        lines.push(`  - Facts: ${join(s.facts)}`);
+  if (s.decisions?.length)    lines.push(`  - Decisions: ${join(s.decisions)}`);
+  if (s.inputs?.length)       lines.push(`  - Inputs: ${join(s.inputs)}`);
+  if (s.todos?.length)        lines.push(`  - TODOs: ${join(s.todos)}`);
+  if (s.open_questions?.length) lines.push(`  - Open: ${join(s.open_questions)}`);
+
+  // If ALL arrays empty, still keep a minimal marker (rare, but keeps trace)
+  if (lines.length === 1) lines.push(`  - Facts: (no new deltas)`);
+
+  return lines.join("\n") + "\n";
+}
+
+function ensureBaseDoc(md: string, tsLocal: string): string {
+  const trimmed = (md ?? "").trim();
+  if (trimmed.length) return md;
+
+  return [
+    "# Running Memory (Auto)",
+    `_Last updated: ${tsLocal}_`,
+    "",
+    "## Element: Unassigned",
+    ""
+  ].join("\n");
+}
+
+function updateLastUpdated(md: string, tsLocal: string): string {
+  // Replace first occurrence of _Last updated: ..._
+  const re = /^_Last updated:\s*.*_$/m;
+  if (re.test(md)) return md.replace(re, `_Last updated: ${tsLocal}_`);
+
+  // If missing, insert after H1 if present, else prepend
+  const h1re = /^# .+$/m;
+  const m = md.match(h1re);
+  if (m && m.index !== undefined) {
+    const idx = m.index + m[0].length;
+    return md.slice(0, idx) + `\n_Last updated: ${tsLocal}_` + md.slice(idx);
+  }
+  return `_Last updated: ${tsLocal}_\n` + md;
+}
+
+function buildElementHeading(elementKey: string | null, elementName?: string): string {
+  // Keep it simple. If you have name+id, include both; otherwise fallback.
+  if (!elementKey) return "## Element: Unassigned";
+
+  // If your elementKey is like "element:abc123", show it:
+  const id = elementKey.includes(":") ? elementKey.split(":")[1] : elementKey;
+  const name = (elementName && elementName.trim()) ? elementName.trim() : "Unknown";
+  return `## Element: ${name} (${id})`;
+}
+
+function findSection(md: string, headingLine: string): { start: number; end: number } | null {
+  // Find exact heading line match
+  const idx = md.indexOf("\n" + headingLine + "\n");
+  const start = idx >= 0 ? idx + 1 : (md.startsWith(headingLine + "\n") ? 0 : -1);
+  if (start < 0) return null;
+
+  // End is next "\n## Element:" after start+heading
+  const afterStart = start + headingLine.length;
+  const nextIdx = md.indexOf("\n## Element:", afterStart);
+  const end = nextIdx >= 0 ? nextIdx + 1 : md.length; // +1 keeps leading newline symmetry
+  return { start, end };
+}
+
+function appendEntryUnderElement(
+  md: string,
+  headingLine: string,
+  entryBlock: string
+): string {
+  // Ensure doc ends with newline
+  if (!md.endsWith("\n")) md += "\n";
+
+  const sec = findSection(md, headingLine);
+
+  if (!sec) {
+    // Create new section at end
+    const spacer = md.endsWith("\n\n") ? "" : "\n";
+    md += `${spacer}${headingLine}\n\n`;
+    md += entryBlock + "\n";
+    return md;
+  }
+
+  // Insert before section end (which is next heading or EOF)
+  const sectionText = md.slice(sec.start, sec.end);
+
+  // Ensure there is a blank line before inserting (readability)
+  const insertionPrefix = sectionText.endsWith("\n\n") ? "" : "\n";
+
+  const before = md.slice(0, sec.end);
+  const after = md.slice(sec.end);
+
+  // But we want to insert at the end of this section, not after the next heading.
+  // So compute true insert position: just before sec.end in the original md.
+  const insertPos = sec.end;
+
+  return (
+    md.slice(0, insertPos) +
+    insertionPrefix +
+    entryBlock +
+    "\n" +
+    md.slice(insertPos)
+  );
+}
+
+// Main function
+function appendRunningMemory(
+  existingMd: string,
+  tsLocal: string,
+  stage: string,
+  channel: string,
+  nano: NanoSummary,
+  elementName?: string
+): string {
+  let md = ensureBaseDoc(existingMd, tsLocal);
+  md = updateLastUpdated(md, tsLocal);
+
+  const heading = buildElementHeading(nano.element_key, elementName);
+  const entry = formatEntryBlock(tsLocal, stage, channel, nano);
+
+  md = appendEntryUnderElement(md, heading, entry);
+  return md;
+}
+```
+
+### Notes (practical edge cases)
+
+* **Element name changes**: If you later rename an element, you can either:
+
+  * keep appending using the same heading you originally used (stable), or
+  * search by `(<id>)` substring (tiny enhancement) and append there.
+* **Concurrent appends**:
+
+  * If your backend can have two turns finishing at once, store and update via a single serialized mutation (Convex-style), or do compare-and-swap with a version field.
+* **No “heavy parsing”**: this approach only uses `indexOf` + one simple regex for `_Last updated:_`.
+

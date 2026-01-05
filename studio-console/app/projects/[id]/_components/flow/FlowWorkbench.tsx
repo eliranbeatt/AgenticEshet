@@ -352,6 +352,21 @@ export function FlowWorkbench({ projectId, tab }: { projectId: Id<"projects">; t
                                 <StructuredQuestionsPanel
                                     projectId={projectId}
                                     stage={tab === "ideation" ? "clarification" : tab}
+                                    onSkip={async () => {
+                                        setViewMode("chat");
+                                        if (threadId) {
+                                            await sendFlowTurn({
+                                                threadId,
+                                                userContent: "I have skipped the remaining questions. Please proceed to the next step using the information provided so far.",
+                                                tab,
+                                                mode: "generate",
+                                                scopeType,
+                                                scopeItemIds: selectedAllProject ? undefined : selectedItemIds,
+                                                model: selectedModel,
+                                                thinkingMode,
+                                            });
+                                        }
+                                    }}
                                 />
                             </div>
                         ) : (

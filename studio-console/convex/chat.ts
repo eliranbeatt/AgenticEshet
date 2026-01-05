@@ -295,21 +295,13 @@ export const sendAndStreamText = action({
                 status: "final",
             });
 
-            // --- BRAIN EVENTS INTEGRATION ---
-            const fullTranscript = `User: ${args.userContent}\n\nAssistant: ${buffer}`;
-            const brainEventId = await ctx.runMutation(internal.brainEvents.create, {
+            // --- RUNNING MEMORY INTEGRATION ---
+            await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
                 projectId: project._id,
-                eventType: "agent_send",
-                payload: {
-                    threadId: args.threadId,
-                    userMessageId,
-                    assistantMessageId,
-                    transcript: fullTranscript,
-                },
-            });
-            await ctx.scheduler.runAfter(0, api.agents.brainUpdater.run, {
-                projectId: project._id,
-                brainEventId,
+                stage: scenario.phase,
+                channel: "free",
+                userText: args.userContent,
+                assistantText: buffer.trim() ? buffer : "(empty)",
             });
             // ---------------------------------------------
         } catch (error) {

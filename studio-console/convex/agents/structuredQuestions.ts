@@ -56,8 +56,6 @@ export const run = action({
 
         });
 
-
-
         // 1. Load context (previous turns)
 
         const turns = await ctx.runQuery(api.structuredQuestions.listTurns, {
@@ -66,25 +64,12 @@ export const run = action({
 
         });
 
-
-
         // 1.5 Load Project Context
         const project = await ctx.runQuery(api.projects.getProject, { projectId: args.projectId });
         if (!project) throw new Error("Project not found");
 
-        const factsContext = project.features?.factsEnabled === false
-            ? { bullets: "(facts disabled)" }
-            : await ctx.runAction(internal.factsV2.getFactsContext, {
-                projectId: args.projectId,
-                scopeType: "project",
-                queryText: project?.name ?? "",
-            });
-
-        const brain = await ctx.runQuery(api.projectBrain.getCurrent, {
-            projectId: args.projectId,
-        });
-
-        const knowledgeBlocks = await ctx.runQuery(api.facts.listBlocks, {
+        // --- NEW MEMORY SYSTEM ---
+        const runningMemory = await ctx.runQuery(api.memory.getRunningMemoryMarkdown, {
             projectId: args.projectId,
         });
 
@@ -112,9 +97,7 @@ export const run = action({
         const systemPrompt = buildSystemPrompt(args.stage, project);
         const userPrompt = buildUserPrompt(turns, {
             elementSnapshotsSummary,
-            currentKnowledge: brain ? buildBrainContext(brain) : "(none)",
-            factsSummary: factsContext.bullets,
-            knowledgeBlocksSummary: summarizeKnowledgeBlocks(knowledgeBlocks ?? []),
+            runningMemory: runningMemory || "(empty)",
             knowledgeDocsSummary: summarizeKnowledgeDocs(knowledgeDocs ?? []),
             itemsSummary: summarizeItems(items ?? []),
         });
@@ -128,7 +111,7 @@ export const run = action({
                 systemPrompt,
                 userPrompt,
                 model: "gpt-5-mini" // Use a strong model for structured output
-                
+
             });
 
             // 4. Save Turn
@@ -140,7 +123,7 @@ export const run = action({
                 sessionId: args.sessionId,
                 turnNumber: nextTurnNumber,
             });
-            
+
             await ctx.runMutation(internal.structuredQuestions.internal_createTurn, {
                 projectId: args.projectId,
                 stage: args.stage,
@@ -498,9 +481,7 @@ REQUIRED HANDLING:
 
 function buildUserPrompt(turns: any[], context: {
     elementSnapshotsSummary: string;
-    currentKnowledge: string;
-    factsSummary: string;
-    knowledgeBlocksSummary: string;
+    runningMemory: string;
     knowledgeDocsSummary: string;
     itemsSummary: string;
 }) {
@@ -511,14 +492,8 @@ function buildUserPrompt(turns: any[], context: {
             "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
             context.elementSnapshotsSummary,
             "",
-            "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
-            context.currentKnowledge,
-            "",
-            "KNOWN FACTS (accepted):",
-            context.factsSummary,
-            "",
-            "KNOWLEDGE BLOCKS:",
-            context.knowledgeBlocksSummary,
+            "RUNNING MEMORY (AUTHORITATIVE):",
+            context.runningMemory,
             "",
             "RECENT KNOWLEDGE DOCS:",
             context.knowledgeDocsSummary,
@@ -555,14 +530,8 @@ User Instructions: ${t.userInstructions || "None"}`;
         "ELEMENT SNAPSHOTS (CANONICAL - OVERRIDES KNOWLEDGE/CHAT):",
         context.elementSnapshotsSummary,
         "",
-        "PROJECT BRAIN (AUTHORITATIVE - OVERRIDES CHAT):",
-        context.currentKnowledge,
-        "",
-        "KNOWN FACTS (accepted):",
-        context.factsSummary,
-        "",
-        "KNOWLEDGE BLOCKS:",
-        context.knowledgeBlocksSummary,
+        "RUNNING MEMORY (AUTHORITATIVE):",
+        context.runningMemory,
         "",
         "RECENT KNOWLEDGE DOCS:",
         context.knowledgeDocsSummary,

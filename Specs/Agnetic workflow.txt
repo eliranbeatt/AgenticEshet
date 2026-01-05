@@ -1,0 +1,429 @@
+Below is a **full dev plan** for the **Skill Suggestions Bar** you described:
+
+* Always show **Continue** (default-selected / primary)
+* Plus **3–5 suggested skills** relevant to the current **stage + context**
+* Click-to-run only (no autonomy), compatible with your **ChangeSet apply/discard** approach and your “agents respond in Hebrew” rule.
+
+---
+
+# 1) Product definition
+
+## Goal
+
+Make the agent feel “guided and powerful” without being autonomous:
+
+* The user chats normally.
+* After every assistant response, the UI offers:
+
+  * **Continue** (default / primary)
+  * **3–5 best next actions** (critique / questions / images / estimate / tasks / risks, etc.)
+* Clicking a suggestion runs a **specific skill** and produces a **draft ChangeSet** that the user can apply/discard.
+
+## Non-goals
+
+* No automatic writing to canonical tables.
+* No fully autonomous multi-step execution without user clicks.
+* No “lock the UI until you approve” behavior.
+
+---
+
+# 2) UX design spec
+
+## 2.1 Placement
+
+Under the assistant message (and above the input box):
+
+**[ Continue → … ]**  (primary, selected by default)
+Alternative chips (3–5): `[ Critique ] [ Ask Questions ] [ Generate Images ] [ Estimate Costs ] [ Break into Tasks ]`
+
+## 2.2 Continue semantics (critical)
+
+**Continue** must be *meaningful* and *contextual*, not generic.
+
+Rule:
+
+* If there is an **active workflow run** → Continue runs **next workflow step**
+* Else → Continue runs the **recommended next skill** (stage-driven progression) or re-runs last skill when appropriate
+
+Examples:
+
+* After “clarification Qs answered” → Continue → “Generate plan”
+* After “plan draft created” → Continue → “Break into tasks”
+* After “tasks exist” → Continue → “Estimate costs”
+* After “costs exist” → Continue → “Build quote draft”
+* After “solutioning draft exists” → Continue → “Critique & reduce complexity”
+
+## 2.3 Default selection & keyboard
+
+* Continue is **visually primary** and **selected**
+* Keyboard:
+
+  * `Enter` triggers **Continue** when input is empty (or when focus is on the suggestions bar)
+  * `Alt+1..5` triggers alternatives (safer than plain 1..5 to avoid typing conflicts)
+* Mobile: Continue is primary but **no accidental enter-to-run**; require tap.
+
+(Decision item: whether empty-input Enter triggers Continue on desktop. Recommended: yes, but only when the input is empty AND chat is not focused.)
+
+## 2.4 Disabled states (don’t hide—disable with reason)
+
+If a suggestion requires something missing, show it disabled with a tooltip:
+
+* “Requires an element selection”
+* “Requires print files upload”
+* “Requires at least 1 approved element”
+* “Blocked: missing measurements (add questions first)”
+
+## 2.5 Interaction with ChangeSet (no lock)
+
+If there’s a pending ChangeSet:
+
+* Suggestions bar still works.
+* Show a small badge near suggestions: **“Draft pending”**
+* Provide a toggle in the ChangeSet panel:
+
+  * **Use draft as context for next runs** (default ON)
+  * This lets you keep iterating without forced apply/discard.
+
+---
+
+# 3) Requirements
+
+## 3.1 Functional requirements
+
+1. After every assistant turn, return:
+
+   * `primarySuggestion = Continue`
+   * `alternatives = 3–5`
+2. Suggestions are based on:
+
+   * current **stage**
+   * last skill used
+   * selected element(s)
+   * presence of printing/files
+   * existence of plan/tasks/accounting/quote drafts
+   * pending ChangeSet
+3. Clicking a suggestion runs a skill via a single endpoint (`runSkill`) and returns:
+
+   * assistant summary (Hebrew)
+   * structured output
+   * ChangeSet
+   * next suggestions
+4. Suggestions must be stable-ish:
+
+   * not random each time
+   * avoid repeating the same alternative 5 turns in a row
+5. Works in Manual mode and Workflow mode.
+
+## 3.2 Language requirements
+
+* UI labels: Hebrew (recommended, matches your usage)
+* JSON keys: English
+* Agent response values: Hebrew (your rule)
+
+## 3.3 Non-functional requirements
+
+* Latency: suggestions must render instantly with the assistant message (no extra call)
+* Deterministic scoring (heuristics) first; optional LLM-based ranking later
+* Fully testable with unit tests (scoring) + integration tests (UI + endpoint)
+
+---
+
+# 4) Data model & contracts
+
+## 4.1 Skill registry metadata (add to your skills table or companion table)
+
+Add fields (or a new `skillMeta` table):
+
+* `skillId`
+* `label_he` (base label)
+* `intentTag` (next / critique / questions / visual / cost / tasks / risk)
+* `stageRelevance` weights `{ ideation: 0..100, planning: … }`
+* `requires`: `{ elementSelected?: boolean, files?: boolean, approvedElements?: boolean }`
+* `cooldownTurns` (e.g., 2 turns before re-suggest)
+* `isContinueEligible` (can be used as continue target)
+
+## 4.2 Suggestion payload schema
+
+Return this with every assistant response:
+
+```ts
+type Suggestion = {
+  id: string;                       // "continue" or skillId
+  label_he: string;                 // what user sees
+  reason_he?: string;               // tooltip/explainer
+  intentTag?: "next"|"critique"|"questions"|"visual"|"cost"|"tasks"|"risk";
+  weight: number;                   // for ranking/debugging
+  disabled?: boolean;
+  disabledReason_he?: string;
+
+  action: {
+    kind: "CONTINUE" | "RUN_SKILL" | "RUN_WORKFLOW_STEP";
+    skillId?: string;
+    workflowRunId?: string;
+    stepId?: string;
+    contextMode?: "CANONICAL" | "CANONICAL_PLUS_DRAFT";
+  };
+};
+
+type TurnResponse = {
+  assistantMessage_he: string;
+  changeSet?: ChangeSet;
+  suggestions: {
+    primary: Suggestion;            // Continue (always)
+    alternatives: Suggestion[];     // 3–5
+    defaultSelectedId: "continue";
+  };
+};
+```
+
+---
+
+# 5) Suggestion engine (ranking logic)
+
+## 5.1 Inputs (context snapshot)
+
+Build a lightweight `SuggestionContext` from your DB + UI state:
+
+* `stage` (selected or routed)
+* `lastSkillId`
+* `selectedElementIds[]`
+* `hasApprovedElements`
+* `hasDraftElements`
+* `hasTasks`, `hasAccountingLines`, `hasQuoteDraft`
+* `hasPrintingParts`, `uploadedFiles[]` and detected file types
+* `hasPendingChangeSet`
+* `draftOverlayEnabled` (toggle)
+
+## 5.2 Output rules
+
+* Always compute **Continue** first:
+
+  * Workflow? → next workflow step
+  * Else → compute “best next skill” as continue-target
+* Then compute alternatives:
+
+  * Candidate pool = skills with relevance to stage
+  * Apply prerequisites / disable rules
+  * Score each skill
+  * Penalize cooldown/repetition
+  * Pick top 3–5 diverse intentTags
+
+## 5.3 Diversity rule (avoid 5 chips all about tasks)
+
+Enforce at most one per intentTag unless you don’t have enough:
+
+* 1× “questions”
+* 1× “critique”
+* 1× “visual”
+* 1× “cost”
+* 1× “tasks”
+* 1× “risk”
+
+## 5.4 Scoring heuristics (v1)
+
+* Base = stageRelevance weight
+* Boost if trigger conditions:
+
+  * printing keywords/files → Print QA + risk/feasibility
+  * “budget/quote/₪” → estimate/quote
+  * plan exists but tasks missing → tasks++
+  * tasks exist but accounting missing → accounting++
+  * any missing measurements flagged → questions++
+* Penalties:
+
+  * shown in last N turns (cooldown)
+  * same intentTag already selected among alternatives
+
+(Keep it deterministic. Later you can add an LLM reranker if needed.)
+
+---
+
+# 6) UI components & states
+
+## 6.1 Components
+
+1. `SuggestionBar`
+
+   * primary button: Continue (selected)
+   * chip row: 3–5 alternatives
+   * tooltips (reason)
+   * disabled chips
+2. `ChangeSetPanel`
+
+   * Apply / Discard / Edit
+   * Toggle: “Use draft as context”
+3. `SkillRunSpinner` (shows which skill is running)
+4. `KeyboardShortcutsHint` (optional small “Enter = Continue”)
+
+## 6.2 States
+
+* Idle (suggestions visible)
+* Running skill (disable suggestions, show spinner)
+* Error (toast + keep suggestions)
+* Pending ChangeSet (badge + toggle)
+
+---
+
+# 7) Backend implementation plan
+
+## 7.1 Endpoints
+
+### A) `runChatTurn(...)`
+
+Your normal agent chat call, but it must now also return `suggestions`.
+
+### B) `runSkill(...)`
+
+Runs a chosen skill using current context snapshot and returns:
+
+* assistant output
+* structured artifacts
+* ChangeSet
+* next suggestions
+
+### C) `getSuggestionContext(...)` (internal helper)
+
+Assembles the context snapshot cheaply.
+
+## 7.2 Where to compute suggestions
+
+Recommended:
+
+* Compute **server-side** inside the same action that returns assistant output.
+  Why:
+* consistent logic across web/mobile
+* easier debugging
+* suggestion engine can access DB state without extra roundtrips
+
+---
+
+# 8) Work plan (tasks backlog)
+
+## Phase 1 — Foundation (1–2 sprints)
+
+1. **Skill metadata**
+
+   * Add metadata fields to skills (or new table)
+   * Seed weights per stage for ~10 core skills
+2. **Suggestion engine v1**
+
+   * Implement `buildSuggestionContext`
+   * Implement `rankSuggestions(stage, context)` returning Continue + 3–5
+3. **Contract changes**
+
+   * Extend agent response schema with `suggestions`
+4. **UI: SuggestionBar**
+
+   * Render primary + alternatives
+   * Click triggers `runSkill`
+   * Disabled reasons + tooltips
+5. **ChangeSet overlay toggle**
+
+   * Add “use draft context” toggle and plumb it to skill runs
+
+Deliverable: you chat, you always get Continue + 3–5 chips, click runs a skill.
+
+## Phase 2 — Stage-smart Continue (1 sprint)
+
+1. Implement stage progression map:
+
+   * Clarification → Planning → Tasks → Accounting → Quote
+   * Solutioning → Atomic breakdown → Feasibility → Install plan
+2. Continue label templating:
+
+   * “Continue → {nextAction}”
+3. Add “cooldown” and intent diversity
+
+Deliverable: Continue feels like “next step”, not “repeat”.
+
+## Phase 3 — Telemetry & learning loop (1 sprint)
+
+1. Log events:
+
+   * suggestions_shown
+   * suggestion_clicked
+   * suggestion_disabled_clicked (optional)
+   * changeset_applied/discarded
+2. Add a simple dashboard page (or admin view) showing:
+
+   * top clicked skills per stage
+   * ignored suggestions
+   * time-to-apply changesets
+
+Deliverable: you can tune weights from real usage.
+
+## Phase 4 — Polish & safety (ongoing)
+
+* keyboard shortcuts
+* mobile behavior
+* “pin favorite skills” per stage
+* user preference: hide a skill from suggestions
+* A/B: show 3 vs 5 chips
+
+---
+
+# 9) Testing plan
+
+## Unit tests (suggestion engine)
+
+* Given stage + context, verify:
+
+  * Continue always present
+  * 3–5 alternatives returned
+  * prerequisites cause disable not removal
+  * cooldown prevents repetition
+  * diversity rule works
+
+## Integration tests
+
+* Click a chip → triggers skill run → ChangeSet appears → suggestions update
+* Pending ChangeSet + continue still works with overlay mode ON/OFF
+* Workflow mode: Continue runs next step
+
+## QA scenarios (studio-realistic)
+
+* Planning with missing measurements → “Ask questions” boosted + Continue points there
+* Printing mentioned → Print QA appears (disabled until files uploaded)
+* Costs exist but quote missing → Continue = Quote Writer
+* Solutioning for element selected → Atomic breakdown appears
+
+---
+
+# 10) Key decisions you must make now
+
+1. **Enter behavior**
+
+   * Desktop: Enter with empty input triggers Continue? (recommended: yes)
+   * Mobile: no (tap only)
+2. **Labels language**
+
+   * Suggestion labels in Hebrew vs English (recommended: Hebrew)
+3. **Draft overlay default**
+
+   * Default ON is best for iteration, but it means “continuing” uses uncommitted drafts
+4. **Where stage comes from**
+
+   * User-selected stage vs router-selected vs hybrid (recommended: user-selected with router fallback)
+5. **How many chips**
+
+   * 3–5 (your request). Pick default: 4 (clean) with “More…” opening full Suggestions UI window later.
+6. **Skill catalog v1**
+
+   * Decide the first ~10 skills you ship; everything else stays hidden until stable.
+
+---
+
+# 11) Recommended v1 skill set (so suggestions are great immediately)
+
+* Continue (meta)
+* Ask Questions (structured)
+* Critique
+* Generate Images
+* Break into Tasks
+* Estimate Costs
+* Quote Writer
+* Feasibility / Risks
+* Print QA (shows when relevant)
+* Buying Assistant (vendors)
+
+This set maps perfectly to your real flow and gives the “continue / next step / critique / visual / questions” balance you want.

@@ -5,26 +5,27 @@ import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { StructuredQuestion, StructuredAnswer } from "@/convex/lib/zodSchemas";
-import { Loader2, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, SkipForward } from "lucide-react";
 
 interface StructuredQuestionsPanelProps {
     projectId: Id<"projects">;
     stage: "clarification" | "planning" | "solutioning";
     conversationId?: Id<"projectConversations">;
+    onSkip?: () => void;
 }
 
-export function StructuredQuestionsPanel({ projectId, stage, conversationId }: StructuredQuestionsPanelProps) {
+export function StructuredQuestionsPanel({ projectId, stage, conversationId, onSkip }: StructuredQuestionsPanelProps) {
     const session = useQuery(api.structuredQuestions.getActiveSession, { projectId, stage, conversationId });
     const startSession = useMutation(api.structuredQuestions.startSession);
     const runAgent = useAction(api.agents.structuredQuestions.run);
-    
+
     const [isStarting, setIsStarting] = useState(false);
 
     const handleStart = async () => {
         setIsStarting(true);
         try {
             const sessionId = await startSession({ projectId, stage, conversationId });
-            await runAgent({ projectId, stage, sessionId, conversationId, runId: undefined as any }); 
+            await runAgent({ projectId, stage, sessionId, conversationId, runId: undefined as any });
         } catch (e) {
             console.error(e);
         } finally {
@@ -53,15 +54,17 @@ export function StructuredQuestionsPanel({ projectId, stage, conversationId }: S
         );
     }
 
-    return <ActiveSessionView session={session} projectId={projectId} stage={stage} onRestart={handleStart} isRestarting={isStarting} />;
+    return <ActiveSessionView session={session} projectId={projectId} stage={stage} onRestart={handleStart} isRestarting={isStarting} onSkip={onSkip} />;
 }
 
-function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting }: { session: any, projectId: Id<"projects">, stage: any, onRestart: () => void, isRestarting: boolean }) {
+function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting, onSkip }: { session: any, projectId: Id<"projects">, stage: any, onRestart: () => void, isRestarting: boolean, onSkip?: () => void }) {
     const latestTurn = useQuery(api.structuredQuestions.getLatestTurn, { sessionId: session._id });
     const saveAnswers = useMutation(api.structuredQuestions.saveAnswers);
+    const skipSession = useMutation(api.structuredQuestions.skipSession);
     const [answers, setAnswers] = useState<Record<string, StructuredAnswer>>({});
     const [userInstructions, setUserInstructions] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isSkipping, setIsSkipping] = useState(false);
 
     // Reset answers when turn changes
     useEffect(() => {
@@ -70,7 +73,7 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
     }, [latestTurn?.turnNumber]);
 
     if (latestTurn === undefined) return <div>Loading turn...</div>;
-    
+
     if (!latestTurn) {
         return (
             <div className="flex flex-col h-full">
@@ -78,7 +81,7 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
                     <div className="text-sm font-medium text-gray-700">
                         Initializing Session...
                     </div>
-                    <button 
+                    <button
                         onClick={onRestart}
                         disabled={isRestarting}
                         className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
@@ -128,6 +131,20 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
         }
     };
 
+    const handleSkip = async () => {
+        if (!confirm("Are you sure you want to skip the remaining questions? The agent will proceed with the current information.")) return;
+        setIsSkipping(true);
+        try {
+            await skipSession({ projectId, stage, conversationId: session.conversationId });
+            if (onSkip) onSkip();
+        } catch (e) {
+            console.error(e);
+            alert("Failed to skip session");
+        } finally {
+            setIsSkipping(false);
+        }
+    };
+
     // Allow submit if at least one answer is provided OR user instructions are provided
     // The user said "no need for answers on all questiosn to go to the next turn"
     const canSubmit = Object.keys(answers).length > 0 || userInstructions.trim().length > 0;
@@ -139,7 +156,7 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
                     <div className="text-sm font-medium text-gray-700">
                         Turn {latestTurn.turnNumber} • Processing...
                     </div>
-                    <button 
+                    <button
                         onClick={onRestart}
                         disabled={isRestarting}
                         className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
@@ -162,7 +179,7 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
                 <div className="text-sm font-medium text-gray-700">
                     Turn {latestTurn.turnNumber} • {questions.length} Questions
                 </div>
-                <button 
+                <button
                     onClick={onRestart}
                     disabled={isRestarting}
                     className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
@@ -196,11 +213,19 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting 
                 </div>
             </div>
 
-            <div className="p-4 border-t bg-white">
+            <div className="p-4 border-t bg-white flex gap-2">
+                <button
+                    onClick={handleSkip}
+                    disabled={isSkipping || isSubmitting}
+                    className="px-4 py-2 bg-gray-200 text-gray-800 rounded font-medium hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2 whitespace-nowrap"
+                    title="Skip remaining questions and proceed"
+                >
+                    {isSkipping ? <Loader2 className="w-4 h-4 animate-spin" /> : "Skip Questions"}
+                </button>
                 <button
                     onClick={handleSubmit}
-                    disabled={!canSubmit || isSubmitting}
-                    className="w-full py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+                    disabled={!canSubmit || isSubmitting || isSkipping}
+                    className="flex-1 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
                 >
                     {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                     Submit Answers & Continue
@@ -234,7 +259,7 @@ function QuestionCard({
                     <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded">Required</span>
                 )}
             </div>
-            
+
             {question.prompt && (
                 <p className="text-sm text-gray-500 text-right" dir="rtl">{question.prompt}</p>
             )}
@@ -245,11 +270,10 @@ function QuestionCard({
                         <button
                             key={opt}
                             onClick={() => onChange("quick", opt)}
-                            className={`px-3 py-1.5 text-sm rounded border transition-colors ${
-                                answer?.quick === opt
+                            className={`px-3 py-1.5 text-sm rounded border transition-colors ${answer?.quick === opt
                                     ? "bg-blue-100 border-blue-300 text-blue-800 font-medium"
                                     : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
-                            }`}
+                                }`}
                         >
                             {LABELS[opt]}
                         </button>

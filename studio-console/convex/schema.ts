@@ -1684,6 +1684,18 @@ export default defineSchema({
         stagePinned: v.optional(v.union(v.string(), v.null())), // "ideation", "planning", etc.
         skillPinned: v.optional(v.union(v.string(), v.null())), // skillKey
         channelPinned: v.optional(v.union(v.string(), v.null())), // "free", "structured", "auto"
+
+        // Agent Page UX state
+        agentMode: v.optional(v.union(v.literal("manual"), v.literal("workflow"))),
+        activeSkillKey: v.optional(v.union(v.string(), v.null())),
+        draftOverlayEnabled: v.optional(v.boolean()),
+        activeWorkflowRunId: v.optional(v.union(v.string(), v.null())),
+        lastSuggestionsState: v.optional(
+            v.object({
+                shownSkillKeys: v.array(v.string()),
+                shownAt: v.number(),
+            })
+        ),
         
         // State
         status: v.string(), // "idle", "running", "waiting_input", "waiting_approval"
@@ -1908,7 +1920,7 @@ export default defineSchema({
         projectId: v.id("projects"),
         conversationId: v.optional(v.id("projectConversations")),
         stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
-        status: v.union(v.literal("active"), v.literal("done"), v.literal("archived")),
+        status: v.union(v.literal("active"), v.literal("done"), v.literal("archived"), v.literal("skipped")),
         currentTurnNumber: v.number(),
         createdAt: v.number(),
         updatedAt: v.number(),

@@ -40,6 +40,11 @@ export const ensure = mutation({
             stagePinned: null,
             skillPinned: null,
             channelPinned: null,
+            agentMode: "manual",
+            activeSkillKey: null,
+            draftOverlayEnabled: true,
+            activeWorkflowRunId: null,
+            lastSuggestionsState: { shownSkillKeys: [], shownAt: 0 },
             status: "idle",
             lastRunAt: Date.now(),
             facts: {},
@@ -62,10 +67,69 @@ export const setPins = mutation({
         channelPinned: v.optional(v.union(v.string(), v.null())),
     },
     handler: async (ctx, args) => {
+        const stagePinned = args.stagePinned === "auto" ? null : args.stagePinned;
+        const skillPinned = args.skillPinned === "auto" ? null : args.skillPinned;
+        const channelPinned = args.channelPinned === "auto" ? null : args.channelPinned;
         await ctx.db.patch(args.workspaceId, {
-            stagePinned: args.stagePinned,
-            skillPinned: args.skillPinned,
-            channelPinned: args.channelPinned,
+            stagePinned,
+            skillPinned,
+            channelPinned,
+            updatedAt: Date.now(),
+        });
+    },
+});
+
+export const setAgentMode = mutation({
+    args: {
+        workspaceId: v.id("projectWorkspaces"),
+        agentMode: v.union(v.literal("manual"), v.literal("workflow")),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.workspaceId, {
+            agentMode: args.agentMode,
+            updatedAt: Date.now(),
+        });
+    },
+});
+
+export const setActiveSkill = mutation({
+    args: {
+        workspaceId: v.id("projectWorkspaces"),
+        activeSkillKey: v.union(v.string(), v.null()),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.workspaceId, {
+            activeSkillKey: args.activeSkillKey,
+            updatedAt: Date.now(),
+        });
+    },
+});
+
+export const setDraftOverlayEnabled = mutation({
+    args: {
+        workspaceId: v.id("projectWorkspaces"),
+        enabled: v.boolean(),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.workspaceId, {
+            draftOverlayEnabled: args.enabled,
+            updatedAt: Date.now(),
+        });
+    },
+});
+
+export const setLastSuggestionsState = mutation({
+    args: {
+        workspaceId: v.id("projectWorkspaces"),
+        shownSkillKeys: v.array(v.string()),
+        shownAt: v.number(),
+    },
+    handler: async (ctx, args) => {
+        await ctx.db.patch(args.workspaceId, {
+            lastSuggestionsState: {
+                shownSkillKeys: args.shownSkillKeys,
+                shownAt: args.shownAt,
+            },
             updatedAt: Date.now(),
         });
     },
@@ -82,10 +146,13 @@ export const updateFromController = mutation({
         pendingChangeSetId: v.optional(v.union(v.id("itemChangeSets"), v.null())),
     },
     handler: async (ctx, args) => {
+        const stagePinned = args.stagePinned === "auto" ? null : args.stagePinned;
+        const skillPinned = args.skillPinned === "auto" ? null : args.skillPinned;
+        const channelPinned = args.channelPinned === "auto" ? null : args.channelPinned;
         await ctx.db.patch(args.workspaceId, {
-            stagePinned: args.stagePinned,
-            skillPinned: args.skillPinned,
-            channelPinned: args.channelPinned,
+            stagePinned,
+            skillPinned,
+            channelPinned,
             openQuestions: args.openQuestions,
             artifactsIndex: args.artifactsIndex,
             pendingChangeSetId: args.pendingChangeSetId ?? undefined,

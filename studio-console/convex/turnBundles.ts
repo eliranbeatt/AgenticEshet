@@ -175,7 +175,42 @@ export const createFromTurn = internalMutation({
     const elementContext = args.scope.itemIds?.[0]; // Use first item as context if available
     const elementName = args.itemRefs.find(r => r.id === elementContext)?.name;
 
-    await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
+    // Structured Questions: do NOT summarize with LLM.
+    // Append the raw Q&A transcript immediately so the next questions can depend on it.
+    if (args.source.type === "structuredQuestions") {
+      const transcriptParts: string[] = [];
+      transcriptParts.push(`Structured Q&A (${args.stage})`);
+      if (args.structuredQuestions && args.structuredQuestions.length > 0) {
+        for (const q of args.structuredQuestions) {
+          const a = args.userAnswers?.find((x) => x.qId === q.id);
+          const quick = a?.quick ?? "(SKIPPED)";
+          const text = a?.text ? ` (${a.text})` : "";
+          transcriptParts.push(`Q(${q.id}): ${q.text}`);
+          transcriptParts.push(`A: ${quick}${text}`);
+          transcriptParts.push("");
+        }
+      } else {
+        transcriptParts.push("(no questions)");
+      }
+
+      const transcript = transcriptParts.join("\n").trim();
+      await ctx.runMutation(internal.memory.internalAppendToDoc, {
+        projectId: args.projectId,
+        stage: args.stage,
+        channel: "structured",
+        nanoSummary: {
+          element_key: null,
+          facts: [],
+          decisions: [],
+          inputs: [],
+          todos: [],
+          open_questions: [],
+        },
+        elementName,
+        transcript,
+      });
+    } else {
+      await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
         projectId: args.projectId,
         stage: args.stage,
         channel: args.source.type === "chat" ? "free" : "structured",
@@ -183,7 +218,8 @@ export const createFromTurn = internalMutation({
         elementName,
         userText,
         assistantText
-    });
+      });
+    }
 
     return bundleId;
   },

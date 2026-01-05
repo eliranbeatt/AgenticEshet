@@ -61,6 +61,7 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting,
     const latestTurn = useQuery(api.structuredQuestions.getLatestTurn, { sessionId: session._id });
     const saveAnswers = useMutation(api.structuredQuestions.saveAnswers);
     const skipSession = useMutation(api.structuredQuestions.skipSession);
+    const runAgent = useAction(api.agents.structuredQuestions.run);
     const [answers, setAnswers] = useState<Record<string, StructuredAnswer>>({});
     const [userInstructions, setUserInstructions] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -122,6 +123,15 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting,
                 turnNumber: latestTurn.turnNumber,
                 answers: answerList,
                 userInstructions,
+            });
+
+            // Immediately generate the next turn AFTER answers are persisted and memory is updated.
+            await runAgent({
+                projectId,
+                stage,
+                sessionId: session._id,
+                conversationId: session.conversationId,
+                runId: undefined as any,
             });
         } catch (e) {
             console.error(e);

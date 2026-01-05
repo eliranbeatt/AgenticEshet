@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
 
-const PROJECT_ID = "proj_e2e";
+// Must be a valid-shaped Convex Id to avoid client-side ArgumentValidationError.
+// This does not need to exist in the backend; tests accept "Project not found".
+const PROJECT_ID = "jx72f973qdthtwbbmwjhvskvkn7xvkte";
 
 test.describe("project flows", () => {
     test("overview route renders", async ({ page }) => {

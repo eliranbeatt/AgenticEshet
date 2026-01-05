@@ -11,37 +11,49 @@ import { useModel } from "@/app/_context/ModelContext";
 
 import { PrintingPanel } from "./_components/PrintingPanel";
 import { TrelloPanel } from "./_components/TrelloPanel";
+import { ArtifactInspector } from "../_components/inspector/ArtifactInspector";
 
 // ... (existing imports)
 
-function ArtifactInspector({ projectId, activeTab, onChangeTab }: { projectId: Id<"projects">, activeTab: string, onChangeTab: (t: string) => void }) {
+const STAGES = [
+    "auto",
+    "ideation",
+    "planning",
+    "solutioning",
+    "procurement",
+    "scheduling",
+    "critique",
+    "retro",
+    "printing",
+    "trello",
+] as const;
+
+type StagePin = typeof STAGES[number];
+
+function StageSelector({
+    current,
+    onChange,
+}: {
+    current?: string | null;
+    onChange?: (next: StagePin) => void;
+}) {
+    const normalized: StagePin = STAGES.includes(current as StagePin) ? (current as StagePin) : "auto";
+
     return (
-        <div className="flex flex-col h-full bg-white border-l w-[350px]">
-            <div className="flex border-b text-xs overflow-x-auto">
-                {["Overview", "Elements", "Tasks", "Printing", "Trello"].map(tab => (
-                    <button
-                        key={tab}
-                        className={`px-3 py-2 font-medium ${activeTab === tab ? "border-b-2 border-blue-500 text-blue-600" : "text-gray-500 hover:text-gray-800"}`}
-                        onClick={() => onChangeTab(tab)}
-                    >
-                        {tab}
-                    </button>
-                ))}
-            </div>
-            <div className="flex-1 overflow-y-auto bg-gray-50">
-                {activeTab === "Printing" ? (
-                    <PrintingPanel projectId={projectId} />
-                ) : activeTab === "Trello" ? (
-                    <TrelloPanel projectId={projectId} />
-                ) : (
-                    <div className="p-4 text-gray-400 text-center mt-10 text-sm">
-                        {activeTab} Content Area
-                        <br />
-                        (Coming Soon)
-                    </div>
-                )}
-            </div>
-        </div>
+        <select
+            className="text-xs border rounded p-1 bg-white"
+            value={normalized}
+            onChange={(e) => {
+                const next = e.target.value as StagePin;
+                onChange?.(next);
+            }}
+        >
+            {STAGES.map((stage) => (
+                <option key={stage} value={stage}>
+                    {stage}
+                </option>
+            ))}
+        </select>
     );
 }
 
@@ -157,10 +169,46 @@ export default function StudioPage() {
             </div>
 
             {/* Right: Artifact Inspector */}
-            <ArtifactInspector 
-                projectId={projectId} 
-                activeTab={activeTab} 
-                onChangeTab={setActiveTab} 
+            <ArtifactInspector
+                activeTab={activeTab}
+                onChangeTab={setActiveTab}
+                tabs={[
+                    {
+                        key: "Overview",
+                        label: "Overview",
+                        content: (
+                            <div className="p-4 text-gray-400 text-center mt-10 text-sm">
+                                Overview Content Area
+                                <br />
+                                (Coming Soon)
+                            </div>
+                        ),
+                    },
+                    {
+                        key: "Elements",
+                        label: "Elements",
+                        content: (
+                            <div className="p-4 text-gray-400 text-center mt-10 text-sm">
+                                Elements Content Area
+                                <br />
+                                (Coming Soon)
+                            </div>
+                        ),
+                    },
+                    {
+                        key: "Tasks",
+                        label: "Tasks",
+                        content: (
+                            <div className="p-4 text-gray-400 text-center mt-10 text-sm">
+                                Tasks Content Area
+                                <br />
+                                (Coming Soon)
+                            </div>
+                        ),
+                    },
+                    { key: "Printing", label: "Printing", content: <PrintingPanel projectId={projectId} /> },
+                    { key: "Trello", label: "Trello", content: <TrelloPanel projectId={projectId} /> },
+                ]}
             />
         </div>
     );

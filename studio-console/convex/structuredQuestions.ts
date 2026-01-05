@@ -180,70 +180,47 @@ export const saveAnswers = mutation({
             updatedAt: Date.now(),
         });
 
-        // --- KNOWLEDGE NOTES UPDATER INTEGRATION ---
+        // --- TURN BUNDLE + RUNNING MEMORY (RAW, IMMEDIATE) ---
+        // Persist a TurnBundle so the structured session becomes a first-class "turn".
+        // The TurnBundle pipeline will append the RAW Q&A transcript to Running Memory synchronously
+        // (no LLM summarization) so the next question generation can depend on it.
         const session = await ctx.db.get(args.sessionId);
         if (session) {
-            const qaPairs = (turn.questions as any[]).map((q: any) => {
-                const answer = normalizedAnswers.find(a => a.questionId === q.id);
-                if (!answer) return null;
-                const answerText = answer.quick === "yes" ? "Yes" :
-                    answer.quick === "no" ? "No" :
-                        answer.quick === "idk" ? "Don't Know" :
-                            answer.quick === "irrelevant" ? "Irrelevant" : answer.quick;
+            const stageMap: Record<string, "ideation" | "planning" | "solutioning"> = {
+                clarification: "ideation",
+                planning: "planning",
+                solutioning: "solutioning",
+            };
+            const mappedStage = stageMap[session.stage] ?? "ideation";
 
-                return `Q: ${q.text || q.title || q.prompt}\nA: ${answerText} ${answer.text ? `(${answer.text})` : ""}`;
-            }).filter(Boolean).join("\n\n");
-
-            const fullContent = `Structured Answers (Turn ${args.turnNumber}):\n\n${qaPairs}\n\nUser Note: ${args.userInstructions || "(none)"}`;
-
-            // --- NEW MEMORY SYSTEM ---
-            // We force this update to happen BEFORE the next agent run by using runMutation directly or
-            // relying on Convex's scheduling guarantees if they are in the same transaction.
-            // But appendTurnSummary is an action (calling LLM), so it must be scheduled.
-            // The Agent run is triggered by the UI polling or calling `runControllerStep`?
-            // Actually, `StructuredQuestionsPanel` calls `saveAnswers`. It does NOT trigger the agent immediately.
-            // Wait, looking at `StructuredQuestionsPanel.tsx`:
-            // `await saveAnswers(...)` -> `setIsSubmitting(false)` -> Render updates.
-            // `ActiveSessionView` renders based on `latestTurn`.
-            // The agent creates the NEXT turn. Who calls the agent?
-            // `StructuredQuestionsPanel` calls `startSession` then `runAgent` initially.
-            // But for subsequent turns?
-            // It seems `runControllerStep` in `controller.ts` creates the turn and returns questions.
-            // If the UI just saves answers, how does the next turn get generated?
-            // Ah, the Controller Loop.
-            // The user submits answers. The UI then... waits?
-            // `StructuredQuestionsPanel` just updates state.
-            // If the controller is running, it should pick up the answers.
-            // But where is the "Continue" button?
-            // In `StructuredQuestionsPanel.tsx`, `handleSubmit` calls `saveAnswers`.
-            // There is no explicit "Generate Next" call in the UI code I read.
-            // Ah, `StructuredQuestionsPanel` in `handleSubmit`:
-            // `await saveAnswers(...)`
-            // That's it.
-            // If the user is in "Agent" tab (Controller), the Controller logic handles the flow.
-            // `controller.ts` -> `runControllerStepLogic`:
-            // It checks `latestSession`. If `status` is `active`, it might resume?
-            // But `controller.ts` calls `runSkill`.
-            // `StructuredQuestionsPanel` seems standalone or embedded.
-            // If embedded in `Agent` page:
-            // The `Agent` page likely re-runs the controller loop after submit?
-            // Let's assume the user clicks "Send answers & continue" in `Agent` page.
-            // In `Agent` page: `handleQuestionSubmit` updates local state?
-            // Wait, `StructuredQuestionsPanel` is used in `FlowWorkbench` probably.
-            // In `Agent` page, there is custom UI for questions.
-            // `studio-console/app/projects/[id]/agent/page.tsx` has `handleQuestionSubmit`.
-            // It calls `submitSuggestions`? No.
-            // `handleQuestionSubmit` seems to be for a different flow or I missed it.
-            //
-            // Let's assume `saveAnswers` IS the trigger for data persistence.
-            // We want memory updated.
-            
-            await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
+            const itemRefs = await ctx.runQuery(internal.items.getItemRefs, {
                 projectId: session.projectId,
-                stage: session.stage,
-                channel: "structured",
-                userText: fullContent,
-                assistantText: "(answers submitted)",
+            });
+
+            const structuredQuestions = (turn.questions as any[]).map((q: any) => ({
+                id: String(q.id ?? ""),
+                text: String(q.text || q.title || q.prompt || ""),
+            })).filter((q: any) => q.id && q.text);
+
+            const userAnswers = normalizedAnswers.map((a) => ({
+                qId: a.questionId,
+                quick: a.quick,
+                text: a.text,
+            }));
+
+            await ctx.runMutation(internal.turnBundles.createFromTurn, {
+                projectId: session.projectId,
+                stage: mappedStage,
+                scope: { type: "project" as const },
+                source: {
+                    type: "structuredQuestions" as const,
+                    sourceIds: [String(args.sessionId), `turn:${turn._id}`, `turnNumber:${args.turnNumber}`],
+                },
+                itemRefs,
+                structuredQuestions,
+                userAnswers,
+                freeChat: args.userInstructions?.trim() ? `User Note: ${args.userInstructions.trim()}` : undefined,
+                agentOutput: "(answers submitted)",
             });
         }
     },

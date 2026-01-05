@@ -1,4 +1,4 @@
-import { action, internalQuery } from "../_generated/server";
+import { action, query } from "../_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "../_generated/api";
 import { Id } from "../_generated/dataModel";
@@ -19,19 +19,84 @@ export type ControllerStepResult = {
     sessionId?: Id<"agentQuestionSessions">;
 };
 
+function isContinueSignal(userMessage: string | undefined | null) {
+    const trimmed = (userMessage ?? "").trim();
+    return trimmed.length === 0 || trimmed.toLowerCase() === "continue";
+}
+
+function shouldSuggestSkill(skillKey: string) {
+    if (!skillKey) return false;
+    const blacklist = new Set(["controller.autonomousPlanner", "ux.suggestedActionsTop3"]);
+    if (blacklist.has(skillKey)) return false;
+    if (skillKey.startsWith("ux.")) return false;
+    if (skillKey.startsWith("controller.")) return false;
+    return true;
+}
+
+function pickSuggestedSkillKeys(params: {
+    enabledSkillKeys: string[];
+    activeSkillKey: string | null;
+    lastShownSkillKeys: string[];
+    count: number;
+}) {
+    const { enabledSkillKeys, activeSkillKey, lastShownSkillKeys, count } = params;
+    const filtered = enabledSkillKeys
+        .filter(shouldSuggestSkill)
+        .filter((k) => k !== activeSkillKey);
+
+    const lastSet = new Set(lastShownSkillKeys);
+    const scored = filtered.map((k) => ({
+        skillKey: k,
+        score: lastSet.has(k) ? -1 : 0,
+    }));
+
+    scored.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.skillKey.localeCompare(b.skillKey);
+    });
+
+    return scored.slice(0, count).map((s) => s.skillKey);
+}
+
+type StructuredStage = "clarification" | "planning" | "solutioning";
+
+function normalizePinnedString(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    if (value === "auto") return null;
+    return typeof value === "string" ? value : String(value);
+}
+
+function toStructuredStage(value: unknown, fallback: StructuredStage): StructuredStage {
+    if (value === "clarification" || value === "planning" || value === "solutioning") return value;
+    if (value === "ideation") return "clarification";
+    return fallback;
+}
+
 // The core logic (helper)
 export async function runControllerStepLogic(
     ctx: any,
-    args: { projectId: Id<"projects">; threadId: Id<"chatThreads">; userMessage?: string }
+    args: {
+        projectId: Id<"projects">;
+        threadId?: Id<"chatThreads">;
+        conversationId?: Id<"projectConversations">;
+        userMessage?: string;
+    }
 ): Promise<ControllerStepResult> {
 
     // 1. Read Workspace State
     // 1. Read Workspace State
-    const state = await ctx.runQuery(internal.agents.controller.getWorkspaceState, {
-        projectId: args.projectId
+    const state = await ctx.runQuery(api.agents.controller.getWorkspaceState, {
+        projectId: args.projectId,
+        conversationId: args.conversationId,
     });
     const workspace = state?.workspace;
     const latestSession = state?.latestSession;
+
+    const conversation = args.conversationId ? await ctx.db.get(args.conversationId) : null;
+    const pinnedStage = normalizePinnedString(workspace?.stagePinned);
+    const effectiveStage = pinnedStage ?? conversation?.stageTag ?? "planning";
+    const structuredStage = toStructuredStage(effectiveStage, "planning");
+    const effectiveChannel = workspace?.channelPinned ?? conversation?.defaultChannel ?? "free";
 
     let finalUserMessage = args.userMessage || "Continue planning";
     if (latestSession && latestSession.status === "skipped") {
@@ -48,7 +113,7 @@ export async function runControllerStepLogic(
     const runId = await ctx.runMutation(internal.agentRuns.createRun, {
         projectId: args.projectId,
         agent: "controller",
-        stage: workspace?.stagePinned || "planning",
+        stage: effectiveStage,
         initialMessage: "Controller loop started"
     });
 
@@ -65,8 +130,8 @@ export async function runControllerStepLogic(
     const input = {
         ...(workspace || {}),
         projectId: args.projectId,
-        stagePinned: workspace?.stagePinned || "planning",
-        channelPinned: workspace?.channelPinned || "free",
+        stagePinned: effectiveStage,
+        channelPinned: effectiveChannel,
         skillPinned: workspace?.skillPinned || null,
         userMessage: finalUserMessage,
         recentTranscript: (state as any)?.transcript || "",
@@ -112,13 +177,13 @@ export async function runControllerStepLogic(
 
     // 3. Handle Decision
     if (mode === "ask_questions") {
-        const stage = workspace?.stagePinned || "planning";
+        const stage = structuredStage;
 
         // 1. Start a Structured Session (Archives old ones, creates new 'active' one)
         const sessionId = await ctx.runMutation(api.structuredQuestions.startSession, {
             projectId: args.projectId,
             stage: stage as any,
-            conversationId: undefined // Controller uses chatThreads, so we don't bind to a specific projectConversation
+            conversationId: args.conversationId
         });
 
         // 2. Map Brain Questions to StructuredQuestions Schema
@@ -163,7 +228,7 @@ export async function runControllerStepLogic(
         if (suggestionSet) {
             await ctx.runMutation(api.agentSuggestionSets.create, {
                 projectId: args.projectId,
-                stage: workspace?.stagePinned || "planning",
+                stage: effectiveStage,
                 suggestionSetId: `auto-${Date.now()}`,
                 sections: [{ title: suggestionSet.title || "Suggestions", items: suggestionSet.items || [] }]
             });
@@ -212,7 +277,7 @@ export async function runControllerStepLogic(
         if (subArtifacts && Array.isArray(subArtifacts.concepts)) {
             await ctx.runMutation(api.agentSuggestionSets.create, {
                 projectId: args.projectId,
-                stage: workspace?.stagePinned || "ideation",
+                stage: effectiveStage,
                 suggestionSetId: `auto-${Date.now()}`,
                 sections: [{ title: "Generated Concepts", items: subArtifacts.concepts }]
             });
@@ -266,14 +331,21 @@ export const runControllerStep = action({
     }
 });
 
-// Internal Query
-export const getWorkspaceState = internalQuery({
-    args: { projectId: v.id("projects") },
+// Public Query (used by the Studio UI)
+export const getWorkspaceState = query({
+    args: { projectId: v.id("projects"), conversationId: v.optional(v.id("projectConversations")) },
     handler: async (ctx, args) => {
-        const workspace = await ctx.db
-            .query("projectWorkspaces")
-            .withIndex("by_project", q => q.eq("projectId", args.projectId))
-            .first();
+        const workspace = args.conversationId
+            ? await ctx.db
+                .query("projectWorkspaces")
+                .withIndex("by_project_conversation", (q) =>
+                    q.eq("projectId", args.projectId).eq("conversationId", args.conversationId)
+                )
+                .first()
+            : await ctx.db
+                .query("projectWorkspaces")
+                .withIndex("by_project", q => q.eq("projectId", args.projectId))
+                .first();
 
         // Fetch most recent structured session to check for skips or transcript
         const sessions = await ctx.db
@@ -339,10 +411,87 @@ export const continueRun = action({
             conversationId: args.conversationId
         });
 
+        const [workspace, conversation] = await Promise.all([
+            ctx.db.get(workspaceId),
+            ctx.db.get(args.conversationId),
+        ]);
+
+        const pinnedStageArg = normalizePinnedString(args.stagePinned);
+        const pinnedStageWorkspace = normalizePinnedString(workspace?.stagePinned);
+        const resolvedStage = pinnedStageArg ?? pinnedStageWorkspace ?? conversation?.stageTag ?? "planning";
+        const resolvedChannel =
+            args.channelPinned ?? workspace?.channelPinned ?? conversation?.defaultChannel ?? "free";
+
+        const enabledSkills = await ctx.runQuery(api.agents.skills.listEnabled, {
+            stage: resolvedStage ?? undefined,
+        });
+
+        const enabledSkillKeys = (enabledSkills ?? [])
+            .map((s: any) => s.skillKey)
+            .filter((k: any): k is string => typeof k === "string" && k.length > 0);
+
+        const lastShownSkillKeys =
+            (workspace as any)?.lastSuggestionsState?.shownSkillKeys ?? ([] as string[]);
+        const activeSkillKey =
+            (args.skillPinned ?? (workspace as any)?.activeSkillKey ?? workspace?.skillPinned ?? null) as
+            | string
+            | null;
+
+        const agentMode = (workspace as any)?.agentMode ?? "manual";
+
+        const suggestedSkillKeys = pickSuggestedSkillKeys({
+            enabledSkillKeys,
+            activeSkillKey,
+            lastShownSkillKeys,
+            count: 4,
+        });
+
+        const resolvedSkillPinned =
+            agentMode === "workflow"
+                ? (args.skillPinned ?? workspace?.skillPinned ?? null)
+                : (args.skillPinned ??
+                    workspace?.skillPinned ??
+                    (isContinueSignal(args.userMessage) ? (suggestedSkillKeys[0] ?? null) : null));
+
+        // Persist pins & suggestion state for stable UX
+        await ctx.runMutation(api.projectWorkspaces.setPins, {
+            workspaceId,
+            stagePinned: pinnedStageArg,
+            skillPinned: resolvedSkillPinned,
+            channelPinned: args.channelPinned,
+        });
+        await ctx.runMutation(api.projectWorkspaces.setActiveSkill, {
+            workspaceId,
+            activeSkillKey: resolvedSkillPinned,
+        });
+        await ctx.runMutation(api.projectWorkspaces.setLastSuggestionsState, {
+            workspaceId,
+            shownSkillKeys: suggestedSkillKeys,
+            shownAt: Date.now(),
+        });
+
+        // Append user message only when it is actual user input (not Continue)
+        if (args.userMessage && !isContinueSignal(args.userMessage)) {
+            await ctx.runMutation(internal.projectConversations.appendMessage, {
+                conversationId: args.conversationId,
+                projectId: args.projectId,
+                role: "user",
+                content: args.userMessage,
+                stage: resolvedStage as any,
+                channel: resolvedChannel as any,
+            });
+            await ctx.runMutation(internal.projectConversations.touchConversation, {
+                conversationId: args.conversationId,
+                updatedAt: Date.now(),
+                lastMessageAt: Date.now(),
+            });
+        }
+
         // 2. Run Logic
         const result = await runControllerStepLogic(ctx, {
             projectId: args.projectId,
             threadId: undefined as any,
+            conversationId: args.conversationId,
             userMessage: args.userMessage
         });
 
@@ -354,12 +503,15 @@ export const continueRun = action({
 
         const controllerOutput = {
             mode,
-            stage: args.stagePinned || "planning",
+            stage: resolvedStage ?? "planning",
             assistantSummary: result.thought || "",
             questions: result.questions || [],
             artifacts: result.artifacts || {},
             pendingChangeSet: result.changeSet || null,
-            nextSuggestedActions: []
+            nextSuggestedActions: suggestedSkillKeys.map((skillKey) => ({
+                skillKey,
+                label: (enabledSkills ?? []).find((s: any) => s.skillKey === skillKey)?.name ?? skillKey,
+            }))
         };
 
         // 4. Persist
@@ -367,6 +519,22 @@ export const continueRun = action({
             workspaceId,
             artifactsIndex: { lastControllerOutput: controllerOutput }
         });
+
+        if (result.thought && result.thought.trim().length > 0) {
+            await ctx.runMutation(internal.projectConversations.appendMessage, {
+                conversationId: args.conversationId,
+                projectId: args.projectId,
+                role: "assistant",
+                content: result.thought,
+                stage: resolvedStage as any,
+                channel: resolvedChannel as any,
+            });
+            await ctx.runMutation(internal.projectConversations.touchConversation, {
+                conversationId: args.conversationId,
+                updatedAt: Date.now(),
+                lastMessageAt: Date.now(),
+            });
+        }
 
         return { success: true };
     }

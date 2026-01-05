@@ -8,8 +8,7 @@ import remarkGfm from "remark-gfm";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { ChatComposer } from "../_components/chat/ChatComposer";
-import { AgentActivityPanel } from "../_components/AgentActivityPanel";
-import { FactsPanel } from "../_components/facts/FactsPanel";
+import { ArtifactInspector } from "../_components/inspector/ArtifactInspector";
 import { useModel } from "@/app/_context/ModelContext";
 import { useThinkingMode } from "@/app/_context/ThinkingModeContext";
 
@@ -132,8 +131,9 @@ export default function AgentPage() {
     const [runError, setRunError] = useState<string | null>(null);
     const [activeChangeSetId, setActiveChangeSetId] = useState<Id<"itemChangeSets"> | null>(null);
     const [inspectorTab, setInspectorTab] = useState<
-        "overview" | "facts" | "elements" | "tasks" | "printing" | "trello" | "raw"
+        "overview" | "elements" | "tasks" | "printing" | "trello"
     >("overview");
+    const [agentMode, setAgentModeLocal] = useState<"manual" | "workflow">("manual");
 
     const conversations = useQuery(api.projectConversations.list, {
         projectId,
@@ -153,6 +153,7 @@ export default function AgentPage() {
 
     const ensureWorkspace = useMutation(api.projectWorkspaces.ensure);
     const setPins = useMutation(api.projectWorkspaces.setPins);
+    const setAgentMode = useMutation(api.projectWorkspaces.setAgentMode);
     const workspace = useQuery(
         api.projectWorkspaces.getByConversation,
         selectedConversationId ? { projectId, conversationId: selectedConversationId } : "skip"
@@ -191,6 +192,8 @@ export default function AgentPage() {
         if (workspace.stagePinned) setStagePinned(workspace.stagePinned as StagePin);
         if (workspace.skillPinned) setSkillPinned(workspace.skillPinned);
         if (workspace.channelPinned) setChannelPinned(workspace.channelPinned as ChannelPin);
+        if ((workspace as any).agentMode === "workflow") setAgentModeLocal("workflow");
+        else setAgentModeLocal("manual");
     }, [workspace]);
 
     useEffect(() => {
@@ -227,11 +230,14 @@ export default function AgentPage() {
 
     const persistPins = async (next: { stage?: StagePin; skill?: string; channel?: ChannelPin }) => {
         if (!workspace?._id) return;
+        const nextStagePinned = next.stage ?? stagePinned;
+        const nextSkillPinned = next.skill ?? skillPinned;
+        const nextChannelPinned = next.channel ?? channelPinned;
         await setPins({
             workspaceId: workspace._id,
-            stagePinned: next.stage ?? stagePinned,
-            skillPinned: next.skill ?? skillPinned,
-            channelPinned: next.channel ?? channelPinned,
+            stagePinned: nextStagePinned === "auto" ? null : nextStagePinned,
+            skillPinned: nextSkillPinned === "auto" ? null : nextSkillPinned,
+            channelPinned: nextChannelPinned === "auto" ? null : nextChannelPinned,
         });
     };
 
@@ -250,19 +256,26 @@ export default function AgentPage() {
     const applyChangeSet = useMutation(api.changeSets.apply);
     const rejectChangeSet = useMutation(api.changeSets.reject);
 
-    const runControllerWithMessage = async (message: string) => {
+    const runControllerWithMessage = async (
+        message: string,
+        overrides?: { stagePinned?: StagePin; skillPinned?: string; channelPinned?: ChannelPin }
+    ) => {
         if (!selectedConversationId) return;
         setRunStatus("running");
         setRunError(null);
         try {
+            const effectiveStagePinned = overrides?.stagePinned ?? stagePinned;
+            const effectiveSkillPinned = overrides?.skillPinned ?? skillPinned;
+            const effectiveChannelPinned = overrides?.channelPinned ?? channelPinned;
+
             await runController({
                 projectId,
                 conversationId: selectedConversationId,
                 userMessage: message,
                 mode: "continue",
-                stagePinned: stagePinned === "auto" ? null : stagePinned,
-                skillPinned: skillPinned === "auto" ? null : skillPinned,
-                channelPinned: channelPinned === "auto" ? null : channelPinned,
+                stagePinned: effectiveStagePinned === "auto" ? null : effectiveStagePinned,
+                skillPinned: effectiveSkillPinned === "auto" ? null : effectiveSkillPinned,
+                channelPinned: effectiveChannelPinned === "auto" ? null : effectiveChannelPinned,
                 model: selectedModel,
                 thinkingMode,
             });
@@ -273,6 +286,23 @@ export default function AgentPage() {
             setRunStatus("idle");
         }
     };
+
+    const getSuggestionDisabledReason = (skillKey?: string) => {
+        if (!skillKey) return "Missing skill key";
+        if (!selectedConversationId) return "Select a conversation";
+        if (runStatus === "running") return "Agent is running";
+        if (agentMode === "workflow") return "Workflow mode: suggestions are disabled";
+        if (skillPinned !== "auto" && skillPinned === skillKey) return "Already selected";
+        return null;
+    };
+
+    const activeWorkflowRunId = (workspace as any)?.activeWorkflowRunId ?? null;
+    const continueDisabledReason = (() => {
+        if (!selectedConversationId) return "Select a conversation";
+        if (runStatus === "running") return "Agent is running";
+        if (agentMode === "workflow" && !activeWorkflowRunId) return "Start a workflow";
+        return null;
+    })();
 
     const handleQuestionSubmit = async () => {
         const lines = questions.map((q, idx) => {
@@ -344,6 +374,25 @@ export default function AgentPage() {
         <div className="flex flex-col gap-4 h-[calc(100vh-2rem)] min-h-0 overflow-hidden">
             <div className="bg-white border rounded-lg shadow-sm p-4 flex flex-wrap items-center gap-4 justify-between">
                 <div className="flex flex-wrap items-center gap-3">
+                    <label className="text-sm flex items-center gap-2">
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Mode</span>
+                        <select
+                            className="border rounded px-2 py-1 text-sm bg-white"
+                            data-testid="agent-mode"
+                            aria-label="Agent mode"
+                            value={agentMode}
+                            onChange={(event) => {
+                                const next = event.target.value === "workflow" ? "workflow" : "manual";
+                                setAgentModeLocal(next);
+                                if (!workspace?._id) return;
+                                void setAgentMode({ workspaceId: workspace._id, agentMode: next });
+                            }}
+                            disabled={!workspace?._id}
+                        >
+                            <option value="manual">Manual</option>
+                            <option value="workflow">Workflow</option>
+                        </select>
+                    </label>
                     <label className="text-sm flex items-center gap-2">
                         <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Stage</span>
                         <select
@@ -813,6 +862,18 @@ export default function AgentPage() {
                                     onSend={async (content) => {
                                         await runControllerWithMessage(content);
                                     }}
+                                    onContinue={() => {
+                                        if (continueDisabledReason) return;
+                                        void runControllerWithMessage("Continue");
+                                    }}
+                                    onPickSuggestion={(index) => {
+                                        if (!selectedConversationId || runStatus === "running") return;
+                                        const picked = suggestedActions[index];
+                                        const disabledReason = getSuggestionDisabledReason(picked?.skillKey);
+                                        if (disabledReason) return;
+                                        setSkillPinned(picked.skillKey);
+                                        void runControllerWithMessage("Continue", { skillPinned: picked.skillKey });
+                                    }}
                                 />
                             </div>
                         )}
@@ -820,122 +881,168 @@ export default function AgentPage() {
                 </div>
 
                 <div className="bg-white border rounded-lg shadow-sm flex flex-col min-h-0 overflow-hidden">
-                    <div className="p-3 border-b">
-                        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Timeline</div>
+                    <div className="p-3 border-b bg-white">
+                        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Next</div>
+                        <div className="text-[11px] text-gray-500 mt-1">Continue + suggested skills (Phase 2)</div>
                     </div>
-                    <div className="flex-1 min-h-0 overflow-hidden">
-                        <AgentActivityPanel projectId={projectId} />
+                    <div className="p-3 border-b bg-gray-50">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (continueDisabledReason) return;
+                                void runControllerWithMessage("Continue");
+                            }}
+                            className="w-full text-xs px-3 py-2 rounded bg-blue-600 text-white disabled:opacity-50"
+                            data-testid="agent-continue"
+                            disabled={!!continueDisabledReason}
+                            title={continueDisabledReason ?? undefined}
+                        >
+                            {runStatus === "running" ? "Running..." : "Continue"}
+                        </button>
+                        <div className="mt-3 flex flex-wrap gap-2" data-testid="agent-suggestions">
+                            {suggestedActions.length === 0 ? (
+                                <span className="text-xs text-gray-500">No suggestions yet.</span>
+                            ) : (
+                                suggestedActions.slice(0, 5).map((action, idx) => (
+                                    (() => {
+                                        const disabledReason = getSuggestionDisabledReason(action.skillKey);
+                                        const isDisabled = !!disabledReason;
+                                        return (
+                                    <button
+                                        key={`${action.skillKey ?? "action"}-${idx}`}
+                                        type="button"
+                                        className="text-xs px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-white disabled:opacity-50"
+                                        data-testid={`agent-suggestion-${idx + 1}`}
+                                        data-skill-key={action.skillKey ?? ""}
+                                        onClick={() => {
+                                            if (isDisabled) return;
+                                            setSkillPinned(action.skillKey);
+                                            void runControllerWithMessage("Continue", { skillPinned: action.skillKey });
+                                        }}
+                                        disabled={isDisabled}
+                                        title={disabledReason ?? undefined}
+                                    >
+                                        {action.label ?? action.skillKey ?? "Action"}
+                                    </button>
+                                        );
+                                    })()
+                                ))
+                            )}
+                        </div>
                     </div>
-                </div>
-            </div>
 
-            <div className="grid gap-4 min-h-0 grid-cols-[1fr_360px]">
-                <div className="bg-white border rounded-lg shadow-sm p-4 space-y-3">
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Controller output</div>
-                    {controllerOutput ? (
-                        <div className="text-sm text-gray-800 whitespace-pre-wrap">
-                            {controllerOutput.assistantSummary}
-                        </div>
-                    ) : (
-                        <div className="text-sm text-gray-500">No controller output yet.</div>
-                    )}
-                    {controllerOutput?.pendingChangeSet?.summary && (
-                        <div className="border rounded p-3 text-xs bg-yellow-50 text-yellow-900">
-                            Pending change set: {controllerOutput.pendingChangeSet.summary}
-                        </div>
-                    )}
-                </div>
-                <div className="bg-white border rounded-lg shadow-sm p-4 space-y-3 flex flex-col min-h-0">
-                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Inspector</div>
-                    <div className="flex flex-wrap gap-2">
-                        {["overview", "facts", "elements", "tasks", "printing", "trello", "raw"].map((tab) => (
-                            <button
-                                key={tab}
-                                type="button"
-                                className={`text-[10px] px-2 py-1 rounded border ${inspectorTab === tab ? "border-blue-500 text-blue-700" : "border-gray-200 text-gray-500"}`}
-                                onClick={() => setInspectorTab(tab as typeof inspectorTab)}
-                            >
-                                {tab}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="flex-1 min-h-0 overflow-y-auto border rounded p-3 bg-gray-50">
-                        {inspectorTab === "overview" && (
-                            <div className="text-xs text-gray-700 whitespace-pre-wrap">
-                                {controllerOutput?.assistantSummary ?? "No summary yet."}
-                            </div>
-                        )}
-                        {inspectorTab === "facts" && <FactsPanel projectId={projectId} />}
-                        {inspectorTab === "elements" && (
-                            <div className="text-xs text-gray-600 space-y-2">
-                                <div>Elements view is in the Elements tab.</div>
-                                <button
-                                    type="button"
-                                    className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
-                                    onClick={() => router.push(`/projects/${projectId}/elements`)}
-                                >
-                                    Open Elements
-                                </button>
-                            </div>
-                        )}
-                        {inspectorTab === "tasks" && (
-                            <div className="text-xs text-gray-600 space-y-2">
-                                <div>Tasks view is in the Tasks tab.</div>
-                                <button
-                                    type="button"
-                                    className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
-                                    onClick={() => router.push(`/projects/${projectId}/tasks`)}
-                                >
-                                    Open Tasks
-                                </button>
-                            </div>
-                        )}
-                        {inspectorTab === "printing" && (
-                            <div className="text-xs text-gray-700 space-y-2">
-                                <div className="font-semibold text-gray-800">Printing</div>
-                                <div>Groups: {printingSummary?.groupCount ?? 0}</div>
-                                <div>Files: {printingSummary?.fileCount ?? 0}</div>
-                                {printingSummary?.lastQaRun ? (
-                                    <div className="border rounded p-2 bg-white text-[11px] text-gray-600 space-y-1">
-                                        <div>Last QA: {new Date(printingSummary.lastQaRun.createdAt).toLocaleString()}</div>
-                                        <div>Verdict: {printingSummary.lastQaRun.componentVerdict ?? "-"}</div>
-                                        <div>Score: {printingSummary.lastQaRun.score ?? "-"}</div>
+                    <ArtifactInspector
+                        activeTab={inspectorTab}
+                        onChangeTab={(next) => setInspectorTab(next as typeof inspectorTab)}
+                        tabs={[
+                            {
+                                key: "overview",
+                                label: "Overview",
+                                content: (
+                                    <div className="p-4 text-xs text-gray-700 whitespace-pre-wrap">
+                                        {controllerOutput?.assistantSummary ?? "No summary yet."}
+                                        <div className="mt-3">
+                                            <button
+                                                type="button"
+                                                className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
+                                                onClick={() => router.push(`/projects/${projectId}/overview`)}
+                                            >
+                                                Open Overview
+                                            </button>
+                                        </div>
                                     </div>
-                                ) : (
-                                    <div className="text-[11px] text-gray-500">No QA runs yet.</div>
-                                )}
-                            </div>
-                        )}
-                        {inspectorTab === "trello" && (
-                            <div className="text-xs text-gray-700 space-y-2">
-                                <div className="font-semibold text-gray-800">Trello</div>
-                                <div>Board: {trelloConfig?.boardId ?? "Not configured"}</div>
-                                <div>
-                                    Last sync:{" "}
-                                    {trelloSyncState?.lastSyncedAt
-                                        ? new Date(trelloSyncState.lastSyncedAt).toLocaleString()
-                                        : "Never"}
-                                </div>
-                                <div>
-                                    Mapped tasks: {trelloSyncState?.mappedTaskCount ?? 0} / {trelloSyncState?.totalTasks ?? 0}
-                                </div>
-                                <button
-                                    type="button"
-                                    className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
-                                    onClick={() => router.push(`/projects/${projectId}/trello-view`)}
-                                >
-                                    Open Trello
-                                </button>
-                            </div>
-                        )}
-                        {inspectorTab === "raw" && (
-                            <pre className="text-[11px] text-gray-700 whitespace-pre-wrap">
-                                {controllerOutput?.artifacts
-                                    ? JSON.stringify(controllerOutput.artifacts, null, 2)
-                                    : "No artifacts yet."}
-                            </pre>
-                        )}
-                    </div>
+                                ),
+                            },
+                            {
+                                key: "elements",
+                                label: "Elements",
+                                content: (
+                                    <div className="p-4 text-xs text-gray-600 space-y-2">
+                                        <div>Elements view is in the Elements tab.</div>
+                                        <button
+                                            type="button"
+                                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
+                                            onClick={() => router.push(`/projects/${projectId}/elements`)}
+                                        >
+                                            Open Elements
+                                        </button>
+                                    </div>
+                                ),
+                            },
+                            {
+                                key: "tasks",
+                                label: "Tasks",
+                                content: (
+                                    <div className="p-4 text-xs text-gray-600 space-y-2">
+                                        <div>Tasks view is in the Tasks tab.</div>
+                                        <button
+                                            type="button"
+                                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
+                                            onClick={() => router.push(`/projects/${projectId}/tasks`)}
+                                        >
+                                            Open Tasks
+                                        </button>
+                                    </div>
+                                ),
+                            },
+                            {
+                                key: "printing",
+                                label: "Printing",
+                                content: (
+                                    <div className="p-4 text-xs text-gray-700 space-y-2">
+                                        <div className="font-semibold text-gray-800">Printing</div>
+                                        <div>Groups: {printingSummary?.groupCount ?? 0}</div>
+                                        <div>Files: {printingSummary?.fileCount ?? 0}</div>
+                                        {printingSummary?.lastQaRun ? (
+                                            <div className="border rounded p-2 bg-white text-[11px] text-gray-600 space-y-1">
+                                                <div>
+                                                    Last QA: {new Date(printingSummary.lastQaRun.createdAt).toLocaleString()}
+                                                </div>
+                                                <div>Verdict: {printingSummary.lastQaRun.componentVerdict ?? "-"}</div>
+                                                <div>Score: {printingSummary.lastQaRun.score ?? "-"}</div>
+                                            </div>
+                                        ) : (
+                                            <div className="text-[11px] text-gray-500">No QA runs yet.</div>
+                                        )}
+                                        <button
+                                            type="button"
+                                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
+                                            onClick={() => router.push(`/projects/${projectId}/studio`)}
+                                        >
+                                            Open Studio
+                                        </button>
+                                    </div>
+                                ),
+                            },
+                            {
+                                key: "trello",
+                                label: "Trello",
+                                content: (
+                                    <div className="p-4 text-xs text-gray-700 space-y-2">
+                                        <div className="font-semibold text-gray-800">Trello</div>
+                                        <div>Board: {trelloConfig?.boardId ?? "Not configured"}</div>
+                                        <div>
+                                            Last sync:{" "}
+                                            {trelloSyncState?.lastSyncedAt
+                                                ? new Date(trelloSyncState.lastSyncedAt).toLocaleString()
+                                                : "Never"}
+                                        </div>
+                                        <div>
+                                            Mapped tasks: {trelloSyncState?.mappedTaskCount ?? 0} / {trelloSyncState?.totalTasks ?? 0}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
+                                            onClick={() => router.push(`/projects/${projectId}/trello-view`)}
+                                        >
+                                            Open Trello
+                                        </button>
+                                    </div>
+                                ),
+                            },
+                        ]}
+                        className="flex-1 min-h-0"
+                    />
                 </div>
             </div>
         </div>

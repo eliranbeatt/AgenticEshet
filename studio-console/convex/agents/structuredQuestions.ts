@@ -264,14 +264,18 @@ RULES:
 1) Return 1 to 4 questions only.
 2) You MUST return JSON matching the schema below.
 3) At least 2 questions per turn must be questionType="boolean" (when possible).
-4) Do NOT ask anything already answered.
-5) Ask highest-leverage blockers first: dates/windows, venue access/rules, approvals/safety, and missing element sizes/qty/finish.
-6) Efficiency: set sessionState.done=true ONLY when:
+4) You MUST read the entire RUNNING MEMORY before generating questions.
+5) Do NOT ask anything already answered (in prior turns OR in Running Memory transcripts).
+6) Never repeat the same question (same meaning) unless:
+    - you detect a contradiction between a new answer and existing memory, OR
+    - the user SKIPPED a BLOCKING question and it is truly critical.
+7) Ask highest-leverage blockers first: dates/windows, venue access/rules, approvals/safety, and missing element sizes/qty/finish.
+8) Efficiency: set sessionState.done=true ONLY when:
    - install/shoot/strike dates are known OR explicitly "TBD but flexible",
    - venue constraints/access are known OR explicitly unknown with assumptions,
    - top 3 elements have enough info to plan (size/qty/finish tier),
    - and user says they have no more info OR wants to proceed.
-7) Always try to attach a question to a specific element when relevant (tag it with element-like tags: ["element:floor","element:prop","element:branding"]).
+9) Always try to attach a question to a specific element when relevant (tag it with element-like tags: ["element:floor","element:prop","element:branding"]).
 
 OUTPUT JSON SCHEMA (EXACT KEYS):
 {
@@ -504,20 +508,38 @@ function buildUserPrompt(turns: any[], context: {
     }
 
 
-    const history = turns.map(t => {
+    const history = turns.map((t) => {
+        const questions = (t.questions ?? []) as any[];
+        const answers = (t.answers ?? []) as any[];
 
-        return `Turn ${t.turnNumber}:
+        const lines: string[] = [];
+        lines.push(`Turn ${t.turnNumber}:`);
+        lines.push("");
 
-Questions:
+        if (questions.length === 0) {
+            lines.push("(no questions)");
+        } else {
+            for (const q of questions) {
+                const qId = String(q.id ?? "");
+                const title = String(q.title ?? "");
+                const prompt = q.prompt ? String(q.prompt) : "";
+                const answer = answers.find((a) => String(a.questionId ?? "") === qId);
 
-${t.questions.map((q: any) => `- ${q.title} (${q.questionType})`).join("\n")}
+                lines.push(`- id=${qId} type=${q.questionType} title=${title}`);
+                if (prompt) lines.push(`  prompt: ${prompt}`);
+                if (answer) {
+                    const text = answer.text ? ` ${String(answer.text)}` : "";
+                    lines.push(`  answer: [${answer.quick}]${text}`);
+                } else {
+                    lines.push(`  answer: (SKIPPED)`);
+                }
+            }
+        }
 
-Answers:
+        lines.push("");
+        lines.push(`User Instructions: ${t.userInstructions || "None"}`);
 
-${t.answers ? t.answers.map((a: any) => `- [${a.quick}] ${a.text || ""}`).join("\n") : "No answers yet"}
-
-User Instructions: ${t.userInstructions || "None"}`;
-
+        return lines.join("\n");
     }).join("\n\n");
 
 

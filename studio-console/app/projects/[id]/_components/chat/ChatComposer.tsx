@@ -7,11 +7,15 @@ export function ChatComposer({
     disabled,
     onSend,
     onUpload,
+    onContinue,
+    onPickSuggestion,
 }: {
     placeholder?: string;
     disabled?: boolean;
     onSend: (content: string) => Promise<void>;
     onUpload?: (file: File) => Promise<string>;
+    onContinue?: () => void;
+    onPickSuggestion?: (index: number) => void;
 }) {
     const [input, setInput] = useState("");
     const [isSending, setIsSending] = useState(false);
@@ -64,8 +68,21 @@ export function ChatComposer({
                     disabled={disabled || isSending}
                     dir="rtl"
                     onKeyDown={(event) => {
+                        if (event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+                            const digit = Number(event.key);
+                            if (Number.isInteger(digit) && digit >= 1 && digit <= 5) {
+                                event.preventDefault();
+                                onPickSuggestion?.(digit - 1);
+                                return;
+                            }
+                        }
+
                         if (event.key === "Enter" && !event.shiftKey) {
                             event.preventDefault();
+                            if (!input.trim()) {
+                                onContinue?.();
+                                return;
+                            }
                             void send();
                         }
                     }}
@@ -79,7 +96,11 @@ export function ChatComposer({
                     {isSending ? "Sending…" : "Send"}
                 </button>
             </div>
-            <div className="text-[11px] text-gray-500 mt-2">Enter to send, Shift+Enter for newline.</div>
+            <div className="text-[11px] text-gray-500 mt-2">
+                Enter to send, Shift+Enter for newline
+                {onContinue ? ", Enter on empty to continue" : ""}
+                {onPickSuggestion ? ", Alt+1..5 to run a suggestion" : ""}.
+            </div>
         </div>
     );
 }

@@ -146,18 +146,30 @@ export const updateFromController = mutation({
         pendingChangeSetId: v.optional(v.union(v.id("itemChangeSets"), v.null())),
     },
     handler: async (ctx, args) => {
-        const stagePinned = args.stagePinned === "auto" ? null : args.stagePinned;
-        const skillPinned = args.skillPinned === "auto" ? null : args.skillPinned;
-        const channelPinned = args.channelPinned === "auto" ? null : args.channelPinned;
-        await ctx.db.patch(args.workspaceId, {
-            stagePinned,
-            skillPinned,
-            channelPinned,
-            openQuestions: args.openQuestions,
-            artifactsIndex: args.artifactsIndex,
-            pendingChangeSetId: args.pendingChangeSetId ?? undefined,
+        const patch: Record<string, unknown> = {
             updatedAt: Date.now(),
-        });
+        };
+
+        if (args.stagePinned !== undefined) {
+            patch.stagePinned = args.stagePinned === "auto" ? null : args.stagePinned;
+        }
+        if (args.skillPinned !== undefined) {
+            patch.skillPinned = args.skillPinned === "auto" ? null : args.skillPinned;
+        }
+        if (args.channelPinned !== undefined) {
+            patch.channelPinned = args.channelPinned === "auto" ? null : args.channelPinned;
+        }
+        if (args.openQuestions !== undefined) {
+            patch.openQuestions = args.openQuestions;
+        }
+        if (args.artifactsIndex !== undefined) {
+            patch.artifactsIndex = args.artifactsIndex;
+        }
+        if (args.pendingChangeSetId !== undefined) {
+            patch.pendingChangeSetId = args.pendingChangeSetId;
+        }
+
+        await ctx.db.patch(args.workspaceId, patch as any);
     },
 });
 

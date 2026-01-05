@@ -92,7 +92,12 @@ export async function runControllerStepLogic(
     const workspace = state?.workspace;
     const latestSession = state?.latestSession;
 
-    const conversation = args.conversationId ? await ctx.db.get(args.conversationId) : null;
+    const conversation = args.conversationId
+        ? await ctx.runQuery(api.projectConversations.getById, {
+            projectId: args.projectId,
+            conversationId: args.conversationId,
+        })
+        : null;
     const pinnedStage = normalizePinnedString(workspace?.stagePinned);
     const effectiveStage = pinnedStage ?? conversation?.stageTag ?? "planning";
     const structuredStage = toStructuredStage(effectiveStage, "planning");
@@ -412,9 +417,22 @@ export const continueRun = action({
         });
 
         const [workspace, conversation] = await Promise.all([
-            ctx.db.get(workspaceId),
-            ctx.db.get(args.conversationId),
+            ctx.runQuery(api.projectWorkspaces.getByConversation, {
+                projectId: args.projectId,
+                conversationId: args.conversationId,
+            }),
+            ctx.runQuery(api.projectConversations.getById, {
+                projectId: args.projectId,
+                conversationId: args.conversationId,
+            }),
         ]);
+
+        if (!workspace) {
+            throw new Error(`Workspace not found after ensure: ${String(workspaceId)}`);
+        }
+        if (!conversation) {
+            throw new Error("Conversation not found");
+        }
 
         const pinnedStageArg = normalizePinnedString(args.stagePinned);
         const pinnedStageWorkspace = normalizePinnedString(workspace?.stagePinned);
@@ -495,6 +513,15 @@ export const continueRun = action({
             userMessage: args.userMessage
         });
 
+        // 2.5 Persist ChangeSet outputs (so UI can show approvals and Elements/Tasks can update after approval)
+        let pendingChangeSetId: Id<"itemChangeSets"> | null | undefined = undefined;
+        if (result.status === "STOP_APPROVAL" && result.changeSet) {
+            const created = await ctx.runMutation(api.changeSets.create, {
+                changeSet: result.changeSet,
+            });
+            pendingChangeSetId = created?.changeSetId as Id<"itemChangeSets">;
+        }
+
         // 3. Map Result
         let mode = "done";
         if (result.status === "STOP_QUESTIONS") mode = "ask_questions";
@@ -517,7 +544,8 @@ export const continueRun = action({
         // 4. Persist
         await ctx.runMutation(internal.projectWorkspaces.updateFromController, {
             workspaceId,
-            artifactsIndex: { lastControllerOutput: controllerOutput }
+            artifactsIndex: { ...(workspace.artifactsIndex || {}), lastControllerOutput: controllerOutput },
+            pendingChangeSetId
         });
 
         if (result.thought && result.thought.trim().length > 0) {

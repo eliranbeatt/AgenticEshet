@@ -13,6 +13,12 @@ type AgentSkillSeed = {
     guidelines: string;
 };
 
+type AgentSkillsGeneratedJson = {
+    globalPrompt?: string;
+    categoryPrompts?: Record<string, string>;
+    skills: AgentSkillSeed[];
+};
+
 const STUDIO_CONTEXT = [
     "Studio context:",
     "- We run real-world production projects (pop-ups, installations, sets, props, prints, logistics).",
@@ -21,7 +27,7 @@ const STUDIO_CONTEXT = [
     "- Use studio data first (vendors, materials, rates, past purchases); label assumptions when estimating.",
     "- Never overwrite approved elements directly; propose changes as pending ChangeSets.",
     "- Keep tasks, accounting, procurement, and schedule consistent with each other.",
-    "- The agent follows a gated flow: questions (exactly 5), suggestions, then approval before applying changes.",
+    "- The agent follows a gated flow: questions (0–5, only the minimum blockers), suggestions, then approval before applying changes.",
     "- Ask for missing constraints (sizes, deadlines, budget ranges, approvals) before committing to plans.",
     "- Avoid destructive edits; prefer reversible, additive changes.",
     "- Use clear stage labels (ideation/planning/solutioning/procurement/scheduling/critique/printing/trello).",
@@ -36,7 +42,12 @@ function buildSkillPrompt(prompt: string, guidelines: string) {
 }
 
 export async function seedAgentSkills(ctx: MutationCtx) {
-    const skills = agentSkills as AgentSkillSeed[];
+    const generated = agentSkills as unknown as AgentSkillsGeneratedJson | AgentSkillSeed[];
+    const skills = Array.isArray(generated) ? generated : generated.skills;
+
+    if (!Array.isArray(skills)) {
+        throw new Error("agentSkills.generated.json has unexpected shape: expected an array at .skills");
+    }
 
     for (const skill of skills) {
         if (!skill.skillKey) continue;

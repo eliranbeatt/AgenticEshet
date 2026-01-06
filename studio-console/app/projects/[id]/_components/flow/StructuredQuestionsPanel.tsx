@@ -230,7 +230,8 @@ function ActiveSessionView({ session, projectId, stage, onRestart, isRestarting,
                     className="px-4 py-2 bg-gray-200 text-gray-800 rounded font-medium hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2 whitespace-nowrap"
                     title="Skip remaining questions and proceed"
                 >
-                    {isSkipping ? <Loader2 className="w-4 h-4 animate-spin" /> : "Skip Questions"}
+                    {isSkipping ? <Loader2 className="w-4 h-4 animate-spin" /> : <SkipForward className="w-4 h-4" />}
+                    <span className="hidden sm:inline">Skip Questions</span>
                 </button>
                 <button
                     onClick={handleSubmit}
@@ -281,8 +282,8 @@ function QuestionCard({
                             key={opt}
                             onClick={() => onChange("quick", opt)}
                             className={`px-3 py-1.5 text-sm rounded border transition-colors ${answer?.quick === opt
-                                    ? "bg-blue-100 border-blue-300 text-blue-800 font-medium"
-                                    : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+                                ? "bg-blue-100 border-blue-300 text-blue-800 font-medium"
+                                : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
                                 }`}
                         >
                             {LABELS[opt]}

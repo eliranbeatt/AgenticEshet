@@ -3,6 +3,8 @@ import { v } from "convex/values";
 import { api, internal } from "../_generated/api";
 import { Id } from "../_generated/dataModel";
 import { runSkill } from "../lib/skills";
+import { buildSkillInput } from "./inputs";
+import { mapPatchOpsToChangeSet } from "./patchMapper";
 
 // 2. Controller Implementation
 
@@ -24,13 +26,16 @@ function isContinueSignal(userMessage: string | undefined | null) {
     return trimmed.length === 0 || trimmed.toLowerCase() === "continue";
 }
 
-function shouldSuggestSkill(skillKey: string) {
-    if (!skillKey) return false;
-    const blacklist = new Set(["controller.autonomousPlanner", "ux.suggestedActionsTop3"]);
-    if (blacklist.has(skillKey)) return false;
-    if (skillKey.startsWith("ux.")) return false;
-    if (skillKey.startsWith("controller.")) return false;
-    return true;
+function normalizePinnedString(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    if (value === "auto") return null;
+    return typeof value === "string" ? value : String(value);
+}
+
+function toStructuredStage(value: unknown, fallback: string): string {
+    if (value === "clarification" || value === "planning" || value === "solutioning") return value;
+    if (value === "ideation") return "clarification";
+    return fallback;
 }
 
 function pickSuggestedSkillKeys(params: {
@@ -39,37 +44,43 @@ function pickSuggestedSkillKeys(params: {
     lastShownSkillKeys: string[];
     count: number;
 }) {
-    const { enabledSkillKeys, activeSkillKey, lastShownSkillKeys, count } = params;
-    const filtered = enabledSkillKeys
-        .filter(shouldSuggestSkill)
-        .filter((k) => k !== activeSkillKey);
-
-    const lastSet = new Set(lastShownSkillKeys);
-    const scored = filtered.map((k) => ({
-        skillKey: k,
-        score: lastSet.has(k) ? -1 : 0,
-    }));
-
-    scored.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return a.skillKey.localeCompare(b.skillKey);
-    });
-
-    return scored.slice(0, count).map((s) => s.skillKey);
+    // Basic implementation for now to satisfy usage in continueRun
+    const { enabledSkillKeys, count } = params;
+    return enabledSkillKeys.slice(0, count);
 }
 
-type StructuredStage = "clarification" | "planning" | "solutioning";
+function parseStructuredAnswers(
+    userMessage: string,
+    questions: Array<{ id?: string; text?: string; title?: string }>
+) {
+    const questionIds = new Set(
+        questions.map((q) => (q.id ? String(q.id) : "")).filter((id) => id.length > 0)
+    );
+    const answers: Array<{ questionId: string; quick: string; text?: string }> = [];
+    const extraLines: string[] = [];
 
-function normalizePinnedString(value: unknown): string | null {
-    if (value === null || value === undefined) return null;
-    if (value === "auto") return null;
-    return typeof value === "string" ? value : String(value);
-}
+    for (const rawLine of userMessage.split("\n")) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const match = line.match(/^([^:]+):\s*(.+)$/);
+        if (!match) {
+            extraLines.push(line);
+            continue;
+        }
+        const questionId = match[1].trim();
+        const text = match[2].trim();
+        if (!questionIds.has(questionId)) {
+            extraLines.push(line);
+            continue;
+        }
+        answers.push({
+            questionId,
+            quick: "yes",
+            text: text.length > 0 ? text : undefined,
+        });
+    }
 
-function toStructuredStage(value: unknown, fallback: StructuredStage): StructuredStage {
-    if (value === "clarification" || value === "planning" || value === "solutioning") return value;
-    if (value === "ideation") return "clarification";
-    return fallback;
+    return { answers, userInstructions: extraLines.join("\n").trim() || undefined };
 }
 
 // The core logic (helper)
@@ -83,12 +94,15 @@ export async function runControllerStepLogic(
     }
 ): Promise<ControllerStepResult> {
 
-    // 1. Read Workspace State
-    // 1. Read Workspace State
-    const state = await ctx.runQuery(api.agents.controller.getWorkspaceState, {
-        projectId: args.projectId,
-        conversationId: args.conversationId,
-    });
+    // 1. Read Context (Workspace, Memory, Session)
+    const [state, runningMemory] = await Promise.all([
+        ctx.runQuery(api.agents.controller.getWorkspaceState, {
+            projectId: args.projectId,
+            conversationId: args.conversationId,
+        }),
+        ctx.runQuery(api.memory.getRunningMemoryMarkdown, { projectId: args.projectId })
+    ]);
+
     const workspace = state?.workspace;
     const latestSession = state?.latestSession;
 
@@ -98,9 +112,9 @@ export async function runControllerStepLogic(
             conversationId: args.conversationId,
         })
         : null;
+
     const pinnedStage = normalizePinnedString(workspace?.stagePinned);
     const effectiveStage = pinnedStage ?? conversation?.stageTag ?? "planning";
-    const structuredStage = toStructuredStage(effectiveStage, "planning");
     const effectiveChannel = workspace?.channelPinned ?? conversation?.defaultChannel ?? "free";
 
     let finalUserMessage = args.userMessage || "Continue planning";
@@ -122,210 +136,154 @@ export async function runControllerStepLogic(
         initialMessage: "Controller loop started"
     });
 
-    // 2. Run the Brain (Controller Skill)
-    console.log("Running Controller Brain...");
+    // 2. Run the Router (Brain)
+    console.log("Running Router...");
     await ctx.runMutation(internal.agentRuns.appendEvent, {
         runId,
         level: "info",
-        message: "Invoking autonomous planner..."
+        message: "Invoking Router..."
     });
 
-    const runningMemory = await ctx.runQuery(api.memory.getRunningMemoryMarkdown, { projectId: args.projectId });
-    
-    const input = {
-        ...(workspace || {}),
-        projectId: args.projectId,
-        stagePinned: effectiveStage,
-        channelPinned: effectiveChannel,
-        skillPinned: workspace?.skillPinned || null,
+    const enabledSkills = await ctx.runQuery(api.agents.skills.listEnabled, { stage: effectiveStage });
+    const candidateSkills = (enabledSkills || []).map((s: any) => s.skillKey);
+
+    const routerInput = {
         userMessage: finalUserMessage,
-        recentTranscript: (state as any)?.transcript || "",
-        mode: "continue",
-        runningMemory, // NEW MEMORY
+        uiPins: { stage: effectiveStage, channel: effectiveChannel },
+        workspaceSummary: runningMemory || "", // ensure string
+        candidateSkills: candidateSkills
     };
-    // @ts-ignore
-    delete input.facts; // Remove old facts
 
-    const brainResult = await runSkill(ctx, {
-        skillKey: "controller.autonomousPlanner",
-        input
+    const routerResult = await runSkill(ctx, {
+        skillKey: "router.stageChannelSkill",
+        input: routerInput
     });
 
-    if (!brainResult.success) {
+    if (!routerResult.success) {
+        const err = routerResult.error;
         await ctx.runMutation(internal.agentRuns.setStatus, {
             runId,
             status: "failed",
-            error: brainResult.error
+            error: err
         });
-        return { status: "DONE", error: brainResult.error, runId };
+        return { status: "DONE", error: err, runId };
     }
 
-    const data = brainResult.data;
-    console.log("Controller Result Data:", JSON.stringify(data, null, 2));
-
-    const { mode, assistantSummary, questions, pendingChangeSet, skillCall, artifacts, suggestionSet } = data || {};
-    const thought = assistantSummary;
+    const { skillKey, stage: rawNextStage, channel: nextChannel, why_he } = routerResult.data;
+    const nextStage = rawNextStage === "cross" ? effectiveStage : rawNextStage;
+    const thought = why_he;
 
     await ctx.runMutation(internal.agentRuns.appendEvent, {
         runId,
         level: "info",
-        message: `Brain decided: ${mode}. Summary: ${thought?.slice(0, 50)}...`
+        message: `Router decided: ${skillKey} (${nextStage}/${nextChannel}). Reason: ${why_he}`
     });
 
-    if (!mode) {
-        const err = "Controller produced no mode. Data: " + JSON.stringify(data);
-        console.error(err);
-        await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "failed", error: err });
+    // 4. Build Input for Selected Skill
+    const skillInput = await buildSkillInput(ctx, skillKey, {
+        projectId: args.projectId,
+        conversationId: args.conversationId,
+        userMessage: finalUserMessage,
+        runningMemory: runningMemory || "",
+        state
+    });
 
-        return { status: "DONE", error: err, thought, runId };
+    // 5. Run Selected Skill
+    console.log(`Delegating to skill: ${skillKey}`);
+    const subSkillResult = await runSkill(ctx, {
+        skillKey,
+        input: skillInput
+    });
+
+    if (!subSkillResult.success) {
+        await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "failed", error: subSkillResult.error });
+        return { status: "DONE", error: subSkillResult.error, thought, runId };
     }
 
-    // 3. Handle Decision
-    if (mode === "ask_questions") {
-        const stage = structuredStage;
+    const output = subSkillResult.data;
+    console.log("Skill Output:", JSON.stringify(output, null, 2));
 
-        // 1. Start a Structured Session (Archives old ones, creates new 'active' one)
+    // 6. Map Output to Controller Status
+    // a. Questions (questions.pack5 or any skill returning questions)
+    if (output.questions && Array.isArray(output.questions) && output.questions.length > 0) {
+        // Start Session logic
         const sessionId = await ctx.runMutation(api.structuredQuestions.startSession, {
             projectId: args.projectId,
-            stage: stage as any,
+            stage: nextStage,
             conversationId: args.conversationId
         });
 
-        // 2. Map Brain Questions to StructuredQuestions Schema
-        // Brain: { id, text, type, options }
-        // SQ: { id, title, prompt, questionType: 'text'|'boolean', expectsFreeText, ... }
-        const mappedQuestions = (questions || []).map((q: any) => ({
+        // Map questions
+        const mappedQuestions = output.questions.map((q: any) => ({
             id: q.id,
-            title: q.text,
-            prompt: q.options?.join(", "), // unexpected in SQ but storing options in prompt for now
-            questionType: (q.type === "select" && q.options?.includes("yes")) ? "boolean" : "text",
+            title: q.text_he || q.text || "Untitled Question", // Handle Hebrew text field
+            prompt: (q.options_he || []).join(", "),
+            questionType: (q.type === "multi" || q.type === "select") ? "text" : "text", // Defaulting to text for now
             expectsFreeText: true,
             blocking: true,
-            stage: stage
+            stage: nextStage
         }));
 
-        // 3. Create Turn 1
         await ctx.runMutation(internal.structuredQuestions.internal_createTurn, {
             projectId: args.projectId,
-            stage: stage as any,
+            stage: nextStage,
             sessionId,
             turnNumber: 1,
             questions: mappedQuestions,
             agentRunId: runId
         });
-
-        // 4. Update Session Pointer
         await ctx.runMutation(internal.structuredQuestions.internal_updateSessionTurn, {
             sessionId,
             turnNumber: 1
         });
 
         await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
-        return { status: "STOP_QUESTIONS", questions: questions || [], thought, runId, sessionId };
+        return { status: "STOP_QUESTIONS", questions: output.questions, thought, runId, sessionId };
     }
 
-    if (mode === "pending_changeset") {
+    // b. ChangeSet (patchOps)
+    if (output.patchOps && Array.isArray(output.patchOps)) {
+        // Map ops to categories
+        const mapped = mapPatchOpsToChangeSet(output.patchOps);
+
+        // Construct changeSet object
+        const changeSet = {
+            type: "ChangeSet",
+            projectId: args.projectId,
+            phase: nextStage,
+            agentName: skillKey,
+            summary: output.recap_he || "Proposed Changes",
+            // patchOps: output.patchOps, // Removed to satisfy strict Zod schema
+            assumptions: output.assumptions_he || [],
+            openQuestions: output.questions_he || [],
+            warnings: output.warnings_he || [],
+            items: mapped.items,
+            tasks: mapped.tasks,
+            accountingLines: mapped.accountingLines,
+            materialLines: mapped.materialLines,
+            uiHints: { focusItemIds: [], expandItemIds: [], nextSuggestedAction: "approve_changeset" }
+        };
+
         await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
-        return { status: "STOP_APPROVAL", changeSet: pendingChangeSet, thought, runId };
+        return { status: "STOP_APPROVAL", changeSet, thought, runId };
     }
 
-    if (mode === "suggestions") {
-        if (suggestionSet) {
-            await ctx.runMutation(api.agentSuggestionSets.create, {
-                projectId: args.projectId,
-                stage: effectiveStage,
-                suggestionSetId: `auto-${Date.now()}`,
-                sections: [{ title: suggestionSet.title || "Suggestions", items: suggestionSet.items || [] }]
-            });
-        }
+    // c. Suggestions (ux.suggestionsPanel)
+    if (skillKey === "ux.suggestionsPanel" && output.suggestions) {
+        await ctx.runMutation(api.agentSuggestionSets.create, {
+            projectId: args.projectId,
+            stage: effectiveStage,
+            suggestionSetId: `auto-${Date.now()}`,
+            sections: [{ title: "Suggestions", items: output.suggestions }]
+        });
         await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
         return { status: "STOP_SUGGESTIONS", thought, runId };
     }
 
-    if (mode === "run_skill" && skillCall) {
-        const { skillKey, input } = skillCall;
-
-        console.log(`Controller delegating to skill: ${skillKey}`);
-        await ctx.runMutation(internal.agentRuns.appendEvent, {
-            runId,
-            level: "info",
-            message: `Delegating to skill: ${skillKey}`
-        });
-
-        const subSkillResult = await runSkill(ctx, {
-            skillKey,
-            input: input || workspace || {}
-        });
-
-        if (!subSkillResult.success) {
-            await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "failed", error: subSkillResult.error });
-            return { status: "DONE", error: subSkillResult.error, thought, runId };
-        }
-
-        const subArtifacts = subSkillResult.data;
-
-        // CHECK FOR BUBBLED UP GATES (ChangeSet / Suggestions) in subArtifacts
-        // Many skills return { proposedChangeSet: ... } or { concepts: ... }
-
-        // 1. ChangeSet Bubble Up
-        if (subArtifacts && subArtifacts.proposedChangeSet) {
-            await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
-            return {
-                status: "STOP_APPROVAL",
-                changeSet: subArtifacts.proposedChangeSet,
-                thought: thought + " (Proposed by " + skillKey + ")",
-                runId
-            };
-        }
-
-        // 2. Suggestions Bubble Up (e.g. concepts)
-        if (subArtifacts && Array.isArray(subArtifacts.concepts)) {
-            await ctx.runMutation(api.agentSuggestionSets.create, {
-                projectId: args.projectId,
-                stage: effectiveStage,
-                suggestionSetId: `auto-${Date.now()}`,
-                sections: [{ title: "Generated Concepts", items: subArtifacts.concepts }]
-            });
-            await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
-            return { status: "STOP_SUGGESTIONS", thought: thought + " (Concepts generated)", runId };
-        }
-
-        // Update workspace with artifacts
-        if (workspace && subArtifacts) {
-            await ctx.runMutation(internal.projectWorkspaces.updateFromController, {
-                workspaceId: workspace._id,
-                artifactsIndex: { ...(workspace.artifactsIndex || {}), ...subArtifacts }
-            });
-        }
-
-        await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
-
-        return {
-            status: "CONTINUE",
-            artifacts: subArtifacts,
-            thought,
-            runId
-        };
-    }
-
-    if (mode === "artifacts") {
-        if (workspace && artifacts) {
-            await ctx.runMutation(internal.projectWorkspaces.updateFromController, {
-                workspaceId: workspace._id,
-                artifactsIndex: { ...(workspace.artifactsIndex || {}), ...artifacts }
-            });
-        }
-        await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
-        return { status: "CONTINUE", artifacts, thought, runId };
-    }
-
-    if (mode === "done") {
-        await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
-        return { status: "DONE", thought, runId };
-    }
-
-    await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "failed", error: "Unknown mode" });
-    return { status: "DONE", thought, error: "Unknown mode", runId };
+    // d. Default / Artifacts (Just chat or plan)
+    // We treat everything else as "Artifacts" or "Done"
+    await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
+    return { status: "CONTINUE", artifacts: output, thought, runId };
 }
 
 // The Public Action
@@ -505,6 +463,43 @@ export const continueRun = action({
             });
         }
 
+        if (args.userMessage && !isContinueSignal(args.userMessage)) {
+            const lastControllerOutput = (workspace as any)?.artifactsIndex?.lastControllerOutput;
+            const pendingQuestions = lastControllerOutput?.questions ?? [];
+            if (Array.isArray(pendingQuestions) && pendingQuestions.length > 0) {
+                const { answers, userInstructions } = parseStructuredAnswers(args.userMessage, pendingQuestions);
+                if (answers.length > 0) {
+                    const [clarification, planning, solutioning] = await Promise.all([
+                        ctx.runQuery(api.structuredQuestions.getActiveSession, {
+                            projectId: args.projectId,
+                            conversationId: args.conversationId,
+                            stage: "clarification",
+                        }),
+                        ctx.runQuery(api.structuredQuestions.getActiveSession, {
+                            projectId: args.projectId,
+                            conversationId: args.conversationId,
+                            stage: "planning",
+                        }),
+                        ctx.runQuery(api.structuredQuestions.getActiveSession, {
+                            projectId: args.projectId,
+                            conversationId: args.conversationId,
+                            stage: "solutioning",
+                        }),
+                    ]);
+                    const sessions = [clarification, planning, solutioning].filter(Boolean);
+                    const session = sessions.sort((a: any, b: any) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+                    if (session) {
+                        await ctx.runMutation(api.structuredQuestions.saveAnswers, {
+                            sessionId: session._id,
+                            turnNumber: session.currentTurnNumber,
+                            answers,
+                            userInstructions,
+                        });
+                    }
+                }
+            }
+        }
+
         // 2. Run Logic
         try {
             const result = await runControllerStepLogic(ctx, {
@@ -554,6 +549,7 @@ export const continueRun = action({
                 }))
             };
 
+
             // 4. Persist
             await ctx.runMutation(internal.projectWorkspaces.updateFromController, {
                 workspaceId,
@@ -561,23 +557,92 @@ export const continueRun = action({
                 pendingChangeSetId
             });
 
-            if (result.thought && result.thought.trim().length > 0) {
-                await ctx.runMutation(internal.projectConversations.appendMessage, {
-                    conversationId: args.conversationId,
-                    projectId: args.projectId,
-                    role: "assistant",
-                    content: result.thought,
-                    stage: resolvedStage as any,
-                    channel: resolvedChannel as any,
-                });
-                await ctx.runMutation(internal.projectConversations.touchConversation, {
-                    conversationId: args.conversationId,
-                    updatedAt: Date.now(),
-                    lastMessageAt: Date.now(),
-                });
+            let finalContent = result.thought || "";
+
+            // Auto-format specific known artifacts for chat visibility
+            if (result.status === "CONTINUE" && result.artifacts) {
+                const art = result.artifacts;
+
+                // 1. Master Plan
+                if (art.plan_he) {
+                    finalContent += "\n\n### תוכנית אב (Master Plan)\n";
+                    if (art.plan_he.phases) {
+                        art.plan_he.phases.forEach((p: any, idx: number) => {
+                            finalContent += `\n**שלב ${idx + 1}: ${p.name_he}**\n${p.goal_he}\n`;
+                            p.milestones_he?.forEach((m: string) => finalContent += `- משני: ${m}\n`);
+                        });
+                    }
+                    if (art.plan_he.criticalPath_he) {
+                        finalContent += `\n**נתיב קריטי:**\n${art.plan_he.criticalPath_he.join(" ← ")}\n`;
+                    }
+                }
+
+                // 2. Generic "nextActions_he"
+                if (art.nextActions_he && Array.isArray(art.nextActions_he)) {
+                    finalContent += "\n\n**פעולות הבאות מומלצות:**\n" + art.nextActions_he.map((a: string) => `- ${a}`).join("\n");
+                }
+
+                // 3. Procurement Plan
+                if (art.procurementPlan_he || art.shoppingList) {
+                    if (art.procurementPlan_he) finalContent += `\n\n### תוכנית רכש\n${art.procurementPlan_he}\n`;
+                    if (art.shoppingList) {
+                        finalContent += `\n**רשימת קניות:**\n`;
+                        art.shoppingList.forEach((item: any) => {
+                            finalContent += `- **${item.elementName_he}**: ${item.item_he} (${item.needBy || "מיידי"})\n`;
+                        });
+                    }
+                }
+
+                // 4. Element Ideas (Ideation)
+                if (art.elementIdeas && Array.isArray(art.elementIdeas)) {
+                    finalContent += "\n\n### רעיונות לאלמנטים (Ideation)\n";
+                    art.elementIdeas.forEach((e: any, idx: number) => {
+                        finalContent += `\n**${idx + 1}. ${e.name_he}** (${e.heroOrSupport === "hero" ? "Hero" : "Support"})\n`;
+                        finalContent += `> ${e.concept_he}\n`;
+                        if (e.roughBudgetNIS) finalContent += `- תקציב משוער: ₪${e.roughBudgetNIS.min}-${e.roughBudgetNIS.max}\n`;
+                        if (e.leadTimeDays) finalContent += `- זמן ייצור: ${e.leadTimeDays.min}-${e.leadTimeDays.max} ימים\n`;
+                    });
+                }
+
+                // 5. Solutioning Options
+                if (art.elementName_he && art.options && Array.isArray(art.options)) {
+                    finalContent += `\n\n### חלופות ביצוע: ${art.elementName_he}\n`;
+                    art.options.forEach((opt: any, idx: number) => {
+                        finalContent += `\n**אפשרות ${idx + 1}: ${opt.optionName_he}**\n`;
+                        finalContent += `${opt.whatItIs_he}\n`;
+                        if (opt.roughCostImpact_he) finalContent += `- עלות: ${opt.roughCostImpact_he}\n`;
+                    });
+                }
             }
 
-            return { success: true };
+        if (finalContent.trim().length > 0) {
+            await ctx.runMutation(internal.projectConversations.appendMessage, {
+                conversationId: args.conversationId,
+                projectId: args.projectId,
+                role: "assistant",
+                    content: finalContent,
+                    stage: resolvedStage as any,
+                    channel: resolvedChannel as any,
+            });
+            await ctx.runMutation(internal.projectConversations.touchConversation, {
+                conversationId: args.conversationId,
+                updatedAt: Date.now(),
+                lastMessageAt: Date.now(),
+            });
+        }
+
+        if (args.userMessage && !isContinueSignal(args.userMessage)) {
+            const assistantText = finalContent.trim().length > 0 ? finalContent : "(empty)";
+            await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
+                projectId: args.projectId,
+                stage: resolvedStage ?? "planning",
+                channel: resolvedChannel ?? "free",
+                userText: args.userMessage,
+                assistantText,
+            });
+        }
+
+        return { success: true };
 
         } catch (error: any) {
             const message = error instanceof Error ? error.message : String(error);

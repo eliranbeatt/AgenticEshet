@@ -22,7 +22,7 @@ export const run = action({
 
         projectId: v.id("projects"),
 
-        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+        stage: v.string(),
 
         sessionId: v.id("structuredQuestionSessions"),
 

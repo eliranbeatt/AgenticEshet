@@ -77,6 +77,15 @@ export const appendTurnSummary = internalAction({
     elementName: v.optional(v.string()), // For header formatting
   },
   handler: async (ctx, args) => {
+    // 0. Create Agent Run for Visibility
+    const runId = await ctx.runMutation(internal.agentRuns.createRun, {
+      projectId: args.projectId,
+      agent: "memory-summarizer",
+      stage: args.stage,
+      initialMessage: "Analyzing conversation turn..."
+    });
+    console.log(`[Memory] Starting summary (RunID: ${runId})`);
+
     // 1. Run Nano Summarizer
     const userPrompt = `selected_element_key: "${args.elementContext ?? ""}"
 stage: "${args.stage}"
@@ -94,12 +103,13 @@ ${args.assistantText}
       const nanoSummary = await callChatWithJsonSchema(NanoSummarySchema, {
         systemPrompt: NANO_SYSTEM_PROMPT,
         userPrompt: userPrompt,
-        model: "gpt-4o-mini", // Fallback to mini if nano not mapped, assuming gpt-5-nano maps to small model
+        model: "gpt-4o",
         temperature: 0,
       });
 
       if (!nanoSummary) {
         console.warn("Nano summarizer returned null");
+        await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "failed", error: "LLM returned null summary" });
         return;
       }
 
@@ -114,8 +124,48 @@ ${args.assistantText}
         transcript: args.channel === "structured" ? args.userText : undefined,
       });
 
+      await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
+
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       console.error("Failed to summarize turn:", e);
+
+      await ctx.runMutation(internal.agentRuns.appendEvent, {
+        runId,
+        level: "error",
+        message: `Summarization failed: ${msg}. Attempting fallback...`
+      });
+
+      // Fallback: Append raw text if LLM fails
+      try {
+        await ctx.runMutation(internal.memory.internalAppendToDoc, {
+          projectId: args.projectId,
+          stage: args.stage,
+          channel: args.channel,
+          nanoSummary: {
+            element_key: null,
+            facts: [],
+            decisions: [],
+            inputs: [],
+            todos: [],
+            open_questions: []
+          }, // Empty summary, but will still log timestamp/stage
+          elementName: args.elementName,
+          transcript: args.userText + (args.assistantText ? "\n\nAssistant: " + args.assistantText : "")
+        });
+
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+          runId,
+          level: "warn",
+          message: "Fallback: Appended raw transcript."
+        });
+        await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
+
+      } catch (fallbackErr) {
+        const fallMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        console.error("Even fallback failed:", fallbackErr);
+        await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "failed", error: "Fallback also failed: " + fallMsg });
+      }
     }
   },
 });

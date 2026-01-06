@@ -69,7 +69,7 @@ TASK:
             const result = await callChatWithSchema(BrainUpdaterOutputSchema, {
                 systemPrompt,
                 userPrompt,
-                model: "gpt-5-nano"
+                model: "gpt-4o"
             });
 
             await ctx.runMutation(internal.brainRuns.create, {

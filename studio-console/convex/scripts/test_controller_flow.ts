@@ -32,6 +32,22 @@ export const testFlow = action({
             mode: "continue"
         });
 
+        // 3.25 Check Running Memory + Recent Messages
+        const runningMemory = await ctx.runQuery(api.memory.getRunningMemoryMarkdown, { projectId });
+        const recentMessages = await ctx.runQuery(api.projectConversations.listRecentMessages, {
+            projectId,
+            conversationId,
+            limit: 10
+        });
+        console.log("--- Running Memory ---");
+        console.log(runningMemory);
+        console.log("--- Recent Messages ---");
+        console.log(JSON.stringify(recentMessages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            createdAt: m.createdAt
+        })), null, 2));
+
         // 3.5 Check Workspace
         const workspace = await ctx.runQuery(api.projectWorkspaces.getByConversation, { projectId, conversationId });
         const result = workspace?.artifactsIndex?.lastControllerOutput;

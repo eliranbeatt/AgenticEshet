@@ -19,22 +19,8 @@ type AgentSkillsGeneratedJson = {
     skills: AgentSkillSeed[];
 };
 
-const STUDIO_CONTEXT = [
-    "Studio context:",
-    "- We run real-world production projects (pop-ups, installations, sets, props, prints, logistics).",
-    "- Favor structured, actionable outputs and short sections over long prose.",
-    "- Use NIS (ILS) by default unless the project specifies otherwise.",
-    "- Use studio data first (vendors, materials, rates, past purchases); label assumptions when estimating.",
-    "- Never overwrite approved elements directly; propose changes as pending ChangeSets.",
-    "- Keep tasks, accounting, procurement, and schedule consistent with each other.",
-    "- The agent follows a gated flow: questions (0–5, only the minimum blockers), suggestions, then approval before applying changes.",
-    "- Ask for missing constraints (sizes, deadlines, budget ranges, approvals) before committing to plans.",
-    "- Avoid destructive edits; prefer reversible, additive changes.",
-    "- Use clear stage labels (ideation/planning/solutioning/procurement/scheduling/critique/printing/trello).",
-].join("\n");
-
 function buildSkillPrompt(prompt: string, guidelines: string) {
-    const blocks = [STUDIO_CONTEXT, prompt.trim()];
+    const blocks = [prompt.trim()];
     if (guidelines && guidelines.trim()) {
         blocks.push("Guidelines:\n" + guidelines.trim());
     }

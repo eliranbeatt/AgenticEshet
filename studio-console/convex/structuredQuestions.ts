@@ -8,7 +8,7 @@ export const getActiveSession = query({
     args: {
         projectId: v.id("projects"),
         conversationId: v.optional(v.id("projectConversations")),
-        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+        stage: v.string(),
     },
     handler: async (ctx, args) => {
         const query = ctx.db.query("structuredQuestionSessions");
@@ -62,7 +62,7 @@ export const startSession = mutation({
     args: {
         projectId: v.id("projects"),
         conversationId: v.optional(v.id("projectConversations")),
-        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+        stage: v.string(),
     },
     handler: async (ctx, args) => {
         // Archive any existing active sessions
@@ -104,7 +104,7 @@ export const skipSession = mutation({
     args: {
         projectId: v.id("projects"),
         conversationId: v.optional(v.id("projectConversations")),
-        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+        stage: v.string(),
     },
     handler: async (ctx, args) => {
         const query = ctx.db.query("structuredQuestionSessions");
@@ -244,7 +244,7 @@ export const internal_createTurn = internalMutation({
     args: {
         projectId: v.id("projects"),
         conversationId: v.optional(v.id("projectConversations")),
-        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+        stage: v.string(),
         sessionId: v.id("structuredQuestionSessions"),
         turnNumber: v.number(),
         questions: v.any(),
@@ -282,7 +282,7 @@ export const getTranscript = internalQuery({
     args: {
         projectId: v.id("projects"),
         conversationId: v.optional(v.id("projectConversations")),
-        stage: v.union(v.literal("clarification"), v.literal("planning"), v.literal("solutioning")),
+        stage: v.string(),
     },
     handler: async (ctx, args) => {
         const query = ctx.db.query("structuredQuestionSessions");

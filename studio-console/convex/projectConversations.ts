@@ -82,6 +82,27 @@ export const listMessages = query({
     },
 });
 
+export const listRecentMessages = query({
+    args: {
+        projectId: v.id("projects"),
+        conversationId: v.id("projectConversations"),
+        limit: v.optional(v.number()),
+    },
+    handler: async (ctx, args) => {
+        const conversation = await ctx.db.get(args.conversationId);
+        if (!conversation || conversation.projectId !== args.projectId) {
+            return [];
+        }
+        const limit = Math.max(1, Math.min(args.limit ?? 10, 50));
+        const recent = await ctx.db
+            .query("conversationMessages")
+            .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", args.conversationId))
+            .order("desc")
+            .take(limit);
+        return recent.reverse();
+    },
+});
+
 export const create = mutation({
     args: {
         projectId: v.id("projects"),

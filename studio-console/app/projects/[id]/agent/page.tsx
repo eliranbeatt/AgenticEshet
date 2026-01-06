@@ -9,6 +9,7 @@ import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { ChatComposer } from "../_components/chat/ChatComposer";
 import { ArtifactInspector } from "../_components/inspector/ArtifactInspector";
+import { RightAgentPanel } from "../_components/planning/RightAgentPanel";
 import { useModel } from "@/app/_context/ModelContext";
 import { useThinkingMode } from "@/app/_context/ThinkingModeContext";
 
@@ -908,22 +909,22 @@ export default function AgentPage() {
                                         const disabledReason = getSuggestionDisabledReason(action.skillKey);
                                         const isDisabled = !!disabledReason;
                                         return (
-                                    <button
-                                        key={`${action.skillKey ?? "action"}-${idx}`}
-                                        type="button"
-                                        className="text-xs px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-white disabled:opacity-50"
-                                        data-testid={`agent-suggestion-${idx + 1}`}
-                                        data-skill-key={action.skillKey ?? ""}
-                                        onClick={() => {
-                                            if (isDisabled) return;
-                                            setSkillPinned(action.skillKey);
-                                            void runControllerWithMessage("Continue", { skillPinned: action.skillKey });
-                                        }}
-                                        disabled={isDisabled}
-                                        title={disabledReason ?? undefined}
-                                    >
-                                        {action.label ?? action.skillKey ?? "Action"}
-                                    </button>
+                                            <button
+                                                key={`${action.skillKey ?? "action"}-${idx}`}
+                                                type="button"
+                                                className="text-xs px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-white disabled:opacity-50"
+                                                data-testid={`agent-suggestion-${idx + 1}`}
+                                                data-skill-key={action.skillKey ?? ""}
+                                                onClick={() => {
+                                                    if (isDisabled) return;
+                                                    setSkillPinned(action.skillKey);
+                                                    void runControllerWithMessage("Continue", { skillPinned: action.skillKey });
+                                                }}
+                                                disabled={isDisabled}
+                                                title={disabledReason ?? undefined}
+                                            >
+                                                {action.label ?? action.skillKey ?? "Action"}
+                                            </button>
                                         );
                                     })()
                                 ))
@@ -931,120 +932,13 @@ export default function AgentPage() {
                         </div>
                     </div>
 
-                    <ArtifactInspector
-                        activeTab={inspectorTab}
-                        onChangeTab={(next) => setInspectorTab(next as typeof inspectorTab)}
-                        tabs={[
-                            {
-                                key: "overview",
-                                label: "Overview",
-                                content: (
-                                    <div className="p-4 text-xs text-gray-700 whitespace-pre-wrap">
-                                        {controllerOutput?.assistantSummary ?? "No summary yet."}
-                                        <div className="mt-3">
-                                            <button
-                                                type="button"
-                                                className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
-                                                onClick={() => router.push(`/projects/${projectId}/overview`)}
-                                            >
-                                                Open Overview
-                                            </button>
-                                        </div>
-                                    </div>
-                                ),
-                            },
-                            {
-                                key: "elements",
-                                label: "Elements",
-                                content: (
-                                    <div className="p-4 text-xs text-gray-600 space-y-2">
-                                        <div>Elements view is in the Elements tab.</div>
-                                        <button
-                                            type="button"
-                                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
-                                            onClick={() => router.push(`/projects/${projectId}/elements`)}
-                                        >
-                                            Open Elements
-                                        </button>
-                                    </div>
-                                ),
-                            },
-                            {
-                                key: "tasks",
-                                label: "Tasks",
-                                content: (
-                                    <div className="p-4 text-xs text-gray-600 space-y-2">
-                                        <div>Tasks view is in the Tasks tab.</div>
-                                        <button
-                                            type="button"
-                                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
-                                            onClick={() => router.push(`/projects/${projectId}/tasks`)}
-                                        >
-                                            Open Tasks
-                                        </button>
-                                    </div>
-                                ),
-                            },
-                            {
-                                key: "printing",
-                                label: "Printing",
-                                content: (
-                                    <div className="p-4 text-xs text-gray-700 space-y-2">
-                                        <div className="font-semibold text-gray-800">Printing</div>
-                                        <div>Groups: {printingSummary?.groupCount ?? 0}</div>
-                                        <div>Files: {printingSummary?.fileCount ?? 0}</div>
-                                        {printingSummary?.lastQaRun ? (
-                                            <div className="border rounded p-2 bg-white text-[11px] text-gray-600 space-y-1">
-                                                <div>
-                                                    Last QA: {new Date(printingSummary.lastQaRun.createdAt).toLocaleString()}
-                                                </div>
-                                                <div>Verdict: {printingSummary.lastQaRun.componentVerdict ?? "-"}</div>
-                                                <div>Score: {printingSummary.lastQaRun.score ?? "-"}</div>
-                                            </div>
-                                        ) : (
-                                            <div className="text-[11px] text-gray-500">No QA runs yet.</div>
-                                        )}
-                                        <button
-                                            type="button"
-                                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
-                                            onClick={() => router.push(`/projects/${projectId}/studio`)}
-                                        >
-                                            Open Studio
-                                        </button>
-                                    </div>
-                                ),
-                            },
-                            {
-                                key: "trello",
-                                label: "Trello",
-                                content: (
-                                    <div className="p-4 text-xs text-gray-700 space-y-2">
-                                        <div className="font-semibold text-gray-800">Trello</div>
-                                        <div>Board: {trelloConfig?.boardId ?? "Not configured"}</div>
-                                        <div>
-                                            Last sync:{" "}
-                                            {trelloSyncState?.lastSyncedAt
-                                                ? new Date(trelloSyncState.lastSyncedAt).toLocaleString()
-                                                : "Never"}
-                                        </div>
-                                        <div>
-                                            Mapped tasks: {trelloSyncState?.mappedTaskCount ?? 0} / {trelloSyncState?.totalTasks ?? 0}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600"
-                                            onClick={() => router.push(`/projects/${projectId}/trello-view`)}
-                                        >
-                                            Open Trello
-                                        </button>
-                                    </div>
-                                ),
-                            },
-                        ]}
-                        className="flex-1 min-h-0"
-                    />
+                    {/* Replaced ArtifactInspector with RightAgentPanel */}
+                    <div className="flex-1 min-h-0 overflow-hidden mt-2">
+                        <RightAgentPanel />
+                    </div>
                 </div>
             </div>
         </div>
+
     );
 }

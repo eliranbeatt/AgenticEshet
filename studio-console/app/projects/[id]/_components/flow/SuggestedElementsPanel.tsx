@@ -124,6 +124,16 @@ export function SuggestedElementsPanel({ projectId, selectedAllProject, selected
         }
     };
 
+    const handleDiscardAll = async () => {
+        if (!suggestionDrafts || suggestionDrafts.length === 0) return;
+        if (!confirm(`Discard all ${suggestionDrafts.length} suggestions?`)) return;
+        try {
+            await Promise.all(suggestionDrafts.map(d => discardRevision({ revisionId: d._id })));
+        } catch (e) {
+            alert("Failed to discard all: " + e);
+        }
+    };
+
     const elementsCanonical = project?.features?.elementsCanonical;
 
     return (
@@ -166,7 +176,15 @@ export function SuggestedElementsPanel({ projectId, selectedAllProject, selected
 
             {elementsCanonical && suggestionDrafts && suggestionDrafts.length > 0 && (
                 <div className="mt-4 pt-4 border-t">
-                    <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">Pending Suggestions</h4>
+                    <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-xs font-semibold text-gray-500 uppercase">Pending Suggestions</h4>
+                        <button
+                            onClick={handleDiscardAll}
+                            className="text-[10px] text-red-600 hover:text-red-800 hover:bg-red-50 px-2 py-1 rounded"
+                        >
+                            Skip All
+                        </button>
+                    </div>
                     <div className="space-y-2">
                         {suggestionDrafts.map((draft) => (
                             <div key={draft._id} className="border rounded p-2 bg-blue-50">

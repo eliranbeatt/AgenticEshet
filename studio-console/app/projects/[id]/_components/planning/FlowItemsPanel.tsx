@@ -13,14 +13,14 @@ const DEFAULT_ITEMS = [
 ];
 
 export function FlowItemsPanel() {
-    const { 
-        projectId, 
-        selectedItemId, 
-        selectedItemIds, 
-        setSelectedItemId, 
-        toggleItemSelection, 
-        selectAllItems, 
-        deselectAllItems, 
+    const {
+        projectId,
+        selectedItemId,
+        selectedItemIds,
+        setSelectedItemId,
+        toggleItemSelection,
+        selectAllItems,
+        deselectAllItems,
         selectedAllProject,
         setSelectedAllProject
     } = useItemsContext();
@@ -46,13 +46,13 @@ export function FlowItemsPanel() {
         () => new Map((pendingUpdates ?? []).map((entry) => [String(entry.elementId), entry.count])),
         [pendingUpdates],
     );
-    
+
     // Flatten items for list view
     const items = useMemo(() => sidebar?.items ?? [], [sidebar]);
 
     const filteredItems = useMemo(() => {
         if (!searchQuery) return items;
-        return items.filter(item => 
+        return items.filter(item =>
             item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
             item.typeKey.toLowerCase().includes(searchQuery.toLowerCase())
         );
@@ -131,6 +131,16 @@ export function FlowItemsPanel() {
         }
     };
 
+    const handleDiscardAll = async () => {
+        if (!suggestionDrafts || suggestionDrafts.length === 0) return;
+        if (!confirm(`Discard all ${suggestionDrafts.length} suggestions?`)) return;
+        try {
+            await Promise.all(suggestionDrafts.map(d => discardRevision({ revisionId: d._id })));
+        } catch (e) {
+            alert("Failed to discard all: " + e);
+        }
+    };
+
     return (
         <div className="bg-white border rounded-lg shadow-sm flex flex-col h-full overflow-hidden">
             {/* Header */}
@@ -138,7 +148,7 @@ export function FlowItemsPanel() {
                 <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">ELEMENTS</span>
                     <div className="flex gap-1">
-                        <select 
+                        <select
                             className="text-xs border rounded px-1 py-0.5 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[120px]"
                             value={selectedTemplateId}
                             onChange={(e) => setSelectedTemplateId(e.target.value)}
@@ -150,7 +160,7 @@ export function FlowItemsPanel() {
                                 </option>
                             ))}
                         </select>
-                        <button 
+                        <button
                             className="bg-blue-600 text-white p-0.5 rounded hover:bg-blue-700 flex items-center justify-center w-6 h-6 disabled:opacity-50"
                             title="Add Element"
                             onClick={handleCreate}
@@ -162,9 +172,9 @@ export function FlowItemsPanel() {
                 </div>
                 <div className="relative">
                     <Search className="absolute left-2 top-1.5 text-gray-400" size={12} />
-                    <input 
-                        type="text" 
-                        placeholder="Filter by title, type..." 
+                    <input
+                        type="text"
+                        placeholder="Filter by title, type..."
                         className="w-full pl-6 pr-2 py-1 text-xs border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
@@ -175,7 +185,7 @@ export function FlowItemsPanel() {
             {/* List */}
             <div className="flex-1 overflow-y-auto">
                 {/* All Project Row */}
-                <div 
+                <div
                     className={`flex items-center p-2 border-b cursor-pointer hover:bg-gray-50 transition-colors ${selectedAllProject ? "bg-blue-50 border-blue-100" : "border-gray-100"}`}
                     onClick={handleSelectAll}
                 >
@@ -195,14 +205,14 @@ export function FlowItemsPanel() {
                         const isSelected = selectedItemIds.includes(item._id);
                         const isActive = selectedItemId === item._id;
                         const isPending = pendingById.has(String(item._id));
-                        
+
                         return (
-                            <div 
-                                key={item._id} 
+                            <div
+                                key={item._id}
                                 className={`group flex items-center p-2 border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors cursor-pointer ${isActive ? "bg-blue-50 border-l-2 border-l-blue-500 pl-[calc(0.5rem-2px)]" : ""}`}
                                 onClick={() => setSelectedItemId(item._id)}
                             >
-                                <div 
+                                <div
                                     className="mr-2 text-gray-400 cursor-pointer hover:text-gray-600"
                                     onClick={(e) => {
                                         e.stopPropagation();
@@ -217,18 +227,18 @@ export function FlowItemsPanel() {
                                         <span className="text-[10px] text-gray-500 whitespace-nowrap">{item.typeKey} · {item.status}</span>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                         {isPending && (
+                                        {isPending && (
                                             <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-700">
                                                 Pending update
                                             </span>
                                         )}
                                     </div>
                                 </div>
-                                
+
                                 {/* Actions on Hover */}
                                 <div className="hidden group-hover:flex items-center gap-1 pl-1 bg-gray-50 shadow-sm rounded-l">
-                                    <button 
-                                        className="text-blue-600 hover:text-blue-800 p-1" 
+                                    <button
+                                        className="text-blue-600 hover:text-blue-800 p-1"
                                         title="Rename"
                                         onClick={(e) => {
                                             e.stopPropagation();
@@ -237,8 +247,8 @@ export function FlowItemsPanel() {
                                     >
                                         <Edit2 size={12} />
                                     </button>
-                                    <button 
-                                        className="text-red-600 hover:text-red-800 p-1" 
+                                    <button
+                                        className="text-red-600 hover:text-red-800 p-1"
                                         title="Delete"
                                         onClick={(e) => {
                                             e.stopPropagation();
@@ -256,12 +266,21 @@ export function FlowItemsPanel() {
                 {/* Suggested Elements (Agent Drafts) */}
                 {suggestionDrafts && suggestionDrafts.length > 0 && (
                     <div className="p-3 mt-2 border-t border-gray-100 bg-blue-50/30">
-                        <div className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-2 pl-1">
-                            Pending Suggestions
+                        <div className="flex items-center justify-between mb-2 pl-1 pr-1">
+                            <div className="text-xs font-semibold text-blue-600 uppercase tracking-wide">
+                                Pending Suggestions
+                            </div>
+                            <button
+                                onClick={handleDiscardAll}
+                                className="text-[10px] text-red-600 hover:text-red-800 hover:bg-red-50 px-1.5 py-0.5 rounded border border-transparent hover:border-red-100 transition-colors"
+                                title="Discard all suggestions"
+                            >
+                                Skip All
+                            </button>
                         </div>
                         <div className="space-y-2">
                             {suggestionDrafts.map(draft => (
-                                <div 
+                                <div
                                     key={draft._id}
                                     className="p-2 border border-blue-200 bg-white rounded shadow-sm flex flex-col gap-1"
                                 >
@@ -270,7 +289,7 @@ export function FlowItemsPanel() {
                                             {draft.summary || "Agent Suggestion"}
                                         </div>
                                         <div className="flex items-center gap-1 ml-2">
-                                            <button 
+                                            <button
                                                 className="p-1 rounded bg-green-100 text-green-700 hover:bg-green-200"
                                                 title="Approve"
                                                 onClick={async () => {
@@ -283,7 +302,7 @@ export function FlowItemsPanel() {
                                             >
                                                 <Check size={12} />
                                             </button>
-                                            <button 
+                                            <button
                                                 className="p-1 rounded bg-red-100 text-red-700 hover:bg-red-200"
                                                 title="Discard"
                                                 onClick={async () => {
@@ -300,7 +319,7 @@ export function FlowItemsPanel() {
                                         </div>
                                     </div>
                                     <div className="text-[10px] text-gray-500">
-                                        {draft.changes.length} change{draft.changes.length !== 1 ? 's' : ''} · {new Date(draft.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                        {draft.changes.length} change{draft.changes.length !== 1 ? 's' : ''} · {new Date(draft.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                     </div>
                                     <div className="space-y-0.5 mt-1">
                                         {draft.changes.slice(0, 3).map(change => (
@@ -327,7 +346,7 @@ export function FlowItemsPanel() {
                         <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 pl-1">Quick Add</div>
                         <div className="space-y-1.5 opacity-70 hover:opacity-100 transition-opacity">
                             {missingDefaultItems.map(def => (
-                                <div 
+                                <div
                                     key={def.title}
                                     className="flex items-center justify-between p-1.5 border border-dashed border-gray-300 rounded text-xs text-gray-500 hover:bg-gray-50 hover:border-blue-300 cursor-pointer group"
                                     onClick={() => handleQuickAdd(def)}

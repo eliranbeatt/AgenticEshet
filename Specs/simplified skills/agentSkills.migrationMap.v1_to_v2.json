@@ -1,0 +1,458 @@
+{
+  "from": {
+    "file": "agentSkills.generated.json",
+    "path": "/mnt/data/agentSkills.generated.json",
+    "label": "generated.v1 (original)"
+  },
+  "to": {
+    "file": "agentSkills.simplified.v2.json",
+    "path": "/mnt/data/agentSkills.simplified.v2.json",
+    "label": "simplified.v2 (macro skills)"
+  },
+  "generatedAt": "2026-01-05T19:56:03",
+  "counts": {
+    "map": 55,
+    "remove": 15
+  },
+  "routerUpdateGuidance": {
+    "principle": "Route to macro skills by (stage, channel, user intent). Old fine-grained skills should no longer be directly selectable.",
+    "recommendedSkillSelectionOrder": [
+      "If user is answering/asking for structured questions -> interact.questionsPack",
+      "If user requests ideas/options -> interact.suggestions",
+      "If user wants to create/update an element spec or method -> elements.specManager",
+      "If user wants tasks breakdown/refine -> tasks.taskBuilder",
+      "If user wants schedule/milestones/install plan -> plan.productionPlan",
+      "If user wants budget/estimate -> money.costingModel",
+      "If user wants client-facing quote text/email -> money.quoteWriter",
+      "If user wants receipts/actuals/reconcile/lessons -> money.actualsAndReconcile",
+      "If user wants sourcing/vendors/pickups -> procurement.procurementManager",
+      "If user wants printing spec -> printing.printManager",
+      "If user wants printing file validation -> printing.fileQA",
+      "If user wants images/diagrams/mockups -> visuals.generator",
+      "If user wants Trello export -> export.trelloSync"
+    ],
+    "stageHandling": "Pass stage as input.stage (ideation|planning|solutioning|printing|retro). Macro skill prompts should branch internally based on stage."
+  },
+  "mappings": [
+    {
+      "oldKey": "accounting.actualsIngestAndReconcile",
+      "action": "map",
+      "newKey": "money.actualsAndReconcile",
+      "notes": "Actuals ingest + reconcile consolidated."
+    },
+    {
+      "oldKey": "accounting.costModelBuilder",
+      "action": "map",
+      "newKey": "money.costingModel",
+      "notes": "Cost model builder consolidated."
+    },
+    {
+      "oldKey": "accounting.planVsActualAnalyzer",
+      "action": "map",
+      "newKey": "money.actualsAndReconcile",
+      "notes": "Plan vs actual analysis consolidated."
+    },
+    {
+      "oldKey": "accounting.quoteDraftGenerator",
+      "action": "map",
+      "newKey": "money.quoteWriter",
+      "notes": "Quote drafting consolidated."
+    },
+    {
+      "oldKey": "change.budgetAndScopeOptimizer",
+      "action": "map",
+      "newKey": "money.costingModel",
+      "notes": "Budget/scope optimization folded into costing and spec updates."
+    },
+    {
+      "oldKey": "change.customerChangeRequestHandler",
+      "action": "map",
+      "newKey": "elements.specManager",
+      "notes": "Change requests handled as element/spec ChangeSets."
+    },
+    {
+      "oldKey": "changeset.reviewer",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "controller.autonomousPlanner",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "critique.planCritic",
+      "action": "map",
+      "newKey": "plan.productionPlan",
+      "notes": "Plan critique folded into productionPlan internal review step."
+    },
+    {
+      "oldKey": "decision.decisionLogWriter",
+      "action": "map",
+      "newKey": "plan.productionPlan",
+      "notes": "Decision logging included in plan outputs."
+    },
+    {
+      "oldKey": "elements.generateElementsFromBrief",
+      "action": "map",
+      "newKey": "elements.specManager",
+      "notes": "Element generation consolidated into element spec manager."
+    },
+    {
+      "oldKey": "elements.updateElementsChangeSet",
+      "action": "map",
+      "newKey": "elements.specManager",
+      "notes": "ChangeSet updates consolidated."
+    },
+    {
+      "oldKey": "facts.extractAndMapFacts",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "ideation.elementIdeas",
+      "action": "map",
+      "newKey": "interact.suggestions",
+      "notes": "Element ideas handled by stage-aware suggestions."
+    },
+    {
+      "oldKey": "ideation.questionsPack5",
+      "action": "map",
+      "newKey": "interact.questionsPack",
+      "notes": "Consolidated all QuestionsPack5 into one stage-aware questions pack."
+    },
+    {
+      "oldKey": "ideation.romBudgetEstimator",
+      "action": "map",
+      "newKey": "money.costingModel",
+      "notes": "ROM budgeting handled in money.costingModel (ideation mode)."
+    },
+    {
+      "oldKey": "ideation.styleConstraintsExtractor",
+      "action": "map",
+      "newKey": "elements.specManager",
+      "notes": "Style/constraints extraction folded into spec writing."
+    },
+    {
+      "oldKey": "image.generateClientIllustration",
+      "action": "map",
+      "newKey": "visuals.generator",
+      "notes": "All image generation/prompting consolidated into visuals.generator with visualType."
+    },
+    {
+      "oldKey": "image.generateClientRender",
+      "action": "map",
+      "newKey": "visuals.generator",
+      "notes": "All image generation/prompting consolidated into visuals.generator with visualType."
+    },
+    {
+      "oldKey": "image.generateExplodedView",
+      "action": "map",
+      "newKey": "visuals.generator",
+      "notes": "All image generation/prompting consolidated into visuals.generator with visualType."
+    },
+    {
+      "oldKey": "image.generateInstallationDiagram",
+      "action": "map",
+      "newKey": "visuals.generator",
+      "notes": "All image generation/prompting consolidated into visuals.generator with visualType."
+    },
+    {
+      "oldKey": "image.generateOrthographicSVG",
+      "action": "map",
+      "newKey": "visuals.generator",
+      "notes": "All image generation/prompting consolidated into visuals.generator with visualType."
+    },
+    {
+      "oldKey": "image.generatePrintMockup",
+      "action": "map",
+      "newKey": "visuals.generator",
+      "notes": "All image generation/prompting consolidated into visuals.generator with visualType."
+    },
+    {
+      "oldKey": "image.generateTechSketch",
+      "action": "map",
+      "newKey": "visuals.generator",
+      "notes": "All image generation/prompting consolidated into visuals.generator with visualType."
+    },
+    {
+      "oldKey": "image.promptBuilder",
+      "action": "map",
+      "newKey": "visuals.generator",
+      "notes": "All image generation/prompting consolidated into visuals.generator with visualType."
+    },
+    {
+      "oldKey": "image.questionsPack5",
+      "action": "map",
+      "newKey": "interact.questionsPack",
+      "notes": "Consolidated all QuestionsPack5 into one stage-aware questions pack."
+    },
+    {
+      "oldKey": "knowledge.updateCurrentKnowledge",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "logistics.installAndSitePlanner",
+      "action": "map",
+      "newKey": "plan.productionPlan",
+      "notes": "Install/site planning folded into production planning."
+    },
+    {
+      "oldKey": "planning.bomAndLaborEstimator",
+      "action": "map",
+      "newKey": "money.costingModel",
+      "notes": "BOM + labor estimation consolidated."
+    },
+    {
+      "oldKey": "planning.milestonesPhasesBuilder",
+      "action": "map",
+      "newKey": "plan.productionPlan",
+      "notes": "Milestones/phases builder folded into production planning."
+    },
+    {
+      "oldKey": "planning.pricingStrategyPack",
+      "action": "map",
+      "newKey": "money.costingModel",
+      "notes": "Pricing strategy folded into costing model and quote writer."
+    },
+    {
+      "oldKey": "planning.questionsPack5",
+      "action": "map",
+      "newKey": "interact.questionsPack",
+      "notes": "Consolidated all QuestionsPack5 into one stage-aware questions pack."
+    },
+    {
+      "oldKey": "planning.taskBreakdownQuoteLevel",
+      "action": "map",
+      "newKey": "tasks.taskBuilder",
+      "notes": "Task breakdown consolidated into tasks.taskBuilder."
+    },
+    {
+      "oldKey": "printing.fileMetadataExtractor",
+      "action": "map",
+      "newKey": "printing.fileQA",
+      "notes": "Metadata extraction folded into printing.fileQA."
+    },
+    {
+      "oldKey": "printing.orderTrackerUpdater",
+      "action": "map",
+      "newKey": "printing.printManager",
+      "notes": "Order tracking folded into printing.printManager (print ops)."
+    },
+    {
+      "oldKey": "printing.qaValidator",
+      "action": "map",
+      "newKey": "printing.fileQA",
+      "notes": "QA validator folded into printing.fileQA."
+    },
+    {
+      "oldKey": "printing.questionsPack5",
+      "action": "map",
+      "newKey": "interact.questionsPack",
+      "notes": "Consolidated all QuestionsPack5 into one stage-aware questions pack."
+    },
+    {
+      "oldKey": "printing.specBuilder",
+      "action": "map",
+      "newKey": "printing.printManager",
+      "notes": "Printing spec writing consolidated."
+    },
+    {
+      "oldKey": "printing.vendorPrepPack",
+      "action": "map",
+      "newKey": "printing.fileQA",
+      "notes": "Vendor prep pack folded into printing.fileQA."
+    },
+    {
+      "oldKey": "procurement.deepOnlinePriceHunter",
+      "action": "map",
+      "newKey": "procurement.procurementManager",
+      "notes": "All procurement capabilities consolidated."
+    },
+    {
+      "oldKey": "procurement.materialsMethodsDeepResearch",
+      "action": "map",
+      "newKey": "procurement.procurementManager",
+      "notes": "All procurement capabilities consolidated."
+    },
+    {
+      "oldKey": "procurement.procurementPlan",
+      "action": "map",
+      "newKey": "procurement.procurementManager",
+      "notes": "All procurement capabilities consolidated."
+    },
+    {
+      "oldKey": "procurement.shoppingOrganizerAndRoute",
+      "action": "map",
+      "newKey": "procurement.procurementManager",
+      "notes": "All procurement capabilities consolidated."
+    },
+    {
+      "oldKey": "quality.outputSanityChecker",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "quality.promptAndSchemaValidator",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "reconcile.tasksAccountingConsistencyFixer",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "reconcile.tombstoneManager",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "research.queryPlanner",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "retro.bootstrap",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed as standalone skill; handled by app flow + summaries."
+    },
+    {
+      "oldKey": "retro.lessonsLearnedWriter",
+      "action": "map",
+      "newKey": "money.actualsAndReconcile",
+      "notes": "Lessons learned handled during closeout/reconcile as retro summary."
+    },
+    {
+      "oldKey": "retro.questionsPack5",
+      "action": "map",
+      "newKey": "interact.questionsPack",
+      "notes": "Retro questions pack consolidated (stage=retro)."
+    },
+    {
+      "oldKey": "retro.updateStudioMemory",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Handled by running memory / knowledge pipeline, not a user skill."
+    },
+    {
+      "oldKey": "risk.riskRegisterBuilder",
+      "action": "map",
+      "newKey": "plan.productionPlan",
+      "notes": "Risk register folded into production planning output (risk section)."
+    },
+    {
+      "oldKey": "router.scopeResolver",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "router.stageChannelSkill",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "safety.complianceChecklist",
+      "action": "map",
+      "newKey": "plan.productionPlan",
+      "notes": "Safety checklist included in planning outputs and element specs."
+    },
+    {
+      "oldKey": "scheduling.taskOptimizerDependenciesAndDates",
+      "action": "map",
+      "newKey": "plan.productionPlan",
+      "notes": "Scheduling optimizer folded into production planning."
+    },
+    {
+      "oldKey": "solutioning.atomicTaskDecomposer",
+      "action": "map",
+      "newKey": "tasks.taskBuilder",
+      "notes": "Atomic decomposition consolidated."
+    },
+    {
+      "oldKey": "solutioning.buildOptionsGenerator",
+      "action": "map",
+      "newKey": "interact.suggestions",
+      "notes": "Build options generated via suggestions."
+    },
+    {
+      "oldKey": "solutioning.methodPlaybookWriter",
+      "action": "map",
+      "newKey": "elements.specManager",
+      "notes": "Method playbook writing becomes part of committing element build method/spec."
+    },
+    {
+      "oldKey": "solutioning.questionsPack5",
+      "action": "map",
+      "newKey": "interact.questionsPack",
+      "notes": "Consolidated all QuestionsPack5 into one stage-aware questions pack."
+    },
+    {
+      "oldKey": "solutioning.valueEngineeringSubstitutions",
+      "action": "map",
+      "newKey": "interact.suggestions",
+      "notes": "Value engineering suggestions via suggestions."
+    },
+    {
+      "oldKey": "tasks.dependenciesCritic",
+      "action": "map",
+      "newKey": "tasks.taskBuilder",
+      "notes": "Dependency critique folded into tasks.taskBuilder internal checks."
+    },
+    {
+      "oldKey": "tasks.taskEnhancer",
+      "action": "map",
+      "newKey": "tasks.taskBuilder",
+      "notes": "Task enhancement consolidated."
+    },
+    {
+      "oldKey": "trello.syncExecutor",
+      "action": "map",
+      "newKey": "export.trelloSync",
+      "notes": "All Trello sync steps consolidated into export.trelloSync."
+    },
+    {
+      "oldKey": "trello.syncPlanValidator",
+      "action": "map",
+      "newKey": "export.trelloSync",
+      "notes": "All Trello sync steps consolidated into export.trelloSync."
+    },
+    {
+      "oldKey": "trello.syncTranslator",
+      "action": "map",
+      "newKey": "export.trelloSync",
+      "notes": "All Trello sync steps consolidated into export.trelloSync."
+    },
+    {
+      "oldKey": "ux.suggestedActionsTop3",
+      "action": "map",
+      "newKey": "interact.suggestions",
+      "notes": "Suggested actions become interact.suggestions (UI may still show top picks)."
+    },
+    {
+      "oldKey": "ux.threadSummarizer",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    },
+    {
+      "oldKey": "versions.diffAndTagSummarizer",
+      "action": "remove",
+      "newKey": null,
+      "notes": "Removed from user-visible skills; functionality handled internally by macro skills or app layer."
+    }
+  ]
+}

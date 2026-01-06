@@ -1,0 +1,121 @@
+Yes — in your current **macro skills v2**, several of them are *mostly deterministic work* and are much more reliable as **tool-first (code)** pipelines, with the LLM only doing “interpret + explain + decide”.
+
+Here’s the clean breakdown.
+
+## Skills that should become tool-first (biggest win)
+
+### 1) `printing.fileQA` → **mostly code**
+
+What code can do better than an LLM:
+
+* Image: pixel size, DPI/PPI (and whether it’s real vs metadata-only), aspect ratio, color mode, embedded ICC profile, transparency, bit depth.
+* PDF: page sizes, MediaBox/TrimBox/BleedBox, embedded fonts, image resolution inside PDF, spot colors, overprint/transparency warnings, missing links.
+* “Vendor pack”: auto-generate a checklist + preflight report per file.
+
+LLM stays for:
+
+* Turning tool results into a human report (“Pass/Fail + issues + what to fix”)
+* Asking missing spec questions (if no intended size / bleed / substrate provided)
+
+**Tool modules:** `validate_print_image()`, `preflight_pdf()`, `detect_cut_contours()`, `make_vendor_report()`.
+
+---
+
+### 2) `money.costingModel` → **math must be code**
+
+What code should own:
+
+* Totals, VAT, margins, buffers, labor-hour rollups, rental=30% rule, currency rounding rules.
+* Option sets (“Option A/B”) with consistent deltas.
+* Validation: no negative lines, missing qty/unit, inconsistent units.
+
+LLM stays for:
+
+* Suggesting *which* line items exist (materials/processes)
+* Explaining assumptions + producing client-friendly rationale
+
+**Tool modules:** `compute_quote_totals()`, `apply_pricing_rules()`, `validate_cost_sheet()`.
+
+---
+
+### 3) `export.trelloSync` → **tool-only**
+
+This should not be “LLM does API payloads” except maybe mapping.
+Best pattern:
+
+* LLM produces structured intent: “create/update cards for these taskIds”
+* Code does **idempotent upsert** (no duplicates), retries, rate-limit handling, and writes back Trello IDs.
+
+**Tool modules:** `trello_upsert_board_lists_cards()`, `sync_labels_members_due_dates()`.
+
+---
+
+### 4) `money.actualsAndReconcile` → **hybrid, but tool-heavy**
+
+What code can do:
+
+* Receipt ingestion pipeline: OCR → parse totals/dates/vendor via regex/heuristics.
+* Matching rules: exact match by amount/date/vendor; fuzzy match; “needs review” queue.
+* Rollups: actual vs estimate per element/section, variance summaries.
+
+LLM stays for:
+
+* Hard receipts (messy text) and ambiguous mapping to elements
+* “Lessons learned” narrative and recommendations
+
+**Tool modules:** `extract_receipt_fields()`, `match_receipt_to_project()`, `variance_report()`.
+
+---
+
+### 5) `plan.productionPlan` → **schedule math should be code**
+
+What code can do:
+
+* Build a dependency graph, topological sort, compute critical path, detect cycles.
+* Generate a real Gantt timeline based on durations, working days, constraints.
+
+LLM stays for:
+
+* Proposing dependencies/durations when missing
+* Explaining risks + suggesting sequencing alternatives
+
+**Tool modules:** `build_task_graph()`, `compute_schedule()`, `generate_install_runbook()`.
+
+---
+
+## Skills that can be *partly* tool-assisted
+
+### `elements.specManager`
+
+* Code can enforce schema, units, required fields by stage, and generate consistent “diffs” (ChangeSets).
+* LLM is still best at turning messy text into structured element specs.
+
+**Tool modules:** `validate_element_schema()`, `normalize_units_mm_cm_m()`, `diff_element_changes()`.
+
+### `tasks.taskBuilder`
+
+* Code can apply templates (“build → prep → paint → QA → install”), enforce naming conventions, and attach default subtasks per category.
+* LLM proposes task content; tool normalizes/validates.
+
+---
+
+## Skills that should remain mostly LLM
+
+These are inherently creative/interactive:
+
+* `interact.questionsPack`
+* `interact.suggestions`
+* `money.quoteWriter` (writing)
+* `procurement.procurementManager` (unless you build vendor DB + scraper tools)
+* `visuals.generator` (unless you shift part of it to SVG/Mermaid/diagram code)
+
+---
+
+## The best implementation pattern (reduces errors fast)
+
+**LLM generates structured args → tools compute/validate → LLM only narrates + decides next step.**
+
+If you want, I can produce:
+
+1. A **tool registry spec** (`tools.json`) listing each new tool function + input/output schemas, and
+2. A **migration update** to the skills file so `printing.fileQA`, `money.costingModel`, `export.trelloSync`, etc. explicitly call tools first (and only fall back to LLM when tool results are incomplete).

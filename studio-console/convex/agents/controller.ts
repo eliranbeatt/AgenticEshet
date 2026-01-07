@@ -23,7 +23,70 @@ export type ControllerStepResult = {
 
 function isContinueSignal(userMessage: string | undefined | null) {
     const trimmed = (userMessage ?? "").trim();
-    return trimmed.length === 0 || trimmed.toLowerCase() === "continue";
+    if (trimmed.length === 0) return true;
+    const lower = trimmed.toLowerCase();
+    if (lower === "continue") return true;
+    // UI uses this as a control payload (not a literal user message).
+    if (trimmed.startsWith("SUGGESTIONS_SUBMIT")) return true;
+    return false;
+}
+
+function parseSuggestionsSubmitPayload(payload: string | undefined | null): null | {
+    mode: "USE_SELECTION" | "USE_NONE" | "REGENERATE";
+    stage?: string;
+    suggestionSetId?: string;
+    selectedIds: string[];
+    rejectedIds: string[];
+    instruction?: string;
+} {
+    const text = (payload ?? "").trim();
+    if (!text.startsWith("SUGGESTIONS_SUBMIT")) return null;
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const map = new Map<string, string>();
+    for (const line of lines.slice(1)) {
+        const eq = line.indexOf("=");
+        if (eq <= 0) continue;
+        const key = line.slice(0, eq).trim();
+        const value = line.slice(eq + 1);
+        map.set(key, value);
+    }
+    const modeRaw = map.get("mode") ?? "";
+    const mode = (modeRaw === "USE_SELECTION" || modeRaw === "USE_NONE" || modeRaw === "REGENERATE")
+        ? modeRaw
+        : "USE_NONE";
+    const selectedIds = (map.get("selected") ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    const rejectedIds = (map.get("rejected") ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    const instructionRaw = (map.get("instruction") ?? "").trim();
+    const instruction = instructionRaw && instructionRaw !== "-" ? instructionRaw : undefined;
+    return {
+        mode,
+        stage: map.get("stage") ?? undefined,
+        suggestionSetId: map.get("suggestionSetId") ?? undefined,
+        selectedIds,
+        rejectedIds,
+        instruction,
+    };
+}
+
+function parseSuggestionItemId(id: string): { skillKey: string; stage?: string; channel?: string } {
+    const parts = String(id).split("::");
+    const skillKey = parts[0] ?? "";
+    const stage = parts[1] || undefined;
+    const channel = parts[2] || undefined;
+    return { skillKey, stage, channel };
+}
+
+function toChannelPin(value: string | undefined): string | null {
+    if (!value) return null;
+    if (value === "free_chat" || value === "free") return "free";
+    if (value === "structured_questions" || value === "structured") return "structured";
+    return null;
 }
 
 function normalizePinnedString(value: unknown): string | null {
@@ -117,6 +180,8 @@ export async function runControllerStepLogic(
     const effectiveStage = pinnedStage ?? conversation?.stageTag ?? "planning";
     const effectiveChannel = workspace?.channelPinned ?? conversation?.defaultChannel ?? "free";
 
+    const forcedSkillKey = normalizePinnedString((workspace as any)?.activeSkillKey ?? workspace?.skillPinned ?? null);
+
     let finalUserMessage = args.userMessage || "Continue planning";
     if (latestSession && latestSession.status === "skipped") {
         console.log("Controller detected SKIPPED session. Injecting note.");
@@ -136,48 +201,67 @@ export async function runControllerStepLogic(
         initialMessage: "Controller loop started"
     });
 
-    // 2. Run the Router (Brain)
-    console.log("Running Router...");
-    await ctx.runMutation(internal.agentRuns.appendEvent, {
-        runId,
-        level: "info",
-        message: "Invoking Router..."
-    });
+    // 2. Run the Router (Brain) unless a skill is explicitly pinned.
+    let skillKey: string;
+    let nextStage: string;
+    let nextChannel: string;
+    let thought: string;
 
-    const enabledSkills = await ctx.runQuery(api.agents.skills.listEnabled, { stage: effectiveStage });
-    const candidateSkills = (enabledSkills || []).map((s: any) => s.skillKey);
-
-    const routerInput = {
-        userMessage: finalUserMessage,
-        uiPins: { stage: effectiveStage, channel: effectiveChannel },
-        workspaceSummary: runningMemory || "", // ensure string
-        candidateSkills: candidateSkills
-    };
-
-    const routerResult = await runSkill(ctx, {
-        skillKey: "router.stageChannelSkill",
-        input: routerInput
-    });
-
-    if (!routerResult.success) {
-        const err = routerResult.error;
-        await ctx.runMutation(internal.agentRuns.setStatus, {
+    if (forcedSkillKey) {
+        skillKey = forcedSkillKey;
+        nextStage = effectiveStage;
+        nextChannel = effectiveChannel;
+        thought = `Pinned skill: ${forcedSkillKey}`;
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
             runId,
-            status: "failed",
-            error: err
+            level: "info",
+            message: `Skipping router: pinned skill '${forcedSkillKey}'.`
         });
-        return { status: "DONE", error: err, runId };
+    } else {
+        console.log("Running Router...");
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId,
+            level: "info",
+            message: "Invoking Router..."
+        });
+
+        const enabledSkills = await ctx.runQuery(api.agents.skills.listEnabled, { stage: effectiveStage });
+        const candidateSkills = (enabledSkills || []).map((s: any) => s.skillKey);
+
+        const routerInput = {
+            userMessage: finalUserMessage,
+            uiPins: { stage: effectiveStage, channel: effectiveChannel },
+            workspaceSummary: runningMemory || "", // ensure string
+            candidateSkills: candidateSkills
+        };
+
+        const routerResult = await runSkill(ctx, {
+            skillKey: "router.stageChannelSkill",
+            input: routerInput
+        });
+
+        if (!routerResult.success) {
+            const err = routerResult.error;
+            await ctx.runMutation(internal.agentRuns.setStatus, {
+                runId,
+                status: "failed",
+                error: err
+            });
+            return { status: "DONE", error: err, runId };
+        }
+
+        const { skillKey: routerSkillKey, stage: rawNextStage, channel: routerChannel, why_he } = routerResult.data;
+        skillKey = routerSkillKey;
+        nextStage = rawNextStage === "cross" ? effectiveStage : rawNextStage;
+        nextChannel = routerChannel;
+        thought = why_he;
+
+        await ctx.runMutation(internal.agentRuns.appendEvent, {
+            runId,
+            level: "info",
+            message: `Router decided: ${skillKey} (${nextStage}/${nextChannel}). Reason: ${why_he}`
+        });
     }
-
-    const { skillKey, stage: rawNextStage, channel: nextChannel, why_he } = routerResult.data;
-    const nextStage = rawNextStage === "cross" ? effectiveStage : rawNextStage;
-    const thought = why_he;
-
-    await ctx.runMutation(internal.agentRuns.appendEvent, {
-        runId,
-        level: "info",
-        message: `Router decided: ${skillKey} (${nextStage}/${nextChannel}). Reason: ${why_he}`
-    });
 
     // 4. Build Input for Selected Skill
     const skillInput = await buildSkillInput(ctx, skillKey, {
@@ -270,11 +354,29 @@ export async function runControllerStepLogic(
 
     // c. Suggestions (ux.suggestionsPanel)
     if (skillKey === "ux.suggestionsPanel" && output.suggestions) {
+        const items = (Array.isArray(output.suggestions) ? output.suggestions : []).map((s: any, idx: number) => {
+            const skillKey = typeof s?.skillKey === "string" ? s.skillKey : "";
+            const stage = typeof s?.stage === "string" ? s.stage : undefined;
+            const channel = typeof s?.channel === "string" ? s.channel : undefined;
+            return {
+                id: `${skillKey}::${stage ?? ""}::${channel ?? ""}`,
+                kind: "RUN_SKILL",
+                title: (typeof s?.label_he === "string" && s.label_he.trim().length > 0)
+                    ? s.label_he
+                    : skillKey || `Suggestion ${idx + 1}`,
+                summary: typeof s?.why_he === "string" ? s.why_he : undefined,
+                skillKey,
+                stage,
+                channel,
+            };
+        });
+
         await ctx.runMutation(api.agentSuggestionSets.create, {
             projectId: args.projectId,
+            conversationId: args.conversationId,
             stage: effectiveStage,
             suggestionSetId: `auto-${Date.now()}`,
-            sections: [{ title: "Suggestions", items: output.suggestions }]
+            sections: [{ title: "Suggestions", items }]
         });
         await ctx.runMutation(internal.agentRuns.setStatus, { runId, status: "succeeded" });
         return { status: "STOP_SUGGESTIONS", thought, runId };
@@ -368,6 +470,8 @@ export const continueRun = action({
         thinkingMode: v.optional(v.boolean()),
     },
     handler: async (ctx, args) => {
+        const suggestionsSubmit = parseSuggestionsSubmitPayload(args.userMessage);
+
         // 1. Ensure Workspace
         const { workspaceId } = await ctx.runMutation(api.projectWorkspaces.ensure, {
             projectId: args.projectId,
@@ -395,8 +499,40 @@ export const continueRun = action({
         const pinnedStageArg = normalizePinnedString(args.stagePinned);
         const pinnedStageWorkspace = normalizePinnedString(workspace?.stagePinned);
         const resolvedStage = pinnedStageArg ?? pinnedStageWorkspace ?? conversation?.stageTag ?? "planning";
-        const resolvedChannel =
+
+        let resolvedChannel =
             args.channelPinned ?? workspace?.channelPinned ?? conversation?.defaultChannel ?? "free";
+
+        // Suggestions panel submit can override pins.
+        let submitPinnedSkill: string | null | undefined = undefined;
+        let submitPinnedStage: string | null | undefined = undefined;
+        let submitPinnedChannel: string | null | undefined = undefined;
+
+        if (suggestionsSubmit) {
+            if (suggestionsSubmit.mode === "REGENERATE") {
+                submitPinnedSkill = "ux.suggestionsPanel";
+            } else if (suggestionsSubmit.mode === "USE_NONE") {
+                submitPinnedSkill = null;
+            } else {
+                const first = suggestionsSubmit.selectedIds[0];
+                if (first) {
+                    const parsed = parseSuggestionItemId(first);
+                    submitPinnedSkill = parsed.skillKey || null;
+                    submitPinnedStage = parsed.stage || null;
+                    submitPinnedChannel = toChannelPin(parsed.channel) ?? null;
+                } else {
+                    submitPinnedSkill = null;
+                }
+            }
+
+            if (submitPinnedStage) {
+                // Only adopt known stage keys; otherwise keep existing.
+                submitPinnedStage = normalizePinnedString(submitPinnedStage);
+            }
+            if (submitPinnedChannel) {
+                resolvedChannel = submitPinnedChannel;
+            }
+        }
 
         const enabledSkills = await ctx.runQuery(api.agents.skills.listEnabled, {
             stage: resolvedStage ?? undefined,
@@ -424,17 +560,19 @@ export const continueRun = action({
 
         const resolvedSkillPinned =
             agentMode === "workflow"
-                ? (args.skillPinned ?? workspace?.skillPinned ?? null)
-                : (args.skillPinned ??
+                ? (submitPinnedSkill !== undefined ? submitPinnedSkill : (args.skillPinned ?? workspace?.skillPinned ?? null))
+                : (submitPinnedSkill !== undefined
+                    ? submitPinnedSkill
+                    : (args.skillPinned ??
                     workspace?.skillPinned ??
                     (isContinueSignal(args.userMessage) ? (suggestedSkillKeys[0] ?? null) : null));
 
         // Persist pins & suggestion state for stable UX
         await ctx.runMutation(api.projectWorkspaces.setPins, {
             workspaceId,
-            stagePinned: pinnedStageArg,
+            stagePinned: submitPinnedStage ?? pinnedStageArg,
             skillPinned: resolvedSkillPinned,
-            channelPinned: args.channelPinned,
+            channelPinned: submitPinnedChannel ?? args.channelPinned,
         });
         await ctx.runMutation(api.projectWorkspaces.setActiveSkill, {
             workspaceId,
@@ -446,7 +584,7 @@ export const continueRun = action({
             shownAt: Date.now(),
         });
 
-        // Append user message only when it is actual user input (not Continue)
+        // Append user message only when it is actual user input (not Continue / control payload)
         if (args.userMessage && !isContinueSignal(args.userMessage)) {
             await ctx.runMutation(internal.projectConversations.appendMessage, {
                 conversationId: args.conversationId,

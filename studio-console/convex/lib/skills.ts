@@ -2,7 +2,57 @@ import { internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { callChatWithJsonSchema } from "./openai";
+import { callChatWithJsonSchema, DEFAULT_CHAT_MODEL } from "./openai";
+import agentSkills from "../skills/agentSkills.generated.json";
+
+type AgentSkillSeed = {
+    skillKey: string;
+    stage: string;
+    channel: string;
+    allowedTools: string[];
+    inputSchema: string;
+    outputSchema: string;
+    prompt: string;
+    guidelines: string;
+};
+
+type AgentSkillsGeneratedJson = {
+    skills: AgentSkillSeed[];
+};
+
+function buildSkillPrompt(prompt: string, guidelines: string) {
+    const blocks = [String(prompt ?? "").trim()].filter(Boolean);
+    const gl = String(guidelines ?? "").trim();
+    if (gl) blocks.push("Guidelines:\n" + gl);
+    return blocks.join("\n\n");
+}
+
+function getGeneratedAgentSkillByKey(skillKey: string) {
+    const generated = agentSkills as unknown as AgentSkillsGeneratedJson | AgentSkillSeed[];
+    const skills = Array.isArray(generated) ? generated : generated.skills;
+    if (!Array.isArray(skills)) return null;
+    const found = skills.find((s) => s.skillKey === skillKey);
+    if (!found) return null;
+    return {
+        key: found.skillKey,
+        skillKey: found.skillKey,
+        content: buildSkillPrompt(found.prompt, found.guidelines),
+        inputSchemaJson: found.inputSchema || "{}",
+        outputSchemaJson: found.outputSchema || "{}",
+    } as const;
+}
+
+function outputSchemaRequiresField(schemaRaw: string | undefined, field: string) {
+    if (!schemaRaw) return false;
+    try {
+        const schema = JSON.parse(schemaRaw) as any;
+        const required = schema?.required;
+        if (!Array.isArray(required)) return false;
+        return required.includes(field);
+    } catch {
+        return false;
+    }
+}
 
 // --- Types ---
 
@@ -112,7 +162,7 @@ export async function runSkillLogic(
         const resultData = await callChatWithJsonSchema(outputSchema, {
             systemPrompt: fullPrompt,
             userPrompt: JSON.stringify(input, null, 2),
-            model: "gpt-4o", // Default to a strong model for skills
+            model: DEFAULT_CHAT_MODEL,
             temperature: 0.2, // Low temp for deterministic skills
         });
 
@@ -144,8 +194,24 @@ export async function runSkill(ctx: any, args: SkillRunInput) {
         skillKey: args.skillKey,
     });
 
+    // Be resilient in dev: if the database skill is missing or stale, fall back
+    // to the generated skill definition (so UI features don't silently degrade).
     if (!skill) {
-        throw new Error(`Skill not found: ${args.skillKey}`);
+        const generated = getGeneratedAgentSkillByKey(args.skillKey);
+        if (!generated) {
+            throw new Error(`Skill not found: ${args.skillKey}`);
+        }
+        return await runSkillLogic(ctx, generated, args.input);
+    }
+
+    if (
+        args.skillKey === "ux.suggestionsPanel" &&
+        !outputSchemaRequiresField(skill.outputSchemaJson || skill.outputSchema || "", "suggestions")
+    ) {
+        const generated = getGeneratedAgentSkillByKey(args.skillKey);
+        if (generated) {
+            return await runSkillLogic(ctx, generated, args.input);
+        }
     }
 
     return await runSkillLogic(ctx, skill, args.input);

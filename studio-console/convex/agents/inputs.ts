@@ -30,6 +30,68 @@ export async function buildSkillInput(
         })),
     };
 
+    if (skillKey === "ux.suggestionsPanel") {
+        const conversation = conversationId
+            ? await ctx.runQuery(api.projectConversations.getById, {
+                projectId,
+                conversationId,
+            })
+            : null;
+
+        const transcriptMessages = conversationId
+            ? await ctx.runQuery(api.projectConversations.listRecentMessages, {
+                projectId,
+                conversationId,
+                limit: 30,
+            })
+            : [];
+
+        const conversationTranscript = transcriptMessages
+            .slice()
+            .reverse()
+            .map((m) => `${String(m.role).toUpperCase()}: ${m.content}`)
+            .join("\n");
+
+        const controllerOutput = (context.state?.workspace?.artifactsIndex as any)?.lastControllerOutput;
+        const lastAssistantSummary =
+            typeof controllerOutput?.assistantSummary === "string" ? controllerOutput.assistantSummary : "";
+
+        // If the UI sent a control payload, extract hints for better reranking.
+        const text = (userMessage ?? "").trim();
+        const lines = text.split("\n").map((l) => l.trim());
+        const map = new Map<string, string>();
+        if (lines[0] === "SUGGESTIONS_SUBMIT") {
+            for (const line of lines.slice(1)) {
+                const eq = line.indexOf("=");
+                if (eq <= 0) continue;
+                map.set(line.slice(0, eq), line.slice(eq + 1));
+            }
+        }
+        const instruction = (map.get("instruction") ?? "").trim();
+        const rejectedIds = (map.get("rejected") ?? "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const rejectedSkillKeys = rejectedIds
+            .map((id) => String(id).split("::")[0])
+            .filter(Boolean);
+
+        const stagePinned = context.state?.workspace?.stagePinned ?? conversation?.stageTag ?? "planning";
+        const channelPinned = context.state?.workspace?.channelPinned ?? conversation?.defaultChannel ?? "free";
+        const currentChannel = channelPinned === "structured" ? "structured_questions" : "free_chat";
+
+        return {
+            currentStage: stagePinned,
+            currentChannel,
+            workspaceSummary: runningMemory,
+            lastAssistantSummary,
+            conversationTranscript,
+            instruction_he: instruction && instruction !== "-" ? instruction : undefined,
+            rejectedSkillKeys,
+            ...sharedContext,
+        };
+    }
+
     // Common fetches (executed on demand or pre-fetched if cheap)
     // We already have runningMemory and state (workspace).
 

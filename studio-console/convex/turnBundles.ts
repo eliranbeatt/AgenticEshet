@@ -212,6 +212,18 @@ export async function createTurnBundleLogic(
       elementName,
       transcript,
     });
+
+    // --- ASYNC FACT EXTRACTION ---
+    // We already appended the transcript synchronously (for speed/agent awareness).
+    // Now we schedule an async job to extract Facts/Inputs from that transcript 
+    // and append them to the memory log (without duplicating the transcript).
+    await ctx.scheduler.runAfter(0, internal.memory.extractAndAppendFacts, {
+      projectId: args.projectId,
+      stage: args.stage,
+      channel: "structured",
+      transcript: transcript,
+      elementName: elementName,
+    });
   } else {
     await ctx.scheduler.runAfter(0, internal.memory.appendTurnSummary, {
       projectId: args.projectId,

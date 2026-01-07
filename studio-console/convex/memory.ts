@@ -170,6 +170,64 @@ ${args.assistantText}
   },
 });
 
+
+export const extractAndAppendFacts = internalAction({
+  args: {
+    projectId: v.id("projects"),
+    stage: v.string(),
+    channel: v.string(),
+    transcript: v.string(),
+    elementName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // 1. Run Nano Summarizer on the transcript
+    // We present the transcript as user_text to the LLM to extract facts
+    const userPrompt = `stage: "${args.stage}"
+channel: "${args.channel}"
+user_text:
+"""
+${args.transcript}
+"""
+assistant_text: ""`;
+
+    try {
+      const nanoSummary = await callChatWithJsonSchema(NanoSummarySchema, {
+        systemPrompt: NANO_SYSTEM_PROMPT,
+        userPrompt: userPrompt,
+        model: "gpt-4o",
+        temperature: 0,
+      });
+
+      if (!nanoSummary) return; // Nothing to save
+
+      // Check if we actually have any deltas. If empty, don't append a spammy block.
+      const hasDeltas = (
+        nanoSummary.facts.length > 0 ||
+        nanoSummary.decisions.length > 0 ||
+        nanoSummary.inputs.length > 0 ||
+        nanoSummary.todos.length > 0 ||
+        nanoSummary.open_questions.length > 0
+      );
+
+      if (!hasDeltas) return;
+
+      // 2. Append ONLY the usage/facts (no transcript)
+      await ctx.runMutation(internal.memory.internalAppendToDoc, {
+        projectId: args.projectId,
+        stage: args.stage,
+        channel: args.channel,
+        nanoSummary: nanoSummary,
+        elementName: args.elementName,
+        transcript: undefined, // Do not duplicate transcript
+      });
+
+    } catch (e) {
+      console.error("Failed to extract facts from transcript:", e);
+      // Fail silently, as this is a progressive enhancement
+    }
+  },
+});
+
 export const updateRunningMemoryMarkdown = mutation({
   args: {
     projectId: v.id("projects"),
